@@ -47,7 +47,7 @@ func (h *Hub) AddApp(ctx context.Context, repo, branch string, by core.Viewer) (
 	if err != nil {
 		return state.App{}, fmt.Errorf("read %s from %s: %w", manifest.FileName, repo, err)
 	}
-	m, err := manifest.Parse(raw)
+	m, err := h.parse(raw, repo)
 	if err != nil {
 		return state.App{}, &UserError{Msg: err.Error()}
 	}
@@ -60,6 +60,9 @@ func (h *Hub) AddApp(ctx context.Context, repo, branch string, by core.Viewer) (
 	}
 	h.logEvent(ctx, state.Event{Actor: by.Label(), App: a.ID, Action: "app.added", Detail: fmt.Sprintf("Added %s from %s", a.Name, repo)})
 	go h.CheckBuilds(context.WithoutCancel(ctx))
+	if h.ad.Mirror != nil {
+		go func() { _ = h.ad.Mirror.Sync(context.WithoutCancel(ctx), repo) }()
+	}
 	return a, nil
 }
 
@@ -72,7 +75,7 @@ func (h *Hub) CheckBuilds(ctx context.Context) {
 		return
 	}
 	for _, a := range apps {
-		m, err := manifest.Parse(a.Manifest)
+		m, err := h.parse(a.Manifest, a.Repo)
 		if err != nil {
 			continue
 		}
@@ -102,7 +105,7 @@ func (h *Hub) CheckBuilds(ctx context.Context) {
 		default:
 			continue
 		}
-		if a.Promotion != core.PromotionAutoDev {
+		if a.Promotion == core.PromotionManual {
 			continue // manual: the companion shows the build and offers "Deploy to dev"
 		}
 		dev, err := h.store.Env(ctx, a.ID, core.Dev)
@@ -141,7 +144,7 @@ func (h *Hub) release(ctx context.Context, a state.App, b core.Build) (core.Rele
 	if err != nil {
 		return core.Release{}, err
 	}
-	m, err := manifest.Parse(raw)
+	m, err := h.parse(raw, a.Repo)
 	if err != nil {
 		return core.Release{}, userErr("Commit %s: %s", short(b.Commit), err.Error())
 	}
@@ -157,7 +160,7 @@ func (h *Hub) release(ctx context.Context, a state.App, b core.Build) (core.Rele
 	if err != nil {
 		return core.Release{}, err
 	}
-	if err := h.store.UpdateApp(ctx, a.ID, m.Name, m.Promotion, raw); err != nil {
+	if err := h.store.UpdateApp(ctx, a.ID, m.Name, raw); err != nil {
 		return core.Release{}, err
 	}
 	return core.Release{
@@ -226,7 +229,7 @@ func (h *Hub) applyAndWait(ctx context.Context, a state.App, env string, rel cor
 		return false
 	}
 	h.deployOK(a.ID, env)
-	h.ensureAddress(ctx, manifest.AddressName(a.ID, env), h.hostPort(a.Slot, env), a.Name, env)
+	h.ensureAddress(ctx, manifest.AddressName(a.ID, env), h.hostPort(a.Slot, env), a.ID, a.Name, env)
 	ok, detail := h.waitHealthy(ctx, a, env, &rel)
 	if ok {
 		h.logEvent(ctx, state.Event{Actor: actor, App: a.ID, Env: env, Action: kind + ".done", Detail: rel.Short() + " is running and healthy"})
@@ -300,7 +303,7 @@ func (h *Hub) PreviewPromote(ctx context.Context, appID string) (PromotePreview,
 	if prodBusy != "" {
 		p.Blockers = append(p.Blockers, "Prod is busy: "+prodBusy+".")
 	}
-	if m, err := manifest.Parse(dev.Want.Manifest); err == nil {
+	if m, err := h.parse(dev.Want.Manifest, a.Repo); err == nil {
 		missing, err := h.ad.Secrets.Missing(appID, core.Prod, m.Secrets)
 		if err != nil {
 			return p, err
@@ -316,6 +319,11 @@ func (h *Hub) PreviewPromote(ctx context.Context, appID string) (PromotePreview,
 // Promote puts dev's exact build on prod: it copies prod's data, switches, and waits for
 // health. It returns once the promote has started; progress shows in Overview and the log.
 func (h *Hub) Promote(ctx context.Context, appID string, by core.Viewer) error {
+	return h.promoteAs(ctx, appID, by.Label(), "Promote")
+}
+
+// promoteAs starts a promote on behalf of actor (a person, or homelab for auto-promote).
+func (h *Hub) promoteAs(ctx context.Context, appID, actor, verb string) error {
 	p, err := h.PreviewPromote(ctx, appID)
 	if err != nil {
 		return err
@@ -336,10 +344,9 @@ func (h *Hub) Promote(ctx context.Context, appID string, by core.Viewer) error {
 		return ErrBusy
 	}
 	rel := *dev.Want
-	actor := by.Label()
 	h.setBusy(appID, core.Prod, "Promoting "+rel.Short())
 	h.logEvent(ctx, state.Event{Actor: actor, App: appID, Env: core.Prod, Action: "promote.started",
-		Detail: fmt.Sprintf("Promote %s (%s) from dev to prod", rel.Short(), firstLine(rel.Message))})
+		Detail: fmt.Sprintf("%s %s (%s) from dev to prod", verb, rel.Short(), firstLine(rel.Message))})
 	go func() {
 		defer h.Kick() // runs last: if the promote stopped prod and failed, the old version starts again
 		defer lock.Unlock()
@@ -382,6 +389,7 @@ func (h *Hub) promote(ctx context.Context, a state.App, rel core.Release, actor 
 	}
 	h.setBusy(a.ID, core.Prod, "Starting "+rel.Short())
 	if h.applyAndWait(ctx, a, core.Prod, rel, "promote", actor) {
+		h.startWatch(a.ID, rel, before.Want)
 		return nil
 	}
 	return h.undoPromote(ctx, a, before.Want, rel, backup)
@@ -394,6 +402,9 @@ func (h *Hub) promote(ctx context.Context, a state.App, rel core.Release, actor 
 func (h *Hub) undoPromote(ctx context.Context, a state.App, prev *core.Release, failed core.Release, backup string) error {
 	if prev == nil {
 		return fmt.Errorf("%s isn't healthy, and there's no earlier prod version to go back to", failed.Short())
+	}
+	if err := h.store.AddHold(ctx, a.ID, failed.Commit, "It wasn't healthy right after it was promoted."); err != nil {
+		h.log.Error("hold", "app", a.ID, "err", err)
 	}
 	h.setBusy(a.ID, core.Prod, "Going back to "+prev.Short())
 	h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: a.ID, Env: core.Prod, Action: "promote.reverting",
@@ -504,13 +515,18 @@ func (h *Hub) Rollback(ctx context.Context, appID, env string, by core.Viewer) e
 
 // Logs returns recent logs of an environment.
 func (h *Hub) Logs(ctx context.Context, appID, env string, lines int) (string, error) {
-	if _, err := h.store.App(ctx, appID); err != nil {
+	a, err := h.store.App(ctx, appID)
+	if err != nil {
 		return "", userErr("There's no app %q.", appID)
 	}
 	if lines <= 0 || lines > 2000 {
 		lines = 200
 	}
-	return h.ad.Deployer.Logs(ctx, appID, env, lines)
+	out, err := h.ad.Deployer.Logs(ctx, appID, env, lines)
+	if err != nil {
+		return "", err
+	}
+	return h.mask(ctx, a, env, out), nil
 }
 
 // Events returns the activity log, newest first.

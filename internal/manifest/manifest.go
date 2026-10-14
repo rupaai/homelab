@@ -5,9 +5,13 @@ package manifest
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
+	"time"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 
@@ -35,10 +39,61 @@ type Manifest struct {
 	Secrets      []string                     `yaml:"secrets"`
 	Memory       string                       `yaml:"memory"`
 
-	// Accepted for later milestones, unused in milestone 1.
+	// SmokeTest is a command run inside the app's own image against dev before an auto
+	// promote (C6), e.g. ["python", "-m", "app.smoke"]. It reads HOMELAB_TARGET_URL.
+	SmokeTest []string `yaml:"smoke_test"`
+	// PromoteAfter is how long dev must stay healthy before an auto promote. Default 30m.
+	PromoteAfter    time.Duration `yaml:"-"`
+	PromoteAfterRaw string        `yaml:"promote_after"`
+
+	// Accepted for later milestones, unused so far.
 	VisibleTo []string `yaml:"visible_to"`
 	Auth      string   `yaml:"auth"`
-	SmokeTest string   `yaml:"smoke_test"`
+}
+
+// Defaults fill in what an app's manifest leaves out, from where the app comes from, so a
+// repo made from the template works without editing homelab.yaml.
+type Defaults struct {
+	Repo      string // owner/name, e.g. rupaai/homelab-hello
+	ImageHost string // registry host for the default image, e.g. ghcr.io
+}
+
+// DefaultPromoteAfter is how long dev must be healthy before an auto promote (C6).
+const DefaultPromoteAfter = 30 * time.Minute
+
+// IDFromRepo turns owner/name into an app id: rupaai/homelab-hello -> rupaai-homelab-hello.
+func IDFromRepo(repo string) string {
+	var b strings.Builder
+	dash := false
+	for _, r := range strings.ToLower(repo) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			dash = false
+		} else if !dash && b.Len() > 0 {
+			b.WriteByte('-')
+			dash = true
+		}
+	}
+	id := strings.Trim(b.String(), "-")
+	if id != "" && (id[0] < 'a' || id[0] > 'z') {
+		id = "app-" + id
+	}
+	if len(id) > maxIDLen {
+		id = strings.TrimRight(id[:maxIDLen], "-")
+	}
+	return id
+}
+
+// NameFromRepo turns owner/name into a display name: rupaai/homelab-hello -> Homelab Hello.
+func NameFromRepo(repo string) string {
+	name := repo[strings.LastIndex(repo, "/")+1:]
+	words := strings.FieldsFunc(name, func(r rune) bool { return r == '-' || r == '_' || r == '.' || r == ' ' })
+	for i, w := range words {
+		r := []rune(w)
+		r[0] = unicode.ToUpper(r[0])
+		words[i] = string(r)
+	}
+	return strings.Join(words, " ")
 }
 
 // Build says which branch and which CI workflow produce the app's images.
@@ -53,19 +108,39 @@ type Data struct {
 	Path string `yaml:"path"` // where the app sees it, e.g. "/data"
 }
 
+// maxIDLen keeps "<id>-dev" within a 63-character DNS label.
+const maxIDLen = 59
+
 var (
-	idPattern   = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}[a-z0-9]$`)
+	idPattern   = regexp.MustCompile(`^[a-z][a-z0-9-]{0,57}[a-z0-9]$`)
 	namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 	varPattern  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	memPattern  = regexp.MustCompile(`^[0-9]+[kmg]$`)
 )
 
 // Parse reads and validates a manifest, filling in defaults.
-func Parse(b []byte) (*Manifest, error) {
+func Parse(b []byte, d Defaults) (*Manifest, error) {
 	var m Manifest
 	dec := yaml.NewDecoder(bytes.NewReader(b))
-	if err := dec.Decode(&m); err != nil {
+	if err := dec.Decode(&m); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("%s: %w", FileName, err)
+	}
+	if m.ID == "" && d.Repo != "" {
+		m.ID = IDFromRepo(d.Repo)
+	}
+	if m.Image == "" && d.Repo != "" && d.ImageHost != "" {
+		m.Image = d.ImageHost + "/" + strings.ToLower(d.Repo)
+	}
+	if m.Name == "" && d.Repo != "" {
+		m.Name = NameFromRepo(d.Repo)
+	}
+	m.PromoteAfter = DefaultPromoteAfter
+	if m.PromoteAfterRaw != "" {
+		pa, err := time.ParseDuration(m.PromoteAfterRaw)
+		if err != nil || pa < time.Minute || pa > 7*24*time.Hour {
+			return nil, fmt.Errorf("%s: promote_after %q must be a duration between 1m and 168h, e.g. 30m", FileName, m.PromoteAfterRaw)
+		}
+		m.PromoteAfter = pa
 	}
 	if m.Tag == "" {
 		m.Tag = "{commit}"
@@ -96,7 +171,7 @@ func (m *Manifest) validate() error {
 	add := func(f string, a ...any) { problems = append(problems, fmt.Sprintf(f, a...)) }
 
 	if !idPattern.MatchString(m.ID) {
-		add("id %q must be 2-32 lowercase letters, digits or dashes, starting with a letter", m.ID)
+		add("id %q must be 2-59 lowercase letters, digits or dashes, starting with a letter", m.ID)
 	}
 	if strings.HasSuffix(m.ID, "-dev") {
 		add("id %q can't end in -dev, because that's the dev address", m.ID)
@@ -118,9 +193,7 @@ func (m *Manifest) validate() error {
 		add("health must be a path such as /health")
 	}
 	switch m.Promotion {
-	case core.PromotionManual, core.PromotionAutoDev:
-	case core.PromotionAuto:
-		add("promotion \"auto\" arrives in milestone 2; use auto-dev or manual for now")
+	case core.PromotionManual, core.PromotionAutoDev, core.PromotionAuto:
 	default:
 		add("promotion must be manual, auto-dev or auto")
 	}
@@ -169,6 +242,12 @@ func (m *Manifest) validate() error {
 		}
 		if _, clash := m.Env[s]; clash {
 			add("%q is both a setting and a secret", s)
+		}
+	}
+	for _, a := range m.SmokeTest {
+		if a == "" {
+			add("smoke_test must be a list of non-empty words, e.g. [python, -m, app.smoke]")
+			break
 		}
 	}
 	if m.Memory != "" && !memPattern.MatchString(strings.ToLower(m.Memory)) {

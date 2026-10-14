@@ -71,6 +71,14 @@ func New(h *hub.Hub, opts Options) http.Handler {
 	mux.HandleFunc("POST /api/apps/{id}/envs/{env}/rollback", s.rollback)
 	mux.HandleFunc("GET /api/apps/{id}/envs/{env}/logs", s.logs)
 	mux.HandleFunc("GET /api/activity", s.activity)
+	mux.HandleFunc("PUT /api/apps/{id}/promotion", s.setPromotion)
+	mux.HandleFunc("DELETE /api/apps/{id}", s.removeApp)
+	mux.HandleFunc("GET /api/apps/{id}/secrets", s.appSecrets)
+	mux.HandleFunc("PUT /api/apps/{id}/envs/{env}/secrets/{name}", s.setSecret)
+	mux.HandleFunc("DELETE /api/apps/{id}/envs/{env}/secrets/{name}", s.deleteSecret)
+	mux.HandleFunc("GET /api/settings/secrets", s.settings)
+	mux.HandleFunc("PUT /api/settings/secrets/{name}", s.setSetting)
+	mux.HandleFunc("DELETE /api/settings/secrets/{name}", s.deleteSetting)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "There's nothing at that address.")
 	})
@@ -134,7 +142,7 @@ func (s *server) guard(w http.ResponseWriter, r *http.Request) bool {
 		writeErr(w, http.StatusForbidden, "Open the companion at http://127.0.0.1:7080 on this computer.")
 		return false
 	}
-	if r.Method == http.MethodPost {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		if r.Header.Get(csrfHeader) != "1" {
 			writeErr(w, http.StatusForbidden, "That request didn't come from the Homelab companion.")
 			return false
@@ -342,4 +350,91 @@ func (s *server) activity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, ev)
+}
+
+func noContent(w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }
+
+func (s *server) setPromotion(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Mode string `json:"mode"`
+	}
+	if !decode(w, r, &in, true) {
+		return
+	}
+	v, err := s.hub.SetPromotion(actionCtx(r), r.PathValue("id"), in.Mode, viewer(r))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *server) removeApp(w http.ResponseWriter, r *http.Request) {
+	if err := s.hub.RemoveApp(actionCtx(r), r.PathValue("id"), viewer(r)); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	noContent(w)
+}
+
+func (s *server) appSecrets(w http.ResponseWriter, r *http.Request) {
+	envs, err := s.hub.AppSecrets(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"envs": envs})
+}
+
+type valueIn struct {
+	Value string `json:"value"`
+}
+
+func (s *server) setSecret(w http.ResponseWriter, r *http.Request) {
+	var in valueIn
+	if !decode(w, r, &in, true) {
+		return
+	}
+	if err := s.hub.SetSecret(actionCtx(r), r.PathValue("id"), r.PathValue("env"), r.PathValue("name"), in.Value, viewer(r)); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	noContent(w)
+}
+
+func (s *server) deleteSecret(w http.ResponseWriter, r *http.Request) {
+	if err := s.hub.DeleteSecret(actionCtx(r), r.PathValue("id"), r.PathValue("env"), r.PathValue("name"), viewer(r)); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	noContent(w)
+}
+
+func (s *server) settings(w http.ResponseWriter, r *http.Request) {
+	list, err := s.hub.PlatformSettings(r.Context())
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+func (s *server) setSetting(w http.ResponseWriter, r *http.Request) {
+	var in valueIn
+	if !decode(w, r, &in, true) {
+		return
+	}
+	if err := s.hub.SetPlatformSetting(actionCtx(r), r.PathValue("name"), in.Value, viewer(r)); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	noContent(w)
+}
+
+func (s *server) deleteSetting(w http.ResponseWriter, r *http.Request) {
+	if err := s.hub.DeletePlatformSetting(actionCtx(r), r.PathValue("name"), viewer(r)); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	noContent(w)
 }

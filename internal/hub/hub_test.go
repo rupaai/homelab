@@ -6,11 +6,13 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/rupaai/homelab/internal/adapters/fake"
 	"github.com/rupaai/homelab/internal/core"
+	"github.com/rupaai/homelab/internal/identity"
 	"github.com/rupaai/homelab/internal/state"
 )
 
@@ -39,11 +41,36 @@ type rig struct {
 	addr   *fake.Addresses
 	health *fake.Health
 	sec    *fake.Secrets
+	smoke  *fake.Smoke
+	mirror *fake.Mirror
+
+	clockMu sync.Mutex
+	clock   time.Time // zero means the real time
+}
+
+// now is the rig's clock; advance moves it forward.
+func (r *rig) now() time.Time {
+	r.clockMu.Lock()
+	defer r.clockMu.Unlock()
+	if r.clock.IsZero() {
+		return time.Now()
+	}
+	return r.clock
+}
+
+func (r *rig) advance(d time.Duration) {
+	r.clockMu.Lock()
+	if r.clock.IsZero() {
+		r.clock = time.Now()
+	}
+	r.clock = r.clock.Add(d)
+	r.clockMu.Unlock()
 }
 
 func newRig(t *testing.T) *rig {
 	r := &rig{t: t, dir: t.TempDir(), src: fake.NewSource(), build: fake.NewBuilder(), reg: fake.NewRegistry(),
-		dep: fake.NewDeployer(), addr: fake.NewAddresses(), health: fake.NewHealth(), sec: fake.NewSecrets()}
+		dep: fake.NewDeployer(), addr: fake.NewAddresses(), health: fake.NewHealth(), sec: fake.NewSecrets(),
+		smoke: fake.NewSmoke(), mirror: fake.NewMirror()}
 	r.open()
 	return r
 }
@@ -58,9 +85,11 @@ func (r *rig) open() {
 		r.t.Fatal(err)
 	}
 	r.store = s
-	r.hub = New(Config{DataDir: r.dir, HealthyWait: 3 * time.Second}, s, Adapters{
+	key, _ := identity.NewKey()
+	signer, _ := identity.NewSigner(key)
+	r.hub = New(Config{DataDir: r.dir, HealthyWait: 3 * time.Second, Now: r.now, Identity: signer}, s, Adapters{
 		Source: r.src, Builder: r.build, Registry: r.reg, Deployer: r.dep,
-		Addresses: r.addr, Health: r.health, Secrets: r.sec,
+		Addresses: r.addr, Health: r.health, Secrets: r.sec, Smoke: r.smoke, Mirror: r.mirror,
 	})
 	r.t.Cleanup(func() { s.Close() })
 }
@@ -156,7 +185,7 @@ func TestDeployLoop(t *testing.T) {
 	if err := r.hub.Promote(ctx, "movies", owner); err == nil {
 		t.Fatal("promote should be refused")
 	}
-	r.sec.Set("movies", core.Prod, "TMDB_API_KEY", "k")
+	r.sec.Set("movies", core.Prod, "TMDB_API_KEY", "k", "t")
 
 	// Done-when 2: promote runs the same build on prod.
 	if err := r.hub.Promote(ctx, "movies", owner); err != nil {
@@ -252,7 +281,7 @@ func TestPromoteNeedsHealthyDev(t *testing.T) {
 	if _, err := r.hub.AddApp(ctx, repo, "", owner); err != nil {
 		t.Fatal(err)
 	}
-	r.sec.Set("movies", core.Prod, "TMDB_API_KEY", "k")
+	r.sec.Set("movies", core.Prod, "TMDB_API_KEY", "k", "t")
 	r.health.SetFailing("http://127.0.0.1:17010/healthz", true) // slot 1, dev
 	r.push("aaaaaaa1")
 	r.hub.CheckBuilds(ctx)
@@ -299,7 +328,7 @@ func TestFailedPromoteGoesBack(t *testing.T) {
 	if _, err := r.hub.AddApp(ctx, repo, "", owner); err != nil {
 		t.Fatal(err)
 	}
-	r.sec.Set("movies", core.Prod, "TMDB_API_KEY", "k")
+	r.sec.Set("movies", core.Prod, "TMDB_API_KEY", "k", "t")
 	r.push("aaaaaaa1")
 	r.hub.CheckBuilds(ctx)
 	r.settle()

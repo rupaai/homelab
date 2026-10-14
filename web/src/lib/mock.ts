@@ -1,6 +1,6 @@
 // Fake data for developing the UI without the Go server (see api.ts for how it's switched on).
 import { ApiError } from './errors';
-import type { ActivityEvent, Api, AppView, EnvName, EnvView, ReleaseView } from './types';
+import type { ActivityEvent, Api, AppView, EnvName, EnvView, ReleaseView, SecretView, SettingView } from './types';
 
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 const delay = <T>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
@@ -42,6 +42,7 @@ function env(app: string, name: EnvName, o: Partial<EnvView>): EnvView {
 		deployedAt: null,
 		deployKind: '',
 		canRollback: false,
+		missingSecrets: [],
 		...o
 	};
 }
@@ -53,11 +54,15 @@ const apps: AppView[] = [
 		icon: '🎬',
 		repo: 'rupaai/movie-night',
 		repoUrl: 'https://github.com/rupaai/movie-night',
-		promotion: 'auto-dev',
+		promotion: 'auto',
+		promoteAfter: '30m',
+		autoPromote: { state: 'waiting', at: new Date(Date.now() + 12 * 60_000).toISOString(), detail: 'Promotes 9f3c2ab in 12 min if dev stays healthy' },
+		held: [{ commit: 'bad1dea'.padEnd(40, '0'), short: 'bad1dea', reason: 'Its smoke test failed', at: ago(60 * 7) }],
+		mirror: { path: '/home/rupaai/.homelab/mirrors/movie-night.git', lastSync: ago(4) },
 		latestBuild: { commit: newer.commit, short: newer.short, status: 'passed', url: 'https://github.com/rupaai/movie-night/actions/runs/1', deployed: true },
 		envs: [
 			env('movie-night', 'dev', { version: newer, deployedBy: 'homelab', deployedAt: ago(38), deployKind: 'deploy', canRollback: true }),
-			env('movie-night', 'prod', { version: older, deployedBy: 'rupaai', deployedAt: ago(60 * 26), deployKind: 'promote', canRollback: true })
+			env('movie-night', 'prod', { missingSecrets: ['TMDB_API_KEY'], version: older, deployedBy: 'rupaai', deployedAt: ago(60 * 26), deployKind: 'promote', canRollback: true })
 		]
 	},
 	{
@@ -67,6 +72,10 @@ const apps: AppView[] = [
 		repo: 'rupaai/recipe-box',
 		repoUrl: 'https://github.com/rupaai/recipe-box',
 		promotion: 'manual',
+		promoteAfter: '30m',
+		autoPromote: null,
+		held: [],
+		mirror: { path: '/home/rupaai/.homelab/mirrors/recipe-box.git', lastSync: ago(60 * 3), error: "The last copy didn't work: GitHub said no" },
 		latestBuild: { commit: 'c0ffee1'.padEnd(40, '0'), short: 'c0ffee1', status: 'passed', url: 'https://github.com/rupaai/recipe-box/actions/runs/2', deployed: false },
 		envs: [
 			env('recipe-box', 'dev', { version: rel('7d2e9aa', 'Scale recipes up and down', 'Rupa', 60 * 5), deployedBy: 'rupaai', deployedAt: ago(60 * 5), deployKind: 'deploy' }),
@@ -79,7 +88,11 @@ const apps: AppView[] = [
 		icon: '',
 		repo: 'rupaai/garden-log',
 		repoUrl: 'https://github.com/rupaai/garden-log',
-		promotion: 'manual',
+		promotion: 'auto-dev',
+		promoteAfter: '1h',
+		autoPromote: null,
+		held: [],
+		mirror: null,
 		latestBuild: { commit: 'badc0de'.padEnd(40, '0'), short: 'badc0de', status: 'failed', url: 'https://github.com/rupaai/garden-log/actions/runs/3', deployed: false },
 		envs: [
 			env('garden-log', 'dev', { version: rel('55aa11f', 'Track watering', 'Rupa', 60 * 30), health: 'degraded', healthDetail: 'Slow to answer: 4 seconds', lastError: '' }),
@@ -110,6 +123,25 @@ const events: ActivityEvent[] = [
 for (let i = 29; i > 0; i--) {
 	events.push({ id: i, at: ago(60 * 24 * 7 + (30 - i) * 90), actor: 'homelab', app: 'recipe-box', env: 'dev', action: 'deploy.done', detail: `Earlier build ${i.toString(16).padStart(7, 'e')} is running and healthy` });
 }
+
+type SecretMap = Record<string, Record<EnvName, SecretView[]>>;
+const secretStore: SecretMap = {
+	'movie-night': {
+		dev: [
+			{ name: 'TMDB_API_KEY', declared: true, set: true, updatedAt: ago(60 * 24 * 3), updatedBy: 'rupaai' },
+			{ name: 'SESSION_SECRET', declared: true, set: true, updatedAt: ago(60 * 24 * 9), updatedBy: 'rupaai' }
+		],
+		prod: [
+			{ name: 'TMDB_API_KEY', declared: true, set: false },
+			{ name: 'SESSION_SECRET', declared: true, set: true, updatedAt: ago(60 * 24 * 9), updatedBy: 'rupaai' },
+			{ name: 'OLD_ANALYTICS_KEY', declared: false, set: true, updatedAt: ago(60 * 24 * 40), updatedBy: 'rupaai' }
+		]
+	}
+};
+const settingStore: SettingView[] = [
+	{ name: 'GITHUB_TOKEN', description: 'Lets Homelab read your repos and builds on GitHub. Make one at github.com/settings/tokens.', set: true, updatedAt: ago(60 * 24 * 12), updatedBy: 'rupaai', appliesAfterRestart: false },
+	{ name: 'TS_AUTHKEY', description: 'Lets Homelab join your Tailscale network and give each app an address. Make one in the Tailscale admin page.', set: false, appliesAfterRestart: true }
+];
 
 const find = (id: string) => {
 	const a = apps.find((x) => x.id === id);
@@ -208,6 +240,59 @@ export const mockApi: Api = {
 			out.push(i % 17 === 0 ? `${t} WARN  slow response from the film database (1.8s)` : `${t} INFO  GET /api/films 200 ${10 + (i % 9)}ms`);
 		}
 		return delay(`Showing ${id} ${e}\n` + out.join('\n'));
+	},
+	async setPromotion(id, mode) {
+		const a = find(id);
+		a.promotion = mode;
+		if (mode !== 'auto') a.autoPromote = null;
+		else if (!a.autoPromote) a.autoPromote = { state: 'waiting', at: new Date(Date.now() + 30 * 60_000).toISOString(), detail: 'Promotes when dev has stayed healthy' };
+		log('rupaai', id, 'prod', 'promotion.changed', `Promotion is now ${mode}`);
+		return delay(structuredClone(a));
+	},
+	async removeApp(id) {
+		const a = find(id);
+		apps.splice(apps.indexOf(a), 1);
+		await delay(null);
+	},
+	async appSecrets(id) {
+		const a = find(id);
+		return delay(
+			(['dev', 'prod'] as EnvName[]).map((e) => ({
+				env: e,
+				secrets: (secretStore[a.id]?.[e] ?? []).map((s) => ({ ...s }))
+			}))
+		);
+	},
+	async setSecret(id, e, name, value) {
+		const a = find(id);
+		if (!value) throw new ApiError('Type a value first.', 400);
+		const list = (((secretStore[a.id] ??= { dev: [], prod: [] })[e]) ??= []);
+		const hit = list.find((s) => s.name === name);
+		const now = new Date().toISOString();
+		if (hit) Object.assign(hit, { set: true, updatedAt: now, updatedBy: 'rupaai' });
+		else list.push({ name, declared: false, set: true, updatedAt: now, updatedBy: 'rupaai' });
+		const ev = envOf(a, e);
+		ev.missingSecrets = ev.missingSecrets.filter((n) => n !== name);
+		await delay(null);
+	},
+	async deleteSecret(id, e, name) {
+		const a = find(id);
+		const list = secretStore[a.id]?.[e] ?? [];
+		secretStore[a.id][e] = list.filter((s) => s.name !== name);
+		await delay(null);
+	},
+	settings: () => delay(settingStore.map((s) => ({ ...s }))),
+	async setSetting(name, value) {
+		const s = settingStore.find((x) => x.name === name);
+		if (!s) throw new ApiError(`There's no setting "${name}".`, 404);
+		if (!value) throw new ApiError('Type a value first.', 400);
+		Object.assign(s, { set: true, updatedAt: new Date().toISOString(), updatedBy: 'rupaai' });
+		await delay(null);
+	},
+	async deleteSetting(name) {
+		const s = settingStore.find((x) => x.name === name);
+		if (s) Object.assign(s, { set: false, updatedAt: undefined, updatedBy: undefined });
+		await delay(null);
 	},
 	async activity(q = {}) {
 		let rows = events.filter((e) => !q.app || e.app === q.app);

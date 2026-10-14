@@ -81,8 +81,9 @@ type HealthChecker interface {
 	Check(ctx context.Context, url string) HealthResult
 }
 
-// Secrets hands out secret values. Milestone 1 reads files on the Mac; the encrypted
-// store replaces it in milestone 2 behind this same contract.
+// Secrets keeps secret values (S1-S9): an encrypted store inside Homelab. App secrets are
+// scoped to one app environment; platform credentials (GITHUB_TOKEN, TS_AUTHKEY) use app "".
+// Values are never returned to people, only to adapters that need them (Inject, Platform).
 type Secrets interface {
 	// Missing lists which of names have no value for app/env. Never returns values.
 	Missing(app, env string, names []string) ([]string, error)
@@ -90,6 +91,56 @@ type Secrets interface {
 	Inject(app, env string, names []string) (map[string]string, error)
 	// Platform returns a Homelab credential such as GITHUB_TOKEN or TS_AUTHKEY.
 	Platform(name string) (string, bool)
+	// Set stores (or replaces) a value. app "" means a platform credential; env is then "".
+	Set(app, env, name, value, by string) error
+	// Delete removes a value. Deleting one that isn't set is not an error.
+	Delete(app, env, name string) error
+	// List describes what is stored for app/env (app "" for platform), never the values.
+	List(app, env string) ([]SecretInfo, error)
+	// DeleteApp removes every value of an app, in every environment.
+	DeleteApp(app string) error
+}
+
+// SecretInfo describes one stored secret without its value.
+type SecretInfo struct {
+	Name      string    `json:"name"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	UpdatedBy string    `json:"updatedBy"`
+}
+
+// SmokeTest is one run of an app's own smoke test (C6) against one of its environments.
+// The test runs inside the release's image, never on the host, and can only reach that
+// environment, at HOMELAB_TARGET_URL.
+type SmokeTest struct {
+	App     string
+	Env     string // the environment it tests (dev)
+	Release Release
+	Command []string // from homelab.yaml smoke_test
+	Port    int      // the port the app listens on inside its container
+	Auth    RegistryAuth
+	Timeout time.Duration
+}
+
+// SmokeTester runs smoke tests (Docker now).
+type SmokeTester interface {
+	// Smoke runs the test. passed is false when the test ran and failed; err is for when it
+	// couldn't run at all. output is the end of what it printed, for people.
+	Smoke(ctx context.Context, t SmokeTest) (passed bool, output string, err error)
+}
+
+// Mirror keeps a full, read-only copy of each app's repo on this computer (G2, G3).
+type Mirror interface {
+	// Sync clones repo the first time and fetches every branch and tag after that.
+	Sync(ctx context.Context, repo string) error
+	// Status says when repo was last synced and what went wrong last time, if anything.
+	Status(repo string) MirrorStatus
+}
+
+// MirrorStatus is the state of one repo's mirror.
+type MirrorStatus struct {
+	Path     string     `json:"path"`               // where the mirror lives on disk
+	LastSync *time.Time `json:"lastSync,omitempty"` // last successful sync
+	Error    string     `json:"error,omitempty"`    // the last sync's error, "" if it worked
 }
 
 // Clock lets tests control time.

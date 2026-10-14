@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 )
 
-const configTemplate = `# Homelab settings. See docs/milestone1.md.
+const configTemplate = `# Homelab settings. See docs/milestone1.md and docs/milestone2.md.
 
 # Who may use the companion over Tailscale (their Tailscale login names).
 # On this computer itself (127.0.0.1) the companion is always open.
@@ -23,20 +23,6 @@ tailscale:
 
 # The companion on this computer.
 listen: 127.0.0.1:7080
-`
-
-const platformEnvTemplate = `# Platform secrets for Homelab. Keep this file private (mode 0600).
-# Plain KEY=VALUE lines. Remove the leading # to use one.
-
-# GitHub: lets Homelab read your repos, build status and ghcr.io images.
-# Create a classic token (ghcr.io doesn't accept fine-grained ones) at
-# https://github.com/settings/tokens with the read:packages scope, plus repo if any
-# app's repo is private. Then delete the "# " below so the line starts with GITHUB_TOKEN=
-# GITHUB_TOKEN=
-
-# Tailscale: only for addresses: tailscale. In the admin console go to
-# Settings > Keys > Generate auth key. Make it reusable and tagged tag:homelab.
-# TS_AUTHKEY=
 `
 
 func cmdInit(args []string, out io.Writer) error {
@@ -87,7 +73,6 @@ func initHome(home string, out io.Writer) error {
 		func() error { return dir(home) },
 		func() error { return file(filepath.Join(home, "config.yaml"), configTemplate, 0o644) },
 		func() error { return dir(secrets) },
-		func() error { return file(filepath.Join(secrets, "platform.env"), platformEnvTemplate, 0o600) },
 	}
 	for _, s := range steps {
 		if err := s(); err != nil {
@@ -102,10 +87,11 @@ func initHome(home string, out io.Writer) error {
 	}
 	fmt.Fprintf(out, `
 Next:
-  1. Open %s and add GITHUB_TOKEN (see the comments there).
-  2. Optionally edit %s.
-  3. Start Homelab:  homelabd run --home %s
+  1. Optionally edit %s.
+  2. Start Homelab:  homelabd run --home %s
+  3. Open the companion at http://127.0.0.1:7080, go to Settings and set your GitHub token.
+     Secrets are kept encrypted in %s; keep a copy of master.key there somewhere safe.
   4. To start it at login on a Mac:  homelabd service install --home %s
-`, filepath.Join(secrets, "platform.env"), filepath.Join(home, "config.yaml"), home, home)
+`, filepath.Join(home, "config.yaml"), home, secrets, home)
 	return nil
 }

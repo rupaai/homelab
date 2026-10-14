@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rupaai/homelab/internal/adapters/secretstore"
 	"github.com/rupaai/homelab/internal/core"
 )
 
@@ -110,22 +111,22 @@ func TestInitDoesNotOverwrite(t *testing.T) {
 		}
 		return st.Mode().Perm()
 	}
-	if mode(".") != 0o700 || mode("secrets") != 0o700 || mode("secrets/platform.env") != 0o600 {
-		t.Errorf("modes: %v %v %v", mode("."), mode("secrets"), mode("secrets/platform.env"))
+	if mode(".") != 0o700 || mode("secrets") != 0o700 {
+		t.Errorf("modes: %v %v", mode("."), mode("secrets"))
 	}
-	b, _ := os.ReadFile(filepath.Join(home, "secrets", "platform.env"))
-	if !strings.Contains(string(b), "# GITHUB_TOKEN=") || !strings.Contains(string(b), "# TS_AUTHKEY=") {
-		t.Errorf("placeholders: %s", b)
+	if _, err := os.Stat(filepath.Join(home, "secrets", "platform.env")); err == nil {
+		t.Error("init made a plain secrets file; secrets are set in the companion now")
+	}
+	if !strings.Contains(out.String(), "Settings") {
+		t.Errorf("next steps don't mention Settings: %s", out.String())
 	}
 	if _, err := loadConfig(home); err != nil {
 		t.Fatalf("starter config: %v", err)
 	}
 
-	// Edit both files, run init again: nothing changes.
+	// Edit the config, run init again: nothing changes.
 	cfg := filepath.Join(home, "config.yaml")
-	sec := filepath.Join(home, "secrets", "platform.env")
 	_ = os.WriteFile(cfg, []byte("addresses: tailscale\n"), 0o644)
-	_ = os.WriteFile(sec, []byte("GITHUB_TOKEN=abc\n"), 0o600)
 	out.Reset()
 	if err := initHome(home, &out); err != nil {
 		t.Fatal(err)
@@ -133,10 +134,54 @@ func TestInitDoesNotOverwrite(t *testing.T) {
 	if b, _ := os.ReadFile(cfg); string(b) != "addresses: tailscale\n" {
 		t.Errorf("config overwritten: %s", b)
 	}
-	if b, _ := os.ReadFile(sec); string(b) != "GITHUB_TOKEN=abc\n" {
-		t.Errorf("secrets overwritten: %s", b)
-	}
 	if strings.Contains(out.String(), "created") {
 		t.Errorf("second run created things: %s", out.String())
+	}
+}
+
+func TestImportSecretFiles(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "platform.env"), []byte("GITHUB_TOKEN=from-file\nTS_AUTHKEY=ts\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(dir, "movies.prod.env"), []byte("TMDB_API_KEY='k p'\n"), 0o600)
+	s, err := secretstore.Open(filepath.Join(dir, "secrets.db"), filepath.Join(dir, "master.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	_ = s.Set("", "", "GITHUB_TOKEN", "already-set", "owner") // the store wins
+	var out bytes.Buffer
+	if err := importSecretFiles(dir, s, &out); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := s.Platform("GITHUB_TOKEN"); v != "already-set" {
+		t.Errorf("GITHUB_TOKEN = %q", v)
+	}
+	if v, _ := s.Platform("TS_AUTHKEY"); v != "ts" {
+		t.Errorf("TS_AUTHKEY = %q", v)
+	}
+	if v, _ := s.Inject("movies", "prod", []string{"TMDB_API_KEY"}); v["TMDB_API_KEY"] != "k p" {
+		t.Errorf("TMDB_API_KEY = %q", v)
+	}
+	for _, f := range []string{"platform.env", "movies.prod.env"} {
+		if _, err := os.Stat(filepath.Join(dir, f+".imported")); err != nil {
+			t.Errorf("%s not renamed: %v", f, err)
+		}
+	}
+	if !strings.Contains(out.String(), "rm ") {
+		t.Errorf("no delete command: %s", out.String())
+	}
+	// Running again (next start) does nothing.
+	out.Reset()
+	if err := importSecretFiles(dir, s, &out); err != nil || out.Len() != 0 {
+		t.Fatalf("second import: %v %q", err, out.String())
+	}
+	// The identity key is made once and kept.
+	a, err := identitySigner(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := identitySigner(s)
+	if a.PublicKey() != b.PublicKey() {
+		t.Error("identity key changed between starts")
 	}
 }

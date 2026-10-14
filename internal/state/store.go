@@ -21,7 +21,7 @@ type App struct {
 	Name      string    `json:"name"`
 	Repo      string    `json:"repo"`      // e.g. rupaai/smart-recommender-player
 	Manifest  []byte    `json:"-"`         // latest homelab.yaml seen on the build branch
-	Promotion string    `json:"promotion"` // manual | auto-dev
+	Promotion string    `json:"promotion"` // manual | auto-dev | auto
 	Slot      int       `json:"slot"`      // picks the app's local ports; never reused
 	AddedBy   string    `json:"addedBy"`
 	AddedAt   time.Time `json:"addedAt"`
@@ -100,6 +100,10 @@ var migrations = []string{
 		id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, actor TEXT NOT NULL,
 		app TEXT NOT NULL DEFAULT '', env TEXT NOT NULL DEFAULT '', action TEXT NOT NULL, detail TEXT NOT NULL);
 	CREATE INDEX events_app ON events(app, id);`,
+	// Milestone 2: commits auto-promote must leave alone (failed smoke test, rolled back).
+	`CREATE TABLE holds (
+		app TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE, commit_sha TEXT NOT NULL,
+		reason TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (app, commit_sha));`,
 }
 
 func (s *Store) migrate() error {
@@ -181,10 +185,77 @@ func (s *Store) AddApp(ctx context.Context, a App) (App, error) {
 	return a, tx.Commit()
 }
 
-// UpdateApp stores a newer manifest (and the name and promotion mode it declares).
-func (s *Store) UpdateApp(ctx context.Context, id, name, promotion string, manifest []byte) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE apps SET name = ?, promotion = ?, manifest = ? WHERE id = ?`, name, promotion, manifest, id)
+// UpdateApp stores a newer manifest and the name it declares. The promotion mode is a
+// Homelab setting (SetPromotion), so a new manifest doesn't change it.
+func (s *Store) UpdateApp(ctx context.Context, id, name string, manifest []byte) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE apps SET name = ?, manifest = ? WHERE id = ?`, name, manifest, id)
 	return err
+}
+
+// SetPromotion changes an app's promotion mode.
+func (s *Store) SetPromotion(ctx context.Context, id, mode string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE apps SET promotion = ? WHERE id = ?`, mode, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return core.ErrNotFound
+	}
+	return nil
+}
+
+// RemoveApp forgets an app: its environments, history and holds. The activity log keeps
+// its entries.
+func (s *Store) RemoveApp(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM deployments WHERE app = ?`, id); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM apps WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return core.ErrNotFound
+	}
+	return tx.Commit()
+}
+
+// Hold is a commit auto-promote leaves alone.
+type Hold struct {
+	Commit string    `json:"commit"`
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
+}
+
+// AddHold records that auto-promote must not promote commit. A second hold keeps the first reason.
+func (s *Store) AddHold(ctx context.Context, app, commit, reason string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO holds (app, commit_sha, reason, at) VALUES (?,?,?,?)`, app, commit, reason, s.now().UnixMilli())
+	return err
+}
+
+// Holds lists an app's held commits, newest first.
+func (s *Store) Holds(ctx context.Context, app string) ([]Hold, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT commit_sha, reason, at FROM holds WHERE app = ? ORDER BY at DESC LIMIT 20`, app)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Hold
+	for rows.Next() {
+		var h Hold
+		var at int64
+		if err := rows.Scan(&h.Commit, &h.Reason, &at); err != nil {
+			return nil, err
+		}
+		h.At = time.UnixMilli(at)
+		out = append(out, h)
+	}
+	return out, rows.Err()
 }
 
 // Apps lists every app, oldest first.

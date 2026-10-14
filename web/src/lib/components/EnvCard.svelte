@@ -41,6 +41,14 @@
 		<p class="status-line">{healthSentence(app.name, env.health)}{env.healthDetail ? `. ${env.healthDetail}` : ''}</p>
 	{/if}
 
+	{#if env.missingSecrets.length}
+		<p class="notice">
+			<strong>{env.missingSecrets.length === 1 ? `${env.missingSecrets[0]} isn't set for ${env.env}` : `${env.missingSecrets.length} secrets aren't set for ${env.env}`}</strong>
+			{#if env.missingSecrets.length > 1}{env.missingSecrets.join(', ')}.{/if}
+			<a href="/apps/{encodeURIComponent(app.id)}/secrets">Set {env.missingSecrets.length === 1 ? 'it' : 'them'} on the secrets screen</a>
+		</p>
+	{/if}
+
 	{#if env.lastError}
 		<p class="notice"><strong>This didn't start</strong>{env.lastError}</p>
 	{/if}
@@ -108,6 +116,9 @@
 		background: var(--accent-soft);
 		border-radius: 10px;
 		padding: 0.55rem 0.8rem;
+		margin: 0 0 0.6rem;
+	}
+	.notice {
 		margin: 0 0 0.6rem;
 	}
 	.status-line {
