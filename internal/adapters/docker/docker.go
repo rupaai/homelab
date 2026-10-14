@@ -1,8 +1,8 @@
 // Package docker runs app environments with Docker Compose. It implements core.Deployer.
 //
-// Each environment is its own Compose project (homehub-<app>-<env>) with one service, "app",
-// so it gets its own network and its containers are found again by their homehub.* labels.
-// Images are pulled through the Docker Engine API so Homehub never touches the user's
+// Each environment is its own Compose project (homelab-<app>-<env>) with one service, "app",
+// so it gets its own network and its containers are found again by their homelab.* labels.
+// Images are pulled through the Docker Engine API so Homelab never touches the user's
 // ~/.docker/config.json.
 package docker
 
@@ -24,7 +24,7 @@ import (
 
 // Options configures a Deployer.
 type Options struct {
-	Root      string       // where compose files live, e.g. ~/.homehub/apps
+	Root      string       // where compose files live, e.g. ~/.homelab/apps
 	Logger    *slog.Logger // default: discard
 	DockerBin string       // default "docker"
 	Host      string       // Docker host to use; empty means DOCKER_HOST, then the current Docker context
@@ -192,7 +192,7 @@ func (d *Deployer) Stop(ctx context.Context, app, env string) error {
 	return err
 }
 
-// Observe reports one entry per environment Homehub has containers for.
+// Observe reports one entry per environment Homelab has containers for.
 func (d *Deployer) Observe(ctx context.Context) ([]core.Running, error) {
 	cs, err := d.api.containers(ctx, labelApp)
 	if err != nil {

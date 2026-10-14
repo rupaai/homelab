@@ -1,4 +1,4 @@
-// These mirror the JSON from the Homehub API (internal/hub/view.go, actions.go,
+// These mirror the JSON from the Homelab API (internal/hub/view.go, actions.go,
 // internal/state/store.go, internal/core/types.go). Times are RFC 3339 strings.
 // Go slices can arrive as null, so the api module turns those into [].
 

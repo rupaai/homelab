@@ -11,7 +11,7 @@ import (
 
 func TestStoreSurvivesReopen(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "homehub.db")
+	path := filepath.Join(t.TempDir(), "homelab.db")
 	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)

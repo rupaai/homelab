@@ -36,7 +36,7 @@
 	const appName = (id: string) => appsStore.get(id)?.name ?? id;
 </script>
 
-<svelte:head><title>Activity · Homehub</title></svelte:head>
+<svelte:head><title>Activity · Homelab</title></svelte:head>
 
 <div class="page">
 	<div class="page-head">

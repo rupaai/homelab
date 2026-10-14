@@ -52,7 +52,7 @@
 	});
 </script>
 
-<svelte:head><title>{envLabel(env)} logs · {name} · Homehub</title></svelte:head>
+<svelte:head><title>{envLabel(env)} logs · {name} · Homelab</title></svelte:head>
 
 <div class="page fill">
 	<a class="back" href="/apps/{encodeURIComponent(id)}">← {name}</a>

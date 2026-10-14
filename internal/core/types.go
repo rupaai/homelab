@@ -63,7 +63,7 @@ type Release struct {
 	Author   string    `json:"author"`
 	When     time.Time `json:"when"`     // commit time
 	BuildURL string    `json:"buildUrl"` // where the build's logs are
-	Manifest []byte    `json:"-"`        // homehub.yaml at this commit
+	Manifest []byte    `json:"-"`        // homelab.yaml at this commit
 }
 
 // ImageRef is how the image is pulled and run: by digest when known.
@@ -94,7 +94,7 @@ type EnvSpec struct {
 	Env      string
 	Release  Release
 	Port     int    // the port the app listens on inside its container
-	HostPort int    // published on 127.0.0.1 only; homehubd forwards the address to it
+	HostPort int    // published on 127.0.0.1 only; homelabd forwards the address to it
 	Memory   string // e.g. "2g"; empty means no limit
 	Mounts   []Mount
 	Vars     map[string]string // settings and secrets, as environment variables
@@ -177,5 +177,5 @@ func ViewerFrom(ctx context.Context) (Viewer, bool) {
 	return v, ok
 }
 
-// Actor for things Homehub does by itself.
-const ActorHomehub = "homehub"
+// Actor for things Homelab does by itself.
+const ActorHomelab = "homelab"

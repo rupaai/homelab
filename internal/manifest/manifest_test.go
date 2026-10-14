@@ -15,7 +15,7 @@ port: 8000
 health: /healthz
 data:
   - {name: data, path: /data}
-env: {CONFIG_PATH: /app/homehub/config.yaml}
+env: {CONFIG_PATH: /app/homelab/config.yaml}
 env_for:
   dev: {LOG_LEVEL: debug}
 secrets: [TMDB_API_KEY]
@@ -48,7 +48,7 @@ func TestParseRejects(t *testing.T) {
 	cases := map[string]string{
 		"bad id":         strings.Replace(movies, "id: movies", "id: Movies!", 1),
 		"dev suffix":     strings.Replace(movies, "id: movies", "id: movies-dev", 1),
-		"reserved":       strings.Replace(movies, "id: movies", "id: homehub", 1),
+		"reserved":       strings.Replace(movies, "id: movies", "id: homelab", 1),
 		"tagged image":   strings.Replace(movies, "smart-recommender-player", "smart-recommender-player:latest", 1),
 		"tag no commit":  strings.Replace(movies, `"sha-{commit}"`, "latest", 1),
 		"no port":        strings.Replace(movies, "port: 8000", "port: 0", 1),

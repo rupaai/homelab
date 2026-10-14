@@ -23,10 +23,10 @@ func newTestClient(t *testing.T, h http.Handler, token string) *Client {
 
 func TestReadFile(t *testing.T) {
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/repos/o/r/contents/dir/homehub.yaml" && r.URL.Query().Get("ref") == "main" {
+		if r.URL.Path == "/repos/o/r/contents/dir/homelab.yaml" && r.URL.Query().Get("ref") == "main" {
 			if r.Header.Get("Accept") != "application/vnd.github.raw+json" ||
 				r.Header.Get("Authorization") != "Bearer tok" ||
-				r.Header.Get("User-Agent") != "homehub" ||
+				r.Header.Get("User-Agent") != "homelab" ||
 				r.Header.Get("X-GitHub-Api-Version") != "2022-11-28" {
 				t.Errorf("bad headers: %v", r.Header)
 			}
@@ -35,7 +35,7 @@ func TestReadFile(t *testing.T) {
 		}
 		http.NotFound(w, r)
 	}), "tok")
-	b, err := c.ReadFile(context.Background(), "o/r", "main", "dir/homehub.yaml")
+	b, err := c.ReadFile(context.Background(), "o/r", "main", "dir/homelab.yaml")
 	if err != nil || string(b) != "name: x\n" {
 		t.Fatalf("got %q, %v", b, err)
 	}
@@ -234,7 +234,7 @@ func registryServer(t *testing.T, wantBasicPass string, tokenCalls, manifestCall
 			if wantBasicPass == "" && ok {
 				t.Errorf("expected anonymous token request")
 			}
-			if wantBasicPass != "" && (!ok || u != "homehub" || p != wantBasicPass) {
+			if wantBasicPass != "" && (!ok || u != "homelab" || p != wantBasicPass) {
 				t.Errorf("basic auth %v %q %q", ok, u, p)
 			}
 			if r.URL.Query().Get("service") != "ghcr.io" || r.URL.Query().Get("scope") != "repository:o/app:pull" {
@@ -366,7 +366,7 @@ func TestParseBearer(t *testing.T) {
 func TestPullAuth(t *testing.T) {
 	c := New(Options{Token: "t"})
 	a, err := c.PullAuth(context.Background(), "ghcr.io/o/app")
-	if err != nil || a != (core.RegistryAuth{Server: "ghcr.io", Username: "homehub", Password: "t"}) {
+	if err != nil || a != (core.RegistryAuth{Server: "ghcr.io", Username: "homelab", Password: "t"}) {
 		t.Fatalf("%+v %v", a, err)
 	}
 	if a, _ := c.PullAuth(context.Background(), "docker.io/x/y"); a != (core.RegistryAuth{}) {

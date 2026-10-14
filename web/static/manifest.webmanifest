@@ -1,6 +1,6 @@
 {
-	"name": "Homehub",
-	"short_name": "Homehub",
+	"name": "Homelab",
+	"short_name": "Homelab",
 	"description": "See your apps, promote dev to prod, and roll back.",
 	"start_url": "/",
 	"scope": "/",

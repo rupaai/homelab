@@ -54,7 +54,7 @@ func (f flakySource) ReadFile(ctx context.Context, repo, ref, path string) ([]by
 func newRig(t *testing.T) *rig {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := state.Open(filepath.Join(dir, "homehub.db"))
+	st, err := state.Open(filepath.Join(dir, "homelab.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func do(h http.Handler, method, path, body string, v *core.Viewer, hdr ...string
 }
 
 func post(h http.Handler, path, body string, v *core.Viewer) *httptest.ResponseRecorder {
-	return do(h, "POST", path, body, v, "X-Homehub-Request", "1", "Content-Type", "application/json")
+	return do(h, "POST", path, body, v, "X-Homelab-Request", "1", "Content-Type", "application/json")
 }
 
 func TestAuth(t *testing.T) {
@@ -157,7 +157,7 @@ func TestCSRFAndBody(t *testing.T) {
 	if rec := do(h, "POST", "/api/apps", body, &local, "Content-Type", "application/json"); rec.Code != 403 {
 		t.Errorf("no header: %d", rec.Code)
 	}
-	if rec := do(h, "POST", "/api/apps", body, &local, "X-Homehub-Request", "1", "Content-Type", "text/plain"); rec.Code != 415 {
+	if rec := do(h, "POST", "/api/apps", body, &local, "X-Homelab-Request", "1", "Content-Type", "text/plain"); rec.Code != 415 {
 		t.Errorf("wrong type: %d", rec.Code)
 	}
 	if rec := post(h, "/api/apps", `{"repo":"a/b","extra":1}`, &local); rec.Code != 400 {
@@ -285,7 +285,7 @@ func TestStatic(t *testing.T) {
 func TestLoopbackHost(t *testing.T) {
 	for host, want := range map[string]bool{
 		"127.0.0.1:7080": true, "localhost:7080": true, "[::1]:7080": true, "127.0.0.1": true,
-		"evil.example:7080": false, "homehub.tail1.ts.net": false, "192.168.1.5:7080": false,
+		"evil.example:7080": false, "homelab.tail1.ts.net": false, "192.168.1.5:7080": false,
 	} {
 		if got := loopbackHost(host); got != want {
 			t.Errorf("loopbackHost(%q) = %v, want %v", host, got, want)

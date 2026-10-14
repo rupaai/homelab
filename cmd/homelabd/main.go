@@ -1,4 +1,4 @@
-// Command homehubd is the Homehub program: it sets up its folder, runs the hub and
+// Command homelabd is the Homelab program: it sets up its folder, runs the hub and
 // installs itself as a login service.
 package main
 
@@ -10,19 +10,19 @@ import (
 // version is set at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
-const usage = `Homehub
+const usage = `Homelab
 
 Usage:
-  homehubd init [--home DIR]               create the Homehub folder and a starter config
-  homehubd run [--home DIR] [--log-level L] run Homehub
-  homehubd service install [--home DIR]    run Homehub at login (macOS)
-  homehubd service uninstall               stop running Homehub at login (macOS)
-  homehubd version
+  homelabd init [--home DIR]               create the Homelab folder and a starter config
+  homelabd run [--home DIR] [--log-level L] run Homelab
+  homelabd service install [--home DIR]    run Homelab at login (macOS)
+  homelabd service uninstall               stop running Homelab at login (macOS)
+  homelabd version
 `
 
 func main() {
 	if err := dispatch(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "homehubd:", err)
+		fmt.Fprintln(os.Stderr, "homelabd:", err)
 		os.Exit(1)
 	}
 }
@@ -41,7 +41,7 @@ func dispatch(args []string) error {
 	case "service":
 		return cmdService(rest, os.Stdout)
 	case "version", "--version", "-version":
-		fmt.Println("homehubd", version)
+		fmt.Println("homelabd", version)
 		return nil
 	case "help", "-h", "--help", "-help":
 		fmt.Print(usage)

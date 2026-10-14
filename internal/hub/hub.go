@@ -1,4 +1,4 @@
-// Package hub is Homehub's core: it keeps desired state, runs the reconciler, and carries
+// Package hub is Homelab's core: it keeps desired state, runs the reconciler, and carries
 // out the builder actions (add app, deploy, promote, rollback). It only talks to adapters
 // through the contracts in package core.
 package hub
@@ -27,7 +27,7 @@ import (
 
 // Config tunes the hub. Zero values get sensible defaults.
 type Config struct {
-	DataDir        string        // root of everything Homehub keeps, e.g. ~/.homehub
+	DataDir        string        // root of everything Homelab keeps, e.g. ~/.homelab
 	HostPortBase   int           // app environments publish on 127.0.0.1:HostPortBase+slot*10+n
 	ReconcileEvery time.Duration // default 15s
 	HealthEvery    time.Duration // default 30s (O1)
@@ -120,7 +120,7 @@ func New(cfg Config, store *state.Store, ad Adapters) *Hub {
 
 // Run runs the reconciler, health checks and build checks until ctx ends.
 func (h *Hub) Run(ctx context.Context) {
-	h.logEvent(ctx, state.Event{Actor: core.ActorHomehub, Action: "homehub.started", Detail: "Homehub started and is checking that everything runs as it should"})
+	h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, Action: "homelab.started", Detail: "Homelab started and is checking that everything runs as it should"})
 	go h.every(ctx, h.cfg.BuildsEvery, h.CheckBuilds)
 	go h.every(ctx, h.cfg.HealthEvery, h.CheckHealth)
 	go h.every(ctx, 24*time.Hour, func(ctx context.Context) { _ = h.store.PruneEvents(ctx, 366*24*time.Hour) })
@@ -237,7 +237,7 @@ func (h *Hub) Reconcile(ctx context.Context) {
 	for k := range byKey {
 		if !known[k.app] {
 			if err := h.ad.Deployer.Stop(ctx, k.app, k.env); err == nil {
-				h.logEvent(ctx, state.Event{Actor: core.ActorHomehub, App: k.app, Env: k.env, Action: "env.stopped", Detail: "Stopped, because the app isn't registered any more"})
+				h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: k.app, Env: k.env, Action: "env.stopped", Detail: "Stopped, because the app isn't registered any more"})
 			}
 		}
 	}
@@ -274,13 +274,13 @@ func (h *Hub) reconcileEnv(ctx context.Context, a state.App, env string, r *core
 			} else if r != nil {
 				why = "it had stopped"
 			}
-			h.logEvent(ctx, state.Event{Actor: core.ActorHomehub, App: a.ID, Env: env, Action: "deploy.started",
+			h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: a.ID, Env: env, Action: "deploy.started",
 				Detail: fmt.Sprintf("Starting %s, because %s", e.Want.Short(), why)})
 			if err := h.deploy(ctx, a, env, *e.Want); err != nil {
 				h.deployFailed(ctx, a.ID, env, err, true)
 			} else {
 				h.deployOK(a.ID, env)
-				h.logEvent(ctx, state.Event{Actor: core.ActorHomehub, App: a.ID, Env: env, Action: "deploy.done", Detail: e.Want.Short() + " is running"})
+				h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: a.ID, Env: env, Action: "deploy.done", Detail: e.Want.Short() + " is running"})
 			}
 		}
 	}
@@ -304,7 +304,7 @@ func (h *Hub) deployFailed(ctx context.Context, app, env string, err error, logI
 	s.nextAttempt = h.cfg.Now().Add(time.Minute)
 	h.mu.Unlock()
 	if first && logIt {
-		h.logEvent(ctx, state.Event{Actor: core.ActorHomehub, App: app, Env: env, Action: "deploy.failed", Detail: "Couldn't start it, will keep trying every minute: " + err.Error()})
+		h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: app, Env: env, Action: "deploy.failed", Detail: "Couldn't start it, will keep trying every minute: " + err.Error()})
 	}
 }
 
@@ -322,7 +322,7 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 	for k, v := range secrets {
 		vars[k] = v
 	}
-	vars["HOMEHUB_APP"], vars["HOMEHUB_ENV"], vars["HOMEHUB_COMMIT"] = a.ID, env, rel.Commit
+	vars["HOMELAB_APP"], vars["HOMELAB_ENV"], vars["HOMELAB_COMMIT"] = a.ID, env, rel.Commit
 	var mounts []core.Mount
 	for _, d := range m.Data {
 		dir := filepath.Join(h.dataDir(a.ID, env), d.Name)
@@ -386,9 +386,9 @@ func appProxy(port int, appName, env string) http.Handler {
 	p := httputil.NewSingleHostReverseProxy(target)
 	base := p.Director
 	p.Director = func(r *http.Request) {
-		// Only Homehub may set its identity headers (A2, milestone 3), so drop any a client sent.
+		// Only Homelab may set its identity headers (A2, milestone 3), so drop any a client sent.
 		for k := range r.Header {
-			if strings.HasPrefix(strings.ToLower(k), "x-homehub-") {
+			if strings.HasPrefix(strings.ToLower(k), "x-homelab-") {
 				r.Header.Del(k)
 			}
 		}
@@ -405,7 +405,7 @@ func appProxy(port int, appName, env string) http.Handler {
 		w.WriteHeader(http.StatusBadGateway)
 		fmt.Fprintf(w, `<!doctype html><meta name="viewport" content="width=device-width"><title>Not running</title>`+
 			`<body style="font-family:system-ui;padding:2rem;max-width:30rem;margin:auto"><h1>%s isn't answering right now</h1>`+
-			`<p>It may be starting up. Try again in a moment, or check it in the Homehub companion.</p>`, htmlEscape(label))
+			`<p>It may be starting up. Try again in a moment, or check it in the Homelab companion.</p>`, htmlEscape(label))
 	}
 	return p
 }
@@ -482,7 +482,7 @@ func (h *Hub) checkEnv(ctx context.Context, a state.App, env string, want *core.
 	h.mu.Unlock()
 
 	if prev != status && !(prev == core.Unknown && status == core.Healthy) {
-		h.logEvent(ctx, state.Event{Actor: core.ActorHomehub, App: a.ID, Env: env, Action: "health." + status, Detail: detail})
+		h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: a.ID, Env: env, Action: "health." + status, Detail: detail})
 	}
 	return status
 }

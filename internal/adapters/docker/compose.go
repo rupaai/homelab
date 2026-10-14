@@ -13,12 +13,12 @@ import (
 	"github.com/rupaai/homelab/internal/core"
 )
 
-// Labels Homehub puts on every container so Observe can find them again.
+// Labels Homelab puts on every container so Observe can find them again.
 const (
-	labelApp    = "homehub.app"
-	labelEnv    = "homehub.env"
-	labelCommit = "homehub.commit"
-	labelDigest = "homehub.digest"
+	labelApp    = "homelab.app"
+	labelEnv    = "homelab.env"
+	labelCommit = "homelab.commit"
+	labelDigest = "homelab.digest"
 
 	serviceName = "app"
 )
@@ -29,7 +29,7 @@ var (
 )
 
 // project is the Docker Compose project name for one app environment.
-func project(app, env string) string { return "homehub-" + app + "-" + env }
+func project(app, env string) string { return "homelab-" + app + "-" + env }
 
 // checkNames makes sure app and env are safe to use in folder names and project names.
 func checkNames(app, env string) error {

@@ -1,5 +1,5 @@
-// Package manifest reads an app's homehub.yaml: the small contract between an app and
-// Homehub (see blocks/apps_decisions.md). Fields Homehub doesn't use yet are accepted and
+// Package manifest reads an app's homelab.yaml: the small contract between an app and
+// Homelab (see blocks/apps_decisions.md). Fields Homelab doesn't use yet are accepted and
 // ignored, so an app can carry its full manifest from day one.
 package manifest
 
@@ -14,10 +14,10 @@ import (
 	"github.com/rupaai/homelab/internal/core"
 )
 
-// FileName is where Homehub looks for the manifest in an app's repo.
-const FileName = "homehub.yaml"
+// FileName is where Homelab looks for the manifest in an app's repo.
+const FileName = "homelab.yaml"
 
-// Manifest is a parsed homehub.yaml.
+// Manifest is a parsed homelab.yaml.
 type Manifest struct {
 	ID           string                       `yaml:"id"`
 	Name         string                       `yaml:"name"`
@@ -101,8 +101,8 @@ func (m *Manifest) validate() error {
 	if strings.HasSuffix(m.ID, "-dev") {
 		add("id %q can't end in -dev, because that's the dev address", m.ID)
 	}
-	if m.ID == "homehub" {
-		add("id \"homehub\" is reserved for the companion")
+	if m.ID == "homelab" {
+		add("id \"homelab\" is reserved for the companion")
 	}
 	last := m.Image[strings.LastIndex(m.Image, "/")+1:]
 	if m.Image == "" || strings.ContainsAny(m.Image, "@ ") || strings.Contains(last, ":") {

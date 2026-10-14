@@ -49,7 +49,7 @@
 	<ReleaseLine release={env.version} />
 	{#if env.version && env.deployedAt}
 		<p class="muted small by">
-			{deployedLabel(env.deployKind)} by {env.deployedBy === 'homehub' ? 'Homehub' : env.deployedBy}, <Time at={env.deployedAt} />
+			{deployedLabel(env.deployKind)} by {env.deployedBy === 'homelab' ? 'Homelab' : env.deployedBy}, <Time at={env.deployedAt} />
 		</p>
 	{/if}
 

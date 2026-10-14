@@ -29,8 +29,8 @@ const (
 	defaultAPIBase      = "https://api.github.com"
 	defaultRegistryBase = "https://ghcr.io"
 	apiVersion          = "2022-11-28"
-	userAgent           = "homehub"
-	registryUser        = "homehub"
+	userAgent           = "homelab"
+	registryUser        = "homelab"
 	maxCompareCommits   = 100
 	maxBody             = 32 << 20
 )
@@ -198,7 +198,7 @@ func rateLimitMessage(resp *http.Response, now time.Time) (string, bool) {
 	}
 	if reset.IsZero() {
 		if resp.StatusCode == http.StatusTooManyRequests {
-			return "GitHub is rate limiting Homehub; try again in a few minutes", true
+			return "GitHub is rate limiting Homelab; try again in a few minutes", true
 		}
 		return "", false
 	}

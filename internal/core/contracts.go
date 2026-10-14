@@ -1,5 +1,5 @@
 // Package core holds the types every block shares and the contracts (interfaces) between
-// homehubd's core and its adapters. The core only ever talks to these interfaces, so any
+// homelabd's core and its adapters. The core only ever talks to these interfaces, so any
 // adapter (GitHub, Docker Compose, Tailscale...) can be swapped without touching the rest.
 //
 // Rules for every adapter:
@@ -53,7 +53,7 @@ type Deployer interface {
 	Deploy(ctx context.Context, spec EnvSpec) error
 	// Stop stops an environment's containers and keeps its data.
 	Stop(ctx context.Context, app, env string) error
-	// Observe reports every environment Homehub runs, including stopped ones.
+	// Observe reports every environment Homelab runs, including stopped ones.
 	Observe(ctx context.Context) ([]Running, error)
 	// Logs returns the last lines of an environment's logs, oldest first.
 	Logs(ctx context.Context, app, env string, lines int) (string, error)
@@ -62,7 +62,7 @@ type Deployer interface {
 // Addresses gives each app environment (and the companion) its own name people can open
 // (Tailscale nodes now; a domain through Caddy later).
 type Addresses interface {
-	// Ensure serves handler at name ("movies", "movies-dev", "homehub"). Calling it again
+	// Ensure serves handler at name ("movies", "movies-dev", "homelab"). Calling it again
 	// with the same name swaps the handler in place. It returns without waiting for the
 	// address to be ready; Observe says when it is.
 	//
@@ -88,7 +88,7 @@ type Secrets interface {
 	Missing(app, env string, names []string) ([]string, error)
 	// Inject returns the values for app/env, for the deploy adapter only.
 	Inject(app, env string, names []string) (map[string]string, error)
-	// Platform returns a Homehub credential such as GITHUB_TOKEN or TS_AUTHKEY.
+	// Platform returns a Homelab credential such as GITHUB_TOKEN or TS_AUTHKEY.
 	Platform(name string) (string, bool)
 }
 

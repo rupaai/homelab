@@ -28,14 +28,14 @@ import (
 	"github.com/rupaai/homelab/internal/state"
 )
 
-// localCompanionPort is the port the local adapter would give the name "homehub". Homehub
+// localCompanionPort is the port the local adapter would give the name "homelab". Homelab
 // never asks for that name in local mode (the listen address serves the companion), so
 // this just keeps it out of the way of the real listen port.
 const localCompanionPort = 7079
 
 func cmdRun(args []string) error {
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
-	homeFlag := flags.String("home", "", "Homehub folder (default ~/.homehub)")
+	homeFlag := flags.String("home", "", "Homelab folder (default ~/.homelab)")
 	level := flags.String("log-level", "info", "debug, info, warn or error")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -66,7 +66,7 @@ func cmdRun(args []string) error {
 func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	secrets := filesecrets.New(filepath.Join(home, "secrets"))
 
-	store, err := state.Open(filepath.Join(home, "homehub.db"))
+	store, err := state.Open(filepath.Join(home, "homelab.db"))
 	if err != nil {
 		return fmt.Errorf("open state: %w", err)
 	}
@@ -111,7 +111,7 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
-		return fmt.Errorf("listen on %s: %w (is Homehub already running?)", cfg.Listen, err)
+		return fmt.Errorf("listen on %s: %w (is Homelab already running?)", cfg.Listen, err)
 	}
 	srv := &http.Server{
 		Handler:           onThisComputer(apiHandler),
@@ -165,7 +165,7 @@ func announceTailscale(ctx context.Context, addrs core.Addresses) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if a, ok := addrs.Observe()["homehub"]; ok && a.Ready && strings.TrimSpace(a.URL) != "" {
+			if a, ok := addrs.Observe()["homelab"]; ok && a.Ready && strings.TrimSpace(a.URL) != "" {
 				fmt.Printf("Companion (Tailscale): %s\n", a.URL)
 				return
 			}

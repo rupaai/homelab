@@ -1,4 +1,4 @@
-// Package local serves addresses on 127.0.0.1 ports, for trying Homehub out without
+// Package local serves addresses on 127.0.0.1 ports, for trying Homelab out without
 // Tailscale. Each name gets its own port, assigned once and remembered in ports.json.
 package local
 
@@ -22,13 +22,13 @@ import (
 
 var _ core.Addresses = (*Addresses)(nil)
 
-const companionName = "homehub"
+const companionName = "homelab"
 
 // Options configures the adapter.
 type Options struct {
 	Dir           string // where ports.json is kept
 	Bind          string // default 127.0.0.1
-	CompanionPort int    // default 7080; the port of the name "homehub"
+	CompanionPort int    // default 7080; the port of the name "homelab"
 	BasePort      int    // default 7100; first port handed to other names
 	Logger        *slog.Logger
 }

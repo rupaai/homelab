@@ -8,7 +8,7 @@ reasons live in the project's design docs; this file is what the code follows.
 | Package | Job |
 |---|---|
 | `internal/core` | Shared types and the contracts (interfaces) every adapter implements |
-| `internal/manifest` | Reads an app's `homehub.yaml` |
+| `internal/manifest` | Reads an app's `homelab.yaml` |
 | `internal/state` | Desired state, deployment history and activity log, in SQLite |
 | `internal/hub` | The core: reconciler, health checks, build checks, add app, promote, rollback |
 | `internal/adapters/fake` | In-memory adapters for tests |
@@ -21,23 +21,23 @@ reasons live in the project's design docs; this file is what the code follows.
 | `internal/api` | The HTTP JSON API the companion uses, and serving the companion |
 | `internal/companion` | The built companion, embedded into the binary |
 | `web/` | Companion source (SvelteKit, static output) |
-| `cmd/homehubd` | The program: config, wiring, `init`, `run`, `service install` |
+| `cmd/homelabd` | The program: config, wiring, `init`, `run`, `service install` |
 
 The hub only depends on `core`, `manifest` and `state`. Adapters only depend on `core`.
-Nothing outside `cmd/homehubd` knows which adapters are in use.
+Nothing outside `cmd/homelabd` knows which adapters are in use.
 
 ## What lives on the computer
 
-Everything is under one folder, `~/.homehub` by default (`--home` to change it):
+Everything is under one folder, `~/.homelab` by default (`--home` to change it):
 
 ```
-~/.homehub/
+~/.homelab/
   config.yaml              settings (below)
   secrets/
     platform.env           GITHUB_TOKEN=..., TS_AUTHKEY=...   (mode 0600)
     movies.dev.env         TMDB_API_KEY=...                   (mode 0600)
     movies.prod.env
-  homehub.db               state (SQLite)
+  homelab.db               state (SQLite)
   apps/<app>/<env>/
     compose.yaml           written by the docker adapter
     .env                   settings and secrets for the containers (mode 0600)
@@ -45,7 +45,7 @@ Everything is under one folder, `~/.homehub` by default (`--home` to change it):
   backups/<app>/prod/<time>-<commit>/   data copied before each promote (newest 5 kept)
   tailscale/<node>/        tsnet state per address
   local/ports.json         local adapter's port assignments
-  logs/homehubd.log        when run as a service
+  logs/homelabd.log        when run as a service
 ```
 
 ## config.yaml
@@ -58,14 +58,14 @@ owners: [labiba@example.com]
 # local: addresses are http://127.0.0.1:<port>, for trying things out.
 addresses: local
 tailscale:
-  tags: [tag:homehub]
+  tags: [tag:homelab]
 listen: 127.0.0.1:7080   # the companion on this computer
 ```
 
 ## Secrets files (milestone 1)
 
 Plain `KEY=VALUE` lines, `#` comments, blank lines ignored, optional surrounding quotes
-removed. `homehubd` refuses to read a secrets file other users can read (mode must not
+removed. `homelabd` refuses to read a secrets file other users can read (mode must not
 grant group or other access) and says how to fix it (`chmod 600 <file>`). The encrypted
 store replaces these files in milestone 2 behind the same `core.Secrets` contract.
 
@@ -80,7 +80,7 @@ All JSON. Errors are `{"error": "<message for people>"}` with status 400 for a
 `hub.UserError`, 404 for an unknown app, 409 for `hub.ErrBusy`, 500 otherwise (with a
 generic message; details go to the log). Every request must come from an owner (see
 config) or from this computer, otherwise 403. Changes are POSTs and need the header
-`X-Homehub-Request: 1` (a cheap CSRF guard; browsers can't send it cross-site without
+`X-Homelab-Request: 1` (a cheap CSRF guard; browsers can't send it cross-site without
 a preflight).
 
 | Method and path | Calls | Returns |

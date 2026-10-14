@@ -9,7 +9,7 @@ export const useMock: boolean =
 async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
 	const headers: Record<string, string> = { Accept: 'application/json' };
 	if (method === 'POST') {
-		headers['X-Homehub-Request'] = '1';
+		headers['X-Homelab-Request'] = '1';
 		headers['Content-Type'] = 'application/json';
 	}
 	let res: Response;

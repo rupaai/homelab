@@ -28,9 +28,9 @@ type Options struct {
 
 const (
 	maxBody       = 64 << 10
-	msgNotOwner   = "This Homehub only lets its owner in. Ask them to add your Tailscale login to owners in config.yaml."
-	msgInternal   = "Something went wrong inside Homehub. The details are in its log."
-	csrfHeader    = "X-Homehub-Request"
+	msgNotOwner   = "This Homelab only lets its owner in. Ask them to add your Tailscale login to owners in config.yaml."
+	msgInternal   = "Something went wrong inside Homelab. The details are in its log."
+	csrfHeader    = "X-Homelab-Request"
 	noAppPrefix   = "There's no app"
 	msgBadRequest = "That request wasn't understood."
 )
@@ -43,7 +43,7 @@ type server struct {
 	static *static
 }
 
-// New returns the handler for everything Homehub serves: /api, /healthz and the companion.
+// New returns the handler for everything Homelab serves: /api, /healthz and the companion.
 func New(h *hub.Hub, opts Options) http.Handler {
 	s := &server{hub: h, owners: map[string]bool{}, ver: opts.Version, log: opts.Logger}
 	if s.log == nil {
@@ -93,7 +93,7 @@ func New(h *hub.Hub, opts Options) http.Handler {
 	})
 }
 
-// allowed says whether the viewer may use Homehub.
+// allowed says whether the viewer may use Homelab.
 func (s *server) allowed(v core.Viewer) bool {
 	switch {
 	case v.Tagged:
@@ -136,7 +136,7 @@ func (s *server) guard(w http.ResponseWriter, r *http.Request) bool {
 	}
 	if r.Method == http.MethodPost {
 		if r.Header.Get(csrfHeader) != "1" {
-			writeErr(w, http.StatusForbidden, "That request didn't come from the Homehub companion.")
+			writeErr(w, http.StatusForbidden, "That request didn't come from the Homelab companion.")
 			return false
 		}
 		if r.ContentLength != 0 {

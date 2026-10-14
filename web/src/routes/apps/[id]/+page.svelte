@@ -45,7 +45,7 @@
 	}
 </script>
 
-<svelte:head><title>{app?.name ?? 'App'} · Homehub</title></svelte:head>
+<svelte:head><title>{app?.name ?? 'App'} · Homelab</title></svelte:head>
 
 <div class="page">
 	<a class="back" href="/">← Projects</a>

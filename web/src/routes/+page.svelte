@@ -35,7 +35,7 @@
 	}
 </script>
 
-<svelte:head><title>Projects · Homehub</title></svelte:head>
+<svelte:head><title>Projects · Homelab</title></svelte:head>
 
 <div class="page">
 	<div class="page-head">
@@ -50,7 +50,7 @@
 	{:else if appsStore.list.length === 0}
 		<div class="card empty">
 			<p><strong>No apps yet.</strong></p>
-			<p class="muted">Add an app from its GitHub repo and Homehub will show how dev and prod are doing.</p>
+			<p class="muted">Add an app from its GitHub repo and Homelab will show how dev and prod are doing.</p>
 		</div>
 	{/if}
 
@@ -97,7 +97,7 @@
 			<form id="add-form" onsubmit={add}>
 				<label for="repo">GitHub repo</label>
 				<input id="repo" type="text" bind:value={repo} placeholder="owner/name" autocapitalize="none" autocorrect="off" spellcheck="false" required />
-				<p class="hint">Like <code>rupaai/movie-night</code>. The repo needs a <code>homehub.yaml</code> file.</p>
+				<p class="hint">Like <code>rupaai/movie-night</code>. The repo needs a <code>homelab.yaml</code> file.</p>
 				<label for="branch">Branch <span class="muted">(optional)</span></label>
 				<input id="branch" type="text" bind:value={branch} placeholder="main" autocapitalize="none" autocorrect="off" spellcheck="false" />
 				{#if addError}<p class="notice bad" role="alert" style="margin-top: 1rem">{addError}</p>{/if}

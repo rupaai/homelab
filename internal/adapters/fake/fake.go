@@ -29,8 +29,8 @@ func NewSource() *Source {
 func (s *Source) Push(repo, branch, sha, message string, manifest []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.Files[repo+"@"+sha+":homehub.yaml"] = manifest
-	s.Files[repo+"@"+branch+":homehub.yaml"] = manifest
+	s.Files[repo+"@"+sha+":homelab.yaml"] = manifest
+	s.Files[repo+"@"+branch+":homelab.yaml"] = manifest
 	if _, seen := s.Commits[sha]; !seen {
 		s.Order = append(s.Order, sha)
 	}

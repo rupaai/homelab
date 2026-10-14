@@ -20,7 +20,7 @@ func TestParseConfigDefaults(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if c.Addresses != "local" || c.Listen != "127.0.0.1:7080" || !reflect.DeepEqual(c.Tailscale.Tags, []string{"tag:homehub"}) || len(c.Owners) != 0 {
+		if c.Addresses != "local" || c.Listen != "127.0.0.1:7080" || !reflect.DeepEqual(c.Tailscale.Tags, []string{"tag:homelab"}) || len(c.Owners) != 0 {
 			t.Fatalf("defaults: %+v", c)
 		}
 	}
@@ -76,23 +76,23 @@ func TestOnThisComputer(t *testing.T) {
 }
 
 func TestLaunchdPlist(t *testing.T) {
-	out := launchdPlist(plistParams{Exe: "/opt/h&h/homehubd", Home: "/Users/l/.homehub", UserDir: "/Users/l"})
+	out := launchdPlist(plistParams{Exe: "/opt/h&h/homelabd", Home: "/Users/l/.homelab", UserDir: "/Users/l"})
 	if err := xml.NewDecoder(strings.NewReader(out)).Decode(new(any)); err != nil {
 		t.Fatalf("not xml: %v", err)
 	}
 	for _, want := range []string{
-		"<string>net.homehub.homehubd</string>",
-		"<string>/opt/h&amp;h/homehubd</string>",
-		"<string>run</string>", "<string>--home</string>", "<string>/Users/l/.homehub</string>",
+		"<string>net.homelab.homelabd</string>",
+		"<string>/opt/h&amp;h/homelabd</string>",
+		"<string>run</string>", "<string>--home</string>", "<string>/Users/l/.homelab</string>",
 		"<key>RunAtLoad</key>\n\t<true/>", "<key>KeepAlive</key>\n\t<true/>",
-		"<string>/Users/l/.homehub/logs/homehubd.log</string>",
+		"<string>/Users/l/.homelab/logs/homelabd.log</string>",
 		"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/Users/l/.orbstack/bin",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)
 		}
 	}
-	if strings.Count(out, "homehubd.log") != 2 {
+	if strings.Count(out, "homelabd.log") != 2 {
 		t.Error("stdout and stderr should both be logged")
 	}
 }

@@ -16,7 +16,7 @@
 	<header>
 		<a class="brand" href="/">
 			<img src="/icon.svg" alt="" width="26" height="26" />
-			<span>Homehub</span>
+			<span>Homelab</span>
 		</a>
 		<nav class="top" aria-label="Main">
 			{#each tabs as t}

@@ -24,7 +24,7 @@ type AppView struct {
 	LatestBuild *BuildView `json:"latestBuild"`
 }
 
-// BuildView is the newest build Homehub has seen for an app.
+// BuildView is the newest build Homelab has seen for an app.
 type BuildView struct {
 	Commit   string `json:"commit"`
 	Short    string `json:"short"`

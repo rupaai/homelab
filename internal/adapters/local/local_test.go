@@ -57,15 +57,15 @@ func TestEnsureSwapRemovePersist(t *testing.T) {
 	if err := a.Ensure(ctx, "movies", viewerHandler("one")); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Ensure(ctx, "homehub", viewerHandler("hub")); err != nil {
+	if err := a.Ensure(ctx, "homelab", viewerHandler("hub")); err != nil {
 		t.Fatal(err)
 	}
 	obs := a.Observe()
 	if m := obs["movies"]; !m.Ready || m.URL != "http://127.0.0.1:"+strconv.Itoa(testBase) {
 		t.Fatalf("movies: %+v", m)
 	}
-	if h := obs["homehub"]; !h.Ready || h.URL != "http://127.0.0.1:"+strconv.Itoa(testCompanion) {
-		t.Fatalf("homehub: %+v", h)
+	if h := obs["homelab"]; !h.Ready || h.URL != "http://127.0.0.1:"+strconv.Itoa(testCompanion) {
+		t.Fatalf("homelab: %+v", h)
 	}
 	if got := get(t, obs["movies"].URL); got != "one:true" {
 		t.Fatal(got)
@@ -114,8 +114,8 @@ func TestListenFailureReported(t *testing.T) {
 	defer ln.Close()
 	a, _ := New(Options{Dir: t.TempDir(), BasePort: testBase, CompanionPort: testCompanion})
 	defer a.Close()
-	a.Ensure(context.Background(), "homehub", viewerHandler("x"))
-	h := a.Observe()["homehub"]
+	a.Ensure(context.Background(), "homelab", viewerHandler("x"))
+	h := a.Observe()["homelab"]
 	if h.Ready || h.Error == "" {
 		t.Fatalf("%+v", h)
 	}

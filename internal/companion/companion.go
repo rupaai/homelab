@@ -1,4 +1,4 @@
-// Package companion holds the built companion web app, embedded into homehubd.
+// Package companion holds the built companion web app, embedded into homelabd.
 package companion
 
 import (

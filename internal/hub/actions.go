@@ -22,14 +22,14 @@ func userErr(f string, a ...any) error { return &UserError{Msg: fmt.Sprintf(f, a
 // ErrBusy means another action is already working on the app.
 var ErrBusy = &UserError{Msg: "Something else is already happening on this app. Try again when it's finished."}
 
-// ServeCompanion gives the companion its own address ("homehub").
+// ServeCompanion gives the companion its own address ("homelab").
 func (h *Hub) ServeCompanion(ctx context.Context, handler http.Handler) error {
-	return h.ad.Addresses.Ensure(ctx, "homehub", handler)
+	return h.ad.Addresses.Ensure(ctx, "homelab", handler)
 }
 
 // ---- Registry: adding apps (A10) ----
 
-// AddApp registers an app from its repo by reading homehub.yaml on its build branch.
+// AddApp registers an app from its repo by reading homelab.yaml on its build branch.
 func (h *Hub) AddApp(ctx context.Context, repo, branch string, by core.Viewer) (state.App, error) {
 	repo = strings.Trim(strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(repo, "https://"), "github.com/")), "/")
 	repo = strings.TrimSuffix(repo, ".git")
@@ -93,7 +93,7 @@ func (h *Hub) CheckBuilds(ctx context.Context) {
 				h.mu.Lock()
 				h.failed[a.ID] = b.Commit
 				h.mu.Unlock()
-				h.logEvent(ctx, state.Event{Actor: core.ActorHomehub, App: a.ID, Action: "build.failed",
+				h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: a.ID, Action: "build.failed",
 					Detail: fmt.Sprintf("The build of %s failed, so it won't be deployed: %s", short(b.Commit), b.URL)})
 			}
 			continue
@@ -115,7 +115,7 @@ func (h *Hub) CheckBuilds(ctx context.Context) {
 		if err != nil {
 			var ue *UserError
 			if errors.As(err, &ue) {
-				h.logEvent(ctx, state.Event{Actor: core.ActorHomehub, App: a.ID, Env: core.Dev, Action: "build.skipped", Detail: ue.Msg})
+				h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: a.ID, Env: core.Dev, Action: "build.skipped", Detail: ue.Msg})
 				_ = h.store.SetLastBuild(ctx, a.ID, core.Dev, b.Commit)
 			} else {
 				h.log.Warn("new build", "app", a.ID, "err", err)
@@ -199,7 +199,7 @@ func (h *Hub) setWantAndApply(ctx context.Context, a state.App, env string, rel 
 	}
 	actor := by.Label()
 	if by == (core.Viewer{}) {
-		actor = core.ActorHomehub
+		actor = core.ActorHomelab
 	}
 	if _, err := h.store.SetWant(ctx, state.Deployment{App: a.ID, Env: env, Release: rel, By: actor, Kind: kind}); err != nil {
 		lock.Unlock()
@@ -395,7 +395,7 @@ func (h *Hub) undoPromote(ctx context.Context, a state.App, prev *core.Release, 
 		return fmt.Errorf("%s isn't healthy, and there's no earlier prod version to go back to", failed.Short())
 	}
 	h.setBusy(a.ID, core.Prod, "Going back to "+prev.Short())
-	h.logEvent(ctx, state.Event{Actor: core.ActorHomehub, App: a.ID, Env: core.Prod, Action: "promote.reverting",
+	h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: a.ID, Env: core.Prod, Action: "promote.reverting",
 		Detail: fmt.Sprintf("%s isn't healthy, so prod is going back to %s with its data from before the promote", failed.Short(), prev.Short())})
 	if err := h.ad.Deployer.Stop(ctx, a.ID, core.Prod); err != nil {
 		return fmt.Errorf("Couldn't stop %s to go back: %w", failed.Short(), err)
@@ -405,13 +405,13 @@ func (h *Hub) undoPromote(ctx context.Context, a state.App, prev *core.Release, 
 		if err != nil {
 			return fmt.Errorf("Couldn't put back prod's data from %s: %w", backup, err)
 		}
-		h.logEvent(ctx, state.Event{Actor: core.ActorHomehub, App: a.ID, Env: core.Prod, Action: "data.restored",
+		h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: a.ID, Env: core.Prod, Action: "data.restored",
 			Detail: "Put back prod's data from " + backup + "; the failed version's data is kept at " + kept})
 	}
-	if _, err := h.store.SetWant(ctx, state.Deployment{App: a.ID, Env: core.Prod, Release: *prev, By: core.ActorHomehub, Kind: "rollback"}); err != nil {
+	if _, err := h.store.SetWant(ctx, state.Deployment{App: a.ID, Env: core.Prod, Release: *prev, By: core.ActorHomelab, Kind: "rollback"}); err != nil {
 		return err
 	}
-	if !h.applyAndWait(ctx, a, core.Prod, *prev, "rollback", core.ActorHomehub) {
+	if !h.applyAndWait(ctx, a, core.Prod, *prev, "rollback", core.ActorHomelab) {
 		return fmt.Errorf("%s isn't healthy, and %s didn't come back healthy either", failed.Short(), prev.Short())
 	}
 	return fmt.Errorf("%s isn't healthy, so prod went back to %s", failed.Short(), prev.Short())

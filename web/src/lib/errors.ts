@@ -14,12 +14,12 @@ export function errorMessage(status: number, body: string): string {
 	} catch {
 		// not JSON; fall through
 	}
-	if (status === 403) return "Homehub doesn't recognise this device. Open it from a device on your Tailscale network.";
-	if (status === 404) return "Homehub couldn't find that.";
-	if (status >= 500) return 'Something went wrong inside Homehub. Try again in a moment.';
+	if (status === 403) return "Homelab doesn't recognise this device. Open it from a device on your Tailscale network.";
+	if (status === 404) return "Homelab couldn't find that.";
+	if (status >= 500) return 'Something went wrong inside Homelab. Try again in a moment.';
 	return `Something went wrong (error ${status}).`;
 }
 
-export const NETWORK_MESSAGE = "Can't reach Homehub. Check your connection and try again.";
+export const NETWORK_MESSAGE = "Can't reach Homelab. Check your connection and try again.";
 
 export const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));

@@ -56,7 +56,7 @@ const apps: AppView[] = [
 		promotion: 'auto-dev',
 		latestBuild: { commit: newer.commit, short: newer.short, status: 'passed', url: 'https://github.com/rupaai/movie-night/actions/runs/1', deployed: true },
 		envs: [
-			env('movie-night', 'dev', { version: newer, deployedBy: 'homehub', deployedAt: ago(38), deployKind: 'deploy', canRollback: true }),
+			env('movie-night', 'dev', { version: newer, deployedBy: 'homelab', deployedAt: ago(38), deployKind: 'deploy', canRollback: true }),
 			env('movie-night', 'prod', { version: older, deployedBy: 'rupaai', deployedAt: ago(60 * 26), deployKind: 'promote', canRollback: true })
 		]
 	},
@@ -96,19 +96,19 @@ const apps: AppView[] = [
 
 let eventId = 40;
 const events: ActivityEvent[] = [
-	{ id: 39, at: ago(38), actor: 'homehub', app: 'movie-night', env: 'dev', action: 'deploy.done', detail: '9f3c2ab is running and healthy' },
-	{ id: 38, at: ago(40), actor: 'homehub', app: 'movie-night', env: 'dev', action: 'deploy.started', detail: 'New build 9f3c2ab (Show who is watching on the poster) to dev' },
-	{ id: 37, at: ago(95), actor: 'homehub', app: 'garden-log', action: 'build.failed', detail: 'The build of badc0de failed, so it won\'t be deployed: https://github.com/rupaai/garden-log/actions/runs/3' },
+	{ id: 39, at: ago(38), actor: 'homelab', app: 'movie-night', env: 'dev', action: 'deploy.done', detail: '9f3c2ab is running and healthy' },
+	{ id: 38, at: ago(40), actor: 'homelab', app: 'movie-night', env: 'dev', action: 'deploy.started', detail: 'New build 9f3c2ab (Show who is watching on the poster) to dev' },
+	{ id: 37, at: ago(95), actor: 'homelab', app: 'garden-log', action: 'build.failed', detail: 'The build of badc0de failed, so it won\'t be deployed: https://github.com/rupaai/garden-log/actions/runs/3' },
 	{ id: 36, at: ago(60 * 4), actor: 'rupaai', app: 'recipe-box', env: 'prod', action: 'promote.done', detail: '7d2e9aa is running and healthy' },
-	{ id: 35, at: ago(60 * 4 + 1), actor: 'rupaai', app: 'recipe-box', env: 'prod', action: 'data.copied', detail: "Copied prod's data to /var/lib/homehub/backups/recipe-box-7d2e9aa" },
+	{ id: 35, at: ago(60 * 4 + 1), actor: 'rupaai', app: 'recipe-box', env: 'prod', action: 'data.copied', detail: "Copied prod's data to /var/lib/homelab/backups/recipe-box-7d2e9aa" },
 	{ id: 34, at: ago(60 * 4 + 2), actor: 'rupaai', app: 'recipe-box', env: 'prod', action: 'promote.started', detail: 'Promote 7d2e9aa (Scale recipes up and down) from dev to prod' },
 	{ id: 33, at: ago(60 * 26), actor: 'rupaai', app: 'movie-night', env: 'prod', action: 'promote.done', detail: '4be81d7 is running and healthy' },
 	{ id: 32, at: ago(60 * 26 + 3), actor: 'rupaai', app: 'movie-night', env: 'prod', action: 'promote.started', detail: 'Promote 4be81d7 (Add the family watch list) from dev to prod' },
-	{ id: 31, at: ago(60 * 30), actor: 'homehub', app: 'garden-log', env: 'prod', action: 'promote.unhealthy', detail: "3e3e3e3 started but isn't healthy: it didn't answer in time" },
+	{ id: 31, at: ago(60 * 30), actor: 'homelab', app: 'garden-log', env: 'prod', action: 'promote.unhealthy', detail: "3e3e3e3 started but isn't healthy: it didn't answer in time" },
 	{ id: 30, at: ago(60 * 24 * 6), actor: 'rupaai', app: 'movie-night', action: 'app.added', detail: 'Added Movie Night from rupaai/movie-night' }
 ];
 for (let i = 29; i > 0; i--) {
-	events.push({ id: i, at: ago(60 * 24 * 7 + (30 - i) * 90), actor: 'homehub', app: 'recipe-box', env: 'dev', action: 'deploy.done', detail: `Earlier build ${i.toString(16).padStart(7, 'e')} is running and healthy` });
+	events.push({ id: i, at: ago(60 * 24 * 7 + (30 - i) * 90), actor: 'homelab', app: 'recipe-box', env: 'dev', action: 'deploy.done', detail: `Earlier build ${i.toString(16).padStart(7, 'e')} is running and healthy` });
 }
 
 const find = (id: string) => {
@@ -145,7 +145,7 @@ export const mockApi: Api = {
 	apps: () => delay(structuredClone(apps)),
 	async addApp(repo) {
 		if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new ApiError('Use the repo as owner/name, for example rupaai/smart-recommender-player.', 400);
-		throw new ApiError(`${repo} has no homehub.yaml on its main branch yet.`, 400);
+		throw new ApiError(`${repo} has no homelab.yaml on its main branch yet.`, 400);
 	},
 	async deploy(id) {
 		const a = find(id);

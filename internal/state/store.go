@@ -1,4 +1,4 @@
-// Package state is Homehub's desired state and history, kept in one SQLite file.
+// Package state is Homelab's desired state and history, kept in one SQLite file.
 // Everything the reconciler needs to rebuild the running system after a restart is here.
 package state
 
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"time"
 
-	_ "modernc.org/sqlite" // pure Go, so homehubd cross-compiles without a C toolchain
+	_ "modernc.org/sqlite" // pure Go, so homelabd cross-compiles without a C toolchain
 
 	"github.com/rupaai/homelab/internal/core"
 )
@@ -20,7 +20,7 @@ type App struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Repo      string    `json:"repo"`      // e.g. rupaai/smart-recommender-player
-	Manifest  []byte    `json:"-"`         // latest homehub.yaml seen on the build branch
+	Manifest  []byte    `json:"-"`         // latest homelab.yaml seen on the build branch
 	Promotion string    `json:"promotion"` // manual | auto-dev
 	Slot      int       `json:"slot"`      // picks the app's local ports; never reused
 	AddedBy   string    `json:"addedBy"`

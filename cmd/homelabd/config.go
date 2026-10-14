@@ -24,16 +24,16 @@ type Config struct {
 
 const (
 	defaultListen = "127.0.0.1:7080"
-	defaultTag    = "tag:homehub"
+	defaultTag    = "tag:homelab"
 )
 
-// defaultHome is ~/.homehub.
+// defaultHome is ~/.homelab.
 func defaultHome() string {
 	h, err := os.UserHomeDir()
 	if err != nil {
-		return ".homehub"
+		return ".homelab"
 	}
-	return filepath.Join(h, ".homehub")
+	return filepath.Join(h, ".homelab")
 }
 
 // resolveHome makes --home absolute and expands a leading ~.
@@ -78,7 +78,7 @@ func loadConfig(home string) (Config, error) {
 	path := filepath.Join(home, "config.yaml")
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return Config{}, fmt.Errorf("no config at %s. Run `homehubd init --home %s` first", path, home)
+		return Config{}, fmt.Errorf("no config at %s. Run `homelabd init --home %s` first", path, home)
 	}
 	if err != nil {
 		return Config{}, err
@@ -102,5 +102,5 @@ func checkLoopback(listen string) error {
 	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
 		return nil
 	}
-	return fmt.Errorf("listen %q is not a loopback address. The companion on this computer is open to everyone who can reach it, so it must listen on 127.0.0.1 (or ::1); other devices reach Homehub through Tailscale", listen)
+	return fmt.Errorf("listen %q is not a loopback address. The companion on this computer is open to everyone who can reach it, so it must listen on 127.0.0.1 (or ::1); other devices reach Homelab through Tailscale", listen)
 }

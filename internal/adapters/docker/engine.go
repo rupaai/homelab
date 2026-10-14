@@ -16,8 +16,8 @@ import (
 	"github.com/rupaai/homelab/internal/core"
 )
 
-// engine is a small client for the parts of the Docker Engine API Homehub needs. It talks
-// to the socket directly so pulls can carry registry credentials without Homehub ever
+// engine is a small client for the parts of the Docker Engine API Homelab needs. It talks
+// to the socket directly so pulls can carry registry credentials without Homelab ever
 // writing the user's ~/.docker/config.json.
 type engine struct {
 	base string // http://docker

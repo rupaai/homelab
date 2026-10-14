@@ -12,12 +12,12 @@ import (
 	"strings"
 )
 
-const launchdLabel = "net.homehub.homehubd"
+const launchdLabel = "net.homelab.homelabd"
 
 // plistParams are what the launchd file depends on.
 type plistParams struct {
-	Exe     string // absolute path of homehubd
-	Home    string // Homehub folder
+	Exe     string // absolute path of homelabd
+	Home    string // Homelab folder
 	UserDir string // the user's home folder, for ~/.orbstack/bin
 }
 
@@ -33,7 +33,7 @@ func launchdPlist(p plistParams) string {
 		"/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin",
 		filepath.Join(p.UserDir, ".orbstack", "bin"),
 	}, ":")
-	log := filepath.Join(p.Home, "logs", "homehubd.log")
+	log := filepath.Join(p.Home, "logs", "homelabd.log")
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -75,10 +75,10 @@ func plistPath() (string, error) {
 
 func cmdService(args []string, out io.Writer) error {
 	if len(args) == 0 || (args[0] != "install" && args[0] != "uninstall") {
-		return fmt.Errorf("usage: homehubd service install|uninstall")
+		return fmt.Errorf("usage: homelabd service install|uninstall")
 	}
 	if runtime.GOOS != "darwin" {
-		fmt.Fprintln(out, "Running Homehub as a service is only set up for macOS in milestone 1. Milestone 6 adds the Linux service.")
+		fmt.Fprintln(out, "Running Homelab as a service is only set up for macOS in milestone 1. Milestone 6 adds the Linux service.")
 		return nil
 	}
 	path, err := plistPath()
@@ -95,7 +95,7 @@ func cmdService(args []string, out io.Writer) error {
 	}
 
 	fs := flag.NewFlagSet("service install", flag.ContinueOnError)
-	homeFlag := fs.String("home", "", "Homehub folder (default ~/.homehub)")
+	homeFlag := fs.String("home", "", "Homelab folder (default ~/.homelab)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -120,7 +120,7 @@ func cmdService(args []string, out io.Writer) error {
 	if err := os.WriteFile(path, []byte(launchdPlist(plistParams{Exe: exe, Home: home, UserDir: uh})), 0o644); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Wrote %s\nTo start Homehub now and at every login, run:\n  launchctl bootstrap gui/$(id -u) %s\nLogs: %s\n",
-		path, path, filepath.Join(home, "logs", "homehubd.log"))
+	fmt.Fprintf(out, "Wrote %s\nTo start Homelab now and at every login, run:\n  launchctl bootstrap gui/$(id -u) %s\nLogs: %s\n",
+		path, path, filepath.Join(home, "logs", "homelabd.log"))
 	return nil
 }

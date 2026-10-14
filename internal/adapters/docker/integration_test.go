@@ -16,11 +16,11 @@ import (
 	"github.com/rupaai/homelab/internal/core"
 )
 
-// Set HOMEHUB_DOCKER_TESTS=1 to run this against real Docker. It starts a throwaway
+// Set HOMELAB_DOCKER_TESTS=1 to run this against real Docker. It starts a throwaway
 // registry on 127.0.0.1:5000, pushes two tiny images and removes everything afterwards.
 const (
 	testRegistry = "127.0.0.1:5000"
-	testImage    = testRegistry + "/homehub-itest/web"
+	testImage    = testRegistry + "/homelab-itest/web"
 )
 
 func sh(t *testing.T, dir string, args ...string) string {
@@ -84,16 +84,16 @@ func waitBody(t *testing.T, port int, want string) {
 }
 
 func TestIntegrationFullCycle(t *testing.T) {
-	if os.Getenv("HOMEHUB_DOCKER_TESTS") != "1" {
-		t.Skip("set HOMEHUB_DOCKER_TESTS=1 to run against real Docker")
+	if os.Getenv("HOMELAB_DOCKER_TESTS") != "1" {
+		t.Skip("set HOMELAB_DOCKER_TESTS=1 to run against real Docker")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	exec.Command("docker", "rm", "-f", "homehub-itest-registry").Run()
-	sh(t, "", "run", "-d", "--name", "homehub-itest-registry", "-p", testRegistry+":5000", "mirror.gcr.io/library/registry:2")
+	exec.Command("docker", "rm", "-f", "homelab-itest-registry").Run()
+	sh(t, "", "run", "-d", "--name", "homelab-itest-registry", "-p", testRegistry+":5000", "mirror.gcr.io/library/registry:2")
 	t.Cleanup(func() {
-		exec.Command("docker", "rm", "-f", "-v", "homehub-itest-registry").Run()
+		exec.Command("docker", "rm", "-f", "-v", "homelab-itest-registry").Run()
 	})
 	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
 		if resp, err := http.Get("http://" + testRegistry + "/v2/"); err == nil {

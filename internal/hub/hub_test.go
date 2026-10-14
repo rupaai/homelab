@@ -48,12 +48,12 @@ func newRig(t *testing.T) *rig {
 	return r
 }
 
-// open (re)creates the hub on the same state file, like restarting homehubd.
+// open (re)creates the hub on the same state file, like restarting homelabd.
 func (r *rig) open() {
 	if r.store != nil {
 		r.store.Close()
 	}
-	s, err := state.Open(filepath.Join(r.dir, "homehub.db"))
+	s, err := state.Open(filepath.Join(r.dir, "homelab.db"))
 	if err != nil {
 		r.t.Fatal(err)
 	}

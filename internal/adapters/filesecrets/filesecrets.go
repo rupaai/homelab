@@ -1,7 +1,7 @@
-// Package filesecrets hands out Homehub's secrets from plain KEY=VALUE files in one folder.
+// Package filesecrets hands out Homelab's secrets from plain KEY=VALUE files in one folder.
 // This is milestone 1; the encrypted store replaces it behind the same core.Secrets contract.
 //
-// Files are read on every call, because people edit them while homehubd runs. A file
+// Files are read on every call, because people edit them while homelabd runs. A file
 // that any other user can read is refused, with the command that fixes it.
 package filesecrets
 
@@ -17,7 +17,7 @@ import (
 	"github.com/rupaai/homelab/internal/core"
 )
 
-// platformFile holds Homehub's own credentials, such as GITHUB_TOKEN and TS_AUTHKEY.
+// platformFile holds Homelab's own credentials, such as GITHUB_TOKEN and TS_AUTHKEY.
 const platformFile = "platform.env"
 
 // Store reads secrets from the files in one directory.
@@ -37,7 +37,7 @@ func (s *Store) Dir() string {
 	return s.dir
 }
 
-// Platform returns a Homehub credential from platform.env. It returns false when the
+// Platform returns a Homelab credential from platform.env. It returns false when the
 // value is absent or empty, or when the file cannot be read safely.
 func (s *Store) Platform(name string) (string, bool) {
 	vals, err := s.load(platformFile)
