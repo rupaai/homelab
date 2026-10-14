@@ -1,0 +1,10 @@
+/bin/
+/dist/
+web/node_modules/
+web/.svelte-kit/
+web/build/
+*.db
+.DS_Store
+# The companion build is copied here by `make web`; only .keep is committed.
+internal/companion/build/*
+!internal/companion/build/.keep
