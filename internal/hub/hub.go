@@ -556,6 +556,24 @@ func (h *Hub) backupData(app, env, label string) (string, error) {
 	return dst, nil
 }
 
+// restoreData replaces an environment's data with a copy made by backupData. The data it
+// replaces is moved next to the copies (named after label) rather than deleted. The app
+// must be stopped.
+func (h *Hub) restoreData(app, env, from, label string) (kept string, err error) {
+	dir := h.dataDir(app, env)
+	kept = filepath.Join(h.cfg.DataDir, "backups", app, env, h.cfg.Now().UTC().Format("20060102-150405")+"-replaced-by-restore-"+label)
+	if err := os.MkdirAll(filepath.Dir(kept), 0o700); err != nil {
+		return "", err
+	}
+	if err := os.Rename(dir, kept); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	if err := copyTree(from, dir); err != nil {
+		return kept, err
+	}
+	return kept, nil
+}
+
 func copyTree(src, dst string) error {
 	return filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
 		if err != nil {

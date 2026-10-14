@@ -356,6 +356,10 @@ func (h *Hub) promote(ctx context.Context, a state.App, rel core.Release, actor 
 	if err != nil {
 		return fmt.Errorf("Nothing changed: %w", err)
 	}
+	before, err := h.store.Env(ctx, a.ID, core.Prod)
+	if err != nil {
+		return fmt.Errorf("Nothing changed: %w", err)
+	}
 	h.setBusy(a.ID, core.Prod, "Downloading "+rel.Short())
 	if err := h.ad.Deployer.Prepare(ctx, spec); err != nil {
 		return fmt.Errorf("Nothing changed, the download failed: %w", err)
@@ -376,8 +380,41 @@ func (h *Hub) promote(ctx context.Context, a state.App, rel core.Release, actor 
 		h.logEvent(ctx, state.Event{Actor: actor, App: a.ID, Env: core.Prod, Action: "data.copied", Detail: "Copied prod's data to " + backup})
 	}
 	h.setBusy(a.ID, core.Prod, "Starting "+rel.Short())
-	h.applyAndWait(ctx, a, core.Prod, rel, "promote", actor)
-	return nil
+	if h.applyAndWait(ctx, a, core.Prod, rel, "promote", actor) {
+		return nil
+	}
+	return h.undoPromote(ctx, a, before.Want, rel, backup)
+}
+
+// undoPromote puts prod back the way it was before a promote whose new version didn't
+// start or didn't become healthy: the previous version, with the data copied just
+// before the switch (the new version may have changed it). The failed version's data is
+// kept next to the other copies.
+func (h *Hub) undoPromote(ctx context.Context, a state.App, prev *core.Release, failed core.Release, backup string) error {
+	if prev == nil {
+		return fmt.Errorf("%s isn't healthy, and there's no earlier prod version to go back to", failed.Short())
+	}
+	h.setBusy(a.ID, core.Prod, "Going back to "+prev.Short())
+	h.logEvent(ctx, state.Event{Actor: core.ActorHomehub, App: a.ID, Env: core.Prod, Action: "promote.reverting",
+		Detail: fmt.Sprintf("%s isn't healthy, so prod is going back to %s with its data from before the promote", failed.Short(), prev.Short())})
+	if err := h.ad.Deployer.Stop(ctx, a.ID, core.Prod); err != nil {
+		return fmt.Errorf("Couldn't stop %s to go back: %w", failed.Short(), err)
+	}
+	if backup != "" {
+		kept, err := h.restoreData(a.ID, core.Prod, backup, failed.Short())
+		if err != nil {
+			return fmt.Errorf("Couldn't put back prod's data from %s: %w", backup, err)
+		}
+		h.logEvent(ctx, state.Event{Actor: core.ActorHomehub, App: a.ID, Env: core.Prod, Action: "data.restored",
+			Detail: "Put back prod's data from " + backup + "; the failed version's data is kept at " + kept})
+	}
+	if _, err := h.store.SetWant(ctx, state.Deployment{App: a.ID, Env: core.Prod, Release: *prev, By: core.ActorHomehub, Kind: "rollback"}); err != nil {
+		return err
+	}
+	if !h.applyAndWait(ctx, a, core.Prod, *prev, "rollback", core.ActorHomehub) {
+		return fmt.Errorf("%s isn't healthy, and %s didn't come back healthy either", failed.Short(), prev.Short())
+	}
+	return fmt.Errorf("%s isn't healthy, so prod went back to %s", failed.Short(), prev.Short())
 }
 
 // ---- Rollback ----

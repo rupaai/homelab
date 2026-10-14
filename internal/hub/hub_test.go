@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -286,5 +287,81 @@ func TestFailedDeployRetries(t *testing.T) {
 	}
 	if e := r.env(core.Dev); e.LastError != "" {
 		t.Fatalf("error not cleared: %+v", e)
+	}
+}
+
+// A promote whose new version doesn't become healthy, or doesn't start, puts prod back on
+// the version it ran before, with the data from just before the promote.
+func TestFailedPromoteGoesBack(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	r.src.Push(repo, "main", "aaaaaaa1", "first", []byte(manifestDoc))
+	if _, err := r.hub.AddApp(ctx, repo, "", owner); err != nil {
+		t.Fatal(err)
+	}
+	r.sec.Set("movies", core.Prod, "TMDB_API_KEY", "k")
+	r.push("aaaaaaa1")
+	r.hub.CheckBuilds(ctx)
+	r.settle()
+	if err := r.hub.Promote(ctx, "movies", owner); err != nil {
+		t.Fatal(err)
+	}
+	r.settle()
+	prodData := filepath.Join(r.dir, "apps", "movies", "prod", "data", "db", "catalogue.db")
+	if err := os.WriteFile(prodData, []byte("v1 data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// bbbbbbb2 starts but never answers its health check on prod.
+	const prodHealth = "http://127.0.0.1:17011/healthz" // slot 1, prod
+	r.health.SetFailWhen(func(url string) bool {
+		if url != prodHealth || r.running(core.Prod) != "bbbbbbb2" {
+			return false
+		}
+		_ = os.WriteFile(prodData, []byte("changed by bbbbbbb2"), 0o644) // a bad version may touch data
+		return true
+	})
+	r.push("bbbbbbb2")
+	r.hub.CheckBuilds(ctx)
+	r.settle()
+	if err := r.hub.Promote(ctx, "movies", owner); err != nil {
+		t.Fatal(err)
+	}
+	r.settle()
+	if got := r.running(core.Prod); got != "aaaaaaa1" {
+		t.Fatalf("prod runs %q after a failed promote", got)
+	}
+	if e := r.env(core.Prod); e.Version.Commit != "aaaaaaa1" || e.DeployKind != "rollback" {
+		t.Fatalf("prod view after failed promote: %+v", e.Version)
+	}
+	if b, _ := os.ReadFile(prodData); string(b) != "v1 data" {
+		t.Fatalf("prod data after going back: %q", b)
+	}
+	evs, _ := r.store.Events(ctx, "movies", 0, 50)
+	var actions []string
+	for _, e := range evs {
+		actions = append(actions, e.Action)
+	}
+	for _, want := range []string{"promote.reverting", "data.restored", "promote.failed"} {
+		if !slices.Contains(actions, want) {
+			t.Fatalf("no %s event in %v", want, actions)
+		}
+	}
+
+	// ccccccc3 doesn't start at all.
+	r.health.SetFailWhen(nil)
+	r.push("ccccccc3")
+	r.hub.CheckBuilds(ctx)
+	r.settle()
+	r.dep.FailFor["sha256:ccccccc3"] = os.ErrPermission // it ran on dev; on prod it won't start
+	if err := r.hub.Promote(ctx, "movies", owner); err != nil {
+		t.Fatal(err)
+	}
+	r.settle()
+	if got := r.running(core.Prod); got != "aaaaaaa1" {
+		t.Fatalf("prod runs %q after a promote that didn't start", got)
+	}
+	if e := r.env(core.Prod); e.Version.Commit != "aaaaaaa1" {
+		t.Fatalf("prod wants %s after a promote that didn't start", e.Version.Commit)
 	}
 }

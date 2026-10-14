@@ -241,6 +241,9 @@ func (a *Addresses) Close() error { return nil }
 type Health struct {
 	mu      sync.Mutex
 	Failing map[string]bool // url -> failing
+	// FailWhen, when set, also fails a URL whenever it returns true (e.g. only while a
+	// given version runs).
+	FailWhen func(url string) bool
 }
 
 func NewHealth() *Health { return &Health{Failing: map[string]bool{}} }
@@ -251,10 +254,17 @@ func (h *Health) SetFailing(url string, failing bool) {
 	h.mu.Unlock()
 }
 
+func (h *Health) SetFailWhen(f func(url string) bool) {
+	h.mu.Lock()
+	h.FailWhen = f
+	h.mu.Unlock()
+}
+
 func (h *Health) Check(_ context.Context, url string) core.HealthResult {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.Failing[url] {
+	failing, when := h.Failing[url], h.FailWhen
+	h.mu.Unlock()
+	if failing || (when != nil && when(url)) {
 		return core.HealthResult{OK: false, Code: 500, Detail: "HTTP 500"}
 	}
 	return core.HealthResult{OK: true, Code: 200, Latency: time.Millisecond}
