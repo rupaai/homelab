@@ -1,0 +1,8 @@
+/bin/
+/dist/
+web/node_modules/
+web/.svelte-kit/
+web/build/
+!internal/companion/build/.keep
+*.db
+.DS_Store
