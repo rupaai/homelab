@@ -29,8 +29,9 @@ const platformEnvTemplate = `# Platform secrets for Homelab. Keep this file priv
 # Plain KEY=VALUE lines. Remove the leading # to use one.
 
 # GitHub: lets Homelab read your repos, build status and ghcr.io images.
-# Create a fine-grained token (repo contents and Actions read) or a classic token
-# with read:packages and repo, at https://github.com/settings/tokens
+# Create a classic token (ghcr.io doesn't accept fine-grained ones) at
+# https://github.com/settings/tokens with the read:packages scope, plus repo if any
+# app's repo is private. Then delete the "# " below so the line starts with GITHUB_TOKEN=
 # GITHUB_TOKEN=
 
 # Tailscale: only for addresses: tailscale. In the admin console go to
