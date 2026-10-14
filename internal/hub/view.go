@@ -30,7 +30,7 @@ type BuildView struct {
 	Short    string `json:"short"`
 	Status   string `json:"status"` // passed | failed | running
 	URL      string `json:"url"`
-	Deployed bool   `json:"deployed"` // already the version on dev
+	Deployed bool   `json:"deployed"` // already on dev, or already handled (e.g. skipped, see the activity log)
 }
 
 // ReleaseView is a release as people see it.
@@ -99,7 +99,7 @@ func (h *Hub) appView(ctx context.Context, a state.App, addrs map[string]core.Ad
 	if m, err := manifest.Parse(a.Manifest); err == nil {
 		v.Icon = m.Icon
 	}
-	var devCommit string
+	var devCommit, devLastBuild string
 	for _, env := range []string{core.Dev, core.Prod} {
 		e, err := h.store.Env(ctx, a.ID, env)
 		if err != nil {
@@ -114,6 +114,11 @@ func (h *Hub) appView(ctx context.Context, a state.App, addrs map[string]core.Ad
 			if env == core.Dev {
 				devCommit = e.Want.Commit
 			}
+		}
+		if env == core.Dev {
+			devLastBuild = e.LastBuild
+		}
+		if e.Want != nil {
 			if hist, err := h.store.History(ctx, a.ID, env, 1); err == nil && len(hist) > 0 {
 				t := hist[0].At
 				ev.DeployedBy, ev.DeployedAt, ev.DeployKind = hist[0].By, &t, hist[0].Kind
@@ -144,7 +149,7 @@ func (h *Hub) appView(ctx context.Context, a state.App, addrs map[string]core.Ad
 	}
 	h.mu.Lock()
 	if b, ok := h.builds[a.ID]; ok {
-		v.LatestBuild = &BuildView{Commit: b.Commit, Short: short(b.Commit), Status: b.Status, URL: b.URL, Deployed: b.Commit == devCommit}
+		v.LatestBuild = &BuildView{Commit: b.Commit, Short: short(b.Commit), Status: b.Status, URL: b.URL, Deployed: b.Commit == devCommit || b.Commit == devLastBuild}
 	}
 	h.mu.Unlock()
 	return v, nil

@@ -1,0 +1,217 @@
+// Fake data for developing the UI without the Go server (see api.ts for how it's switched on).
+import { ApiError } from './errors';
+import type { ActivityEvent, Api, AppView, EnvName, EnvView, ReleaseView } from './types';
+
+const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+const delay = <T>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
+
+function rel(sha: string, message: string, author: string, minutesAgo: number): ReleaseView {
+	return {
+		commit: sha.padEnd(40, '0'),
+		short: sha.slice(0, 7),
+		commitUrl: `https://github.com/rupaai/movie-night/commit/${sha}`,
+		image: 'ghcr.io/rupaai/movie-night',
+		tag: `sha-${sha}`,
+		digest: `sha256:${sha.padEnd(64, 'a')}`,
+		message,
+		author,
+		when: ago(minutesAgo),
+		buildUrl: 'https://github.com/rupaai/movie-night/actions/runs/1'
+	};
+}
+
+const newer = rel('9f3c2ab', 'Show who is watching on the poster', 'Rupa', 42);
+const older = rel('4be81d7', 'Add the family watch list', 'Rupa', 60 * 26);
+const oldest = rel('1a77c0e', 'First version', 'Rupa', 60 * 24 * 6);
+
+function env(app: string, name: EnvName, o: Partial<EnvView>): EnvView {
+	return {
+		env: name,
+		address: `https://${app}${name === 'dev' ? '-dev' : ''}.tailnet.ts.net`,
+		addressName: `${app}-${name}`,
+		addressReady: true,
+		version: null,
+		state: 'running',
+		health: 'healthy',
+		healthDetail: 'Answered a check a few seconds ago',
+		healthSince: ago(300),
+		checkedAt: ago(0.2),
+		busy: '',
+		lastError: '',
+		deployedBy: '',
+		deployedAt: null,
+		deployKind: '',
+		canRollback: false,
+		...o
+	};
+}
+
+const apps: AppView[] = [
+	{
+		id: 'movie-night',
+		name: 'Movie Night',
+		icon: '🎬',
+		repo: 'rupaai/movie-night',
+		repoUrl: 'https://github.com/rupaai/movie-night',
+		promotion: 'auto-dev',
+		latestBuild: { commit: newer.commit, short: newer.short, status: 'passed', url: 'https://github.com/rupaai/movie-night/actions/runs/1', deployed: true },
+		envs: [
+			env('movie-night', 'dev', { version: newer, deployedBy: 'homehub', deployedAt: ago(38), deployKind: 'deploy', canRollback: true }),
+			env('movie-night', 'prod', { version: older, deployedBy: 'rupaai', deployedAt: ago(60 * 26), deployKind: 'promote', canRollback: true })
+		]
+	},
+	{
+		id: 'recipe-box',
+		name: 'Recipe Box',
+		icon: '🍲',
+		repo: 'rupaai/recipe-box',
+		repoUrl: 'https://github.com/rupaai/recipe-box',
+		promotion: 'manual',
+		latestBuild: { commit: 'c0ffee1'.padEnd(40, '0'), short: 'c0ffee1', status: 'passed', url: 'https://github.com/rupaai/recipe-box/actions/runs/2', deployed: false },
+		envs: [
+			env('recipe-box', 'dev', { version: rel('7d2e9aa', 'Scale recipes up and down', 'Rupa', 60 * 5), deployedBy: 'rupaai', deployedAt: ago(60 * 5), deployKind: 'deploy' }),
+			env('recipe-box', 'prod', { version: rel('7d2e9aa', 'Scale recipes up and down', 'Rupa', 60 * 5), deployedBy: 'rupaai', deployedAt: ago(60 * 4), deployKind: 'promote' })
+		]
+	},
+	{
+		id: 'garden-log',
+		name: 'Garden Log',
+		icon: '',
+		repo: 'rupaai/garden-log',
+		repoUrl: 'https://github.com/rupaai/garden-log',
+		promotion: 'manual',
+		latestBuild: { commit: 'badc0de'.padEnd(40, '0'), short: 'badc0de', status: 'failed', url: 'https://github.com/rupaai/garden-log/actions/runs/3', deployed: false },
+		envs: [
+			env('garden-log', 'dev', { version: rel('55aa11f', 'Track watering', 'Rupa', 60 * 30), health: 'degraded', healthDetail: 'Slow to answer: 4 seconds', lastError: '' }),
+			env('garden-log', 'prod', {
+				version: rel('3e3e3e3', 'Add a plant list', 'Rupa', 60 * 24 * 3),
+				health: 'down',
+				healthDetail: "Didn't answer the last 3 checks",
+				state: 'exited',
+				lastError: 'It stopped right after starting. The last lines of its log may say why.'
+			})
+		]
+	}
+];
+
+let eventId = 40;
+const events: ActivityEvent[] = [
+	{ id: 39, at: ago(38), actor: 'homehub', app: 'movie-night', env: 'dev', action: 'deploy.done', detail: '9f3c2ab is running and healthy' },
+	{ id: 38, at: ago(40), actor: 'homehub', app: 'movie-night', env: 'dev', action: 'deploy.started', detail: 'New build 9f3c2ab (Show who is watching on the poster) to dev' },
+	{ id: 37, at: ago(95), actor: 'homehub', app: 'garden-log', action: 'build.failed', detail: 'The build of badc0de failed, so it won\'t be deployed: https://github.com/rupaai/garden-log/actions/runs/3' },
+	{ id: 36, at: ago(60 * 4), actor: 'rupaai', app: 'recipe-box', env: 'prod', action: 'promote.done', detail: '7d2e9aa is running and healthy' },
+	{ id: 35, at: ago(60 * 4 + 1), actor: 'rupaai', app: 'recipe-box', env: 'prod', action: 'data.copied', detail: "Copied prod's data to /var/lib/homehub/backups/recipe-box-7d2e9aa" },
+	{ id: 34, at: ago(60 * 4 + 2), actor: 'rupaai', app: 'recipe-box', env: 'prod', action: 'promote.started', detail: 'Promote 7d2e9aa (Scale recipes up and down) from dev to prod' },
+	{ id: 33, at: ago(60 * 26), actor: 'rupaai', app: 'movie-night', env: 'prod', action: 'promote.done', detail: '4be81d7 is running and healthy' },
+	{ id: 32, at: ago(60 * 26 + 3), actor: 'rupaai', app: 'movie-night', env: 'prod', action: 'promote.started', detail: 'Promote 4be81d7 (Add the family watch list) from dev to prod' },
+	{ id: 31, at: ago(60 * 30), actor: 'homehub', app: 'garden-log', env: 'prod', action: 'promote.unhealthy', detail: "3e3e3e3 started but isn't healthy: it didn't answer in time" },
+	{ id: 30, at: ago(60 * 24 * 6), actor: 'rupaai', app: 'movie-night', action: 'app.added', detail: 'Added Movie Night from rupaai/movie-night' }
+];
+for (let i = 29; i > 0; i--) {
+	events.push({ id: i, at: ago(60 * 24 * 7 + (30 - i) * 90), actor: 'homehub', app: 'recipe-box', env: 'dev', action: 'deploy.done', detail: `Earlier build ${i.toString(16).padStart(7, 'e')} is running and healthy` });
+}
+
+const find = (id: string) => {
+	const a = apps.find((x) => x.id === id);
+	if (!a) throw new ApiError(`There's no app "${id}".`, 404);
+	return a;
+};
+const envOf = (a: AppView, e: EnvName) => a.envs.find((x) => x.env === e)!;
+const log = (actor: string, app: string, e: EnvName, action: string, detail: string) =>
+	events.unshift({ id: ++eventId, at: new Date().toISOString(), actor, app, env: e, action, detail });
+
+/** Pretends a change takes a few seconds, like the real thing. */
+function work(a: AppView, e: EnvName, busy: string, kind: 'deploy' | 'promote' | 'rollback', to: ReleaseView, verb: string) {
+	const ev = envOf(a, e);
+	ev.busy = busy;
+	log('rupaai', a.id, e, `${kind}.started`, `${verb} ${to.short} (${to.message}) to ${e}`);
+	setTimeout(() => {
+		const before = ev.version;
+		ev.version = to;
+		ev.busy = '';
+		ev.health = 'healthy';
+		ev.healthDetail = 'Answered a check a few seconds ago';
+		ev.lastError = '';
+		ev.deployedBy = 'rupaai';
+		ev.deployedAt = new Date().toISOString();
+		ev.deployKind = kind;
+		ev.canRollback = before?.commit !== to.commit;
+		if (a.latestBuild) a.latestBuild.deployed = envOf(a, 'dev').version?.commit === a.latestBuild.commit;
+		log('rupaai', a.id, e, `${kind}.done`, `${to.short} is running and healthy`);
+	}, 5000);
+}
+
+export const mockApi: Api = {
+	apps: () => delay(structuredClone(apps)),
+	async addApp(repo) {
+		if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new ApiError('Use the repo as owner/name, for example rupaai/smart-recommender-player.', 400);
+		throw new ApiError(`${repo} has no homehub.yaml on its main branch yet.`, 400);
+	},
+	async deploy(id) {
+		const a = find(id);
+		const b = a.latestBuild;
+		if (!b || b.status !== 'passed') throw new ApiError("There's no passing build to deploy yet.", 400);
+		work(a, 'dev', `Deploying ${b.short}`, 'deploy', rel(b.short, 'Latest build', 'Rupa', 1), 'Deploy');
+		await delay(null);
+	},
+	async promotePreview(id) {
+		const a = find(id);
+		const dev = envOf(a, 'dev'), prod = envOf(a, 'prod');
+		const blockers: string[] = [];
+		if (dev.health !== 'healthy') blockers.push("Dev isn't healthy, so this build hasn't proven it works yet.");
+		if (prod.version?.digest === dev.version?.digest) blockers.push('Prod already runs this build.');
+		if (prod.busy) blockers.push(`Prod is busy: ${prod.busy}.`);
+		const same = a.id !== 'movie-night';
+		return delay({
+			from: structuredClone(prod.version),
+			to: structuredClone(dev.version),
+			commits: same
+				? []
+				: [
+						{ sha: newer.commit, message: 'Show who is watching on the poster', author: 'Rupa', when: ago(42), url: newer.commitUrl },
+						{ sha: 'a1b2c3d'.padEnd(40, '0'), message: 'Fix the search box on small screens', author: 'Sam', when: ago(60 * 3), url: '#' },
+						{ sha: 'd4e5f6a'.padEnd(40, '0'), message: 'Remember the last film you picked', author: 'Rupa', when: ago(60 * 9), url: '#' }
+					],
+			compareUrl: `https://github.com/${a.repo}/compare/${prod.version?.short}...${dev.version?.short}`,
+			dataCopy: !!prod.version,
+			missingSecrets: [],
+			devHealth: dev.health,
+			blockers
+		});
+	},
+	async promote(id) {
+		const a = find(id);
+		const dev = envOf(a, 'dev');
+		if (dev.version) work(a, 'prod', `Copying prod's data`, 'promote', dev.version, 'Promote');
+		await delay(null);
+	},
+	async rollbackPreview(id, e) {
+		const a = find(id);
+		const ev = envOf(a, e);
+		const blockers = ev.busy ? [`Busy: ${ev.busy}.`] : [];
+		return delay({
+			from: structuredClone(ev.version),
+			to: e === 'prod' ? structuredClone(oldest) : structuredClone(older),
+			blockers,
+			note: "The app's data stays as it is now. A copy of prod's data from before each promote is kept on this computer."
+		});
+	},
+	async rollback(id, e) {
+		const a = find(id);
+		work(a, e, 'Deploying ' + older.short, 'rollback', e === 'prod' ? oldest : older, 'Roll back to');
+		await delay(null);
+	},
+	logs: async (id, e, lines) => {
+		const out: string[] = [];
+		for (let i = Math.min(lines, 120); i > 0; i--) {
+			const t = new Date(Date.now() - i * 7000).toISOString();
+			out.push(i % 17 === 0 ? `${t} WARN  slow response from the film database (1.8s)` : `${t} INFO  GET /api/films 200 ${10 + (i % 9)}ms`);
+		}
+		return delay(`Showing ${id} ${e}\n` + out.join('\n'));
+	},
+	async activity(q = {}) {
+		let rows = events.filter((e) => !q.app || e.app === q.app);
+		if (q.before) rows = rows.filter((e) => e.id < q.before!);
+		return delay(rows.slice(0, q.limit ?? 50).map((e) => ({ ...e })));
+	}
+};

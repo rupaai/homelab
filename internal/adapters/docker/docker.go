@@ -1,0 +1,329 @@
+// Package docker runs app environments with Docker Compose. It implements core.Deployer.
+//
+// Each environment is its own Compose project (homehub-<app>-<env>) with one service, "app",
+// so it gets its own network and its containers are found again by their homehub.* labels.
+// Images are pulled through the Docker Engine API so Homehub never touches the user's
+// ~/.docker/config.json.
+package docker
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+
+	"github.com/rupaai/homelab/internal/core"
+)
+
+// Options configures a Deployer.
+type Options struct {
+	Root      string       // where compose files live, e.g. ~/.homehub/apps
+	Logger    *slog.Logger // default: discard
+	DockerBin string       // default "docker"
+	Host      string       // Docker host to use; empty means DOCKER_HOST, then the current Docker context
+}
+
+// Deployer is the Docker Compose implementation of core.Deployer.
+type Deployer struct {
+	root string
+	bin  string
+	host string
+	log  *slog.Logger
+	api  *engine
+}
+
+var _ core.Deployer = (*Deployer)(nil)
+
+const (
+	maxLogBytes  = 1 << 20
+	errTailLines = 20
+)
+
+// New resolves which Docker to talk to (once) and returns a Deployer. It doesn't need
+// Docker to be running yet.
+func New(opts Options) (*Deployer, error) {
+	if opts.Root == "" {
+		return nil, errors.New("docker: Root folder is required")
+	}
+	root, err := filepath.Abs(opts.Root)
+	if err != nil {
+		return nil, err
+	}
+	d := &Deployer{root: root, bin: opts.DockerBin, log: opts.Logger}
+	if d.bin == "" {
+		d.bin = "docker"
+	}
+	if d.log == nil {
+		d.log = slog.New(slog.DiscardHandler)
+	}
+	d.host = opts.Host
+	if d.host == "" {
+		d.host = os.Getenv("DOCKER_HOST")
+	}
+	if d.host == "" {
+		d.host = d.contextHost()
+	}
+	if d.api, err = newEngine(d.host); err != nil {
+		return nil, err
+	}
+	d.log.Info("using docker", "host", d.host)
+	return d, nil
+}
+
+// contextHost asks the docker CLI for the current context's endpoint (this is how OrbStack
+// is found) and falls back to the standard socket.
+func (d *Deployer) contextHost() string {
+	const fallback = "unix:///var/run/docker.sock"
+	cmd := exec.Command(d.bin, "context", "inspect", "--format", "{{.Endpoints.docker.Host}}")
+	cmd.Env = d.env()
+	out, err := cmd.Output()
+	if h := strings.TrimSpace(string(out)); err == nil && (strings.HasPrefix(h, "unix://") || strings.HasPrefix(h, "tcp://")) {
+		return h
+	}
+	return fallback
+}
+
+// env is the environment for every docker command: the resolved host, no context override.
+func (d *Deployer) env() []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "DOCKER_HOST=") || strings.HasPrefix(kv, "DOCKER_CONTEXT=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	if d.host != "" {
+		env = append(env, "DOCKER_HOST="+d.host)
+	}
+	return env
+}
+
+func (d *Deployer) envDir(app, env string) string { return filepath.Join(d.root, app, env) }
+
+// Prepare downloads the release's image unless it is already here.
+func (d *Deployer) Prepare(ctx context.Context, spec core.EnvSpec) error {
+	if err := checkNames(spec.App, spec.Env); err != nil {
+		return err
+	}
+	ref := spec.Release.ImageRef()
+	if spec.Release.Image == "" {
+		return fmt.Errorf("%s/%s has no image to download", spec.App, spec.Env)
+	}
+	// A tag can move, so only an exact digest lets us trust what is already here.
+	if spec.Release.Digest != "" {
+		have, err := d.api.hasImage(ctx, ref)
+		if err != nil {
+			return err
+		}
+		if have {
+			return nil
+		}
+	}
+	d.log.Info("downloading image", "app", spec.App, "env", spec.Env, "image", ref)
+	if err := d.api.pull(ctx, ref, spec.Auth); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Deploy writes the compose project and settings, makes sure the image is here, and starts
+// the containers, replacing any older ones.
+func (d *Deployer) Deploy(ctx context.Context, spec core.EnvSpec) error {
+	compose, err := composeYAML(spec)
+	if err != nil {
+		return err
+	}
+	env, err := envFile(spec.Vars)
+	if err != nil {
+		return err
+	}
+	if err := d.Prepare(ctx, spec); err != nil {
+		return err
+	}
+	dir := d.envDir(spec.App, spec.Env)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("can't create %s: %w", dir, err)
+	}
+	if err := writeFile(filepath.Join(dir, ".env"), env); err != nil {
+		return err
+	}
+	if err := writeFile(filepath.Join(dir, "compose.yaml"), compose); err != nil {
+		return err
+	}
+	d.log.Info("starting", "app", spec.App, "env", spec.Env, "commit", spec.Release.Short())
+	_, err = d.compose(ctx, dir, spec.App, spec.Env, "up", "-d", "--remove-orphans")
+	return err
+}
+
+// writeFile replaces path with data (mode 0600) in one step, so a crash never leaves half a file.
+func writeFile(path string, data []byte) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return fmt.Errorf("can't write %s: %w", path, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("can't write %s: %w", path, err)
+	}
+	return nil
+}
+
+// Stop stops the environment's containers and keeps them and their data. It does nothing
+// if the environment doesn't exist.
+func (d *Deployer) Stop(ctx context.Context, app, env string) error {
+	if err := checkNames(app, env); err != nil {
+		return err
+	}
+	cs, err := d.api.containers(ctx, labelApp+"="+app, labelEnv+"="+env)
+	if err != nil {
+		return err
+	}
+	if len(cs) == 0 {
+		return nil
+	}
+	_, err = d.compose(ctx, d.envDir(app, env), app, env, "stop")
+	return err
+}
+
+// Observe reports one entry per environment Homehub has containers for.
+func (d *Deployer) Observe(ctx context.Context) ([]core.Running, error) {
+	cs, err := d.api.containers(ctx, labelApp)
+	if err != nil {
+		return nil, err
+	}
+	best := map[[2]string]container{}
+	for _, c := range cs {
+		app, env := c.Labels[labelApp], c.Labels[labelEnv]
+		if app == "" || env == "" {
+			continue
+		}
+		k := [2]string{app, env}
+		// Report the app service; a leftover container of another service never hides it.
+		if old, seen := best[k]; !seen || (isAppService(c) && !isAppService(old)) {
+			best[k] = c
+		}
+	}
+	out := make([]core.Running, 0, len(best))
+	for k, c := range best {
+		state, detail := mapState(c.State, c.Status)
+		r := core.Running{App: k[0], Env: k[1], Commit: c.Labels[labelCommit], Digest: c.Labels[labelDigest], State: state, Detail: detail}
+		if t, err := d.api.startedAt(ctx, c.ID); err == nil && !t.IsZero() {
+			r.StartedAt = t
+		}
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].App != out[j].App {
+			return out[i].App < out[j].App
+		}
+		return out[i].Env < out[j].Env
+	})
+	return out, nil
+}
+
+func isAppService(c container) bool { return c.Labels["com.docker.compose.service"] == serviceName }
+
+var exitCodeRe = regexp.MustCompile(`\((-?\d+)\)`)
+
+// mapState turns Docker's state and status text into a core state and a short explanation.
+func mapState(state, status string) (string, string) {
+	code := ""
+	if m := exitCodeRe.FindStringSubmatch(status); m != nil {
+		code = m[1]
+	}
+	switch state {
+	case "running":
+		return core.StateRunning, ""
+	case "restarting":
+		if code != "" {
+			return core.StateRestarting, "restarting after exiting with code " + code
+		}
+		return core.StateRestarting, "restarting"
+	case "created":
+		return core.StateStarting, ""
+	case "paused":
+		return core.StateExited, "paused"
+	case "exited", "dead", "removing":
+		if code != "" {
+			return core.StateExited, "exited with code " + code
+		}
+		return core.StateExited, "exited"
+	}
+	return core.StateExited, "docker state: " + state
+}
+
+// Logs returns the last lines of the app's output (stdout and stderr together), at most about 1 MB.
+func (d *Deployer) Logs(ctx context.Context, app, env string, lines int) (string, error) {
+	if err := checkNames(app, env); err != nil {
+		return "", err
+	}
+	if lines <= 0 {
+		lines = 200
+	}
+	out, err := d.compose(ctx, d.envDir(app, env), app, env, "logs", "--no-color", "--no-log-prefix", "--tail", fmt.Sprint(lines), serviceName)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// compose runs `docker compose -p <project> [-f compose.yaml] args...` in dir and returns
+// stdout and stderr together (the last ~1 MB). On failure the error holds the end of the output.
+func (d *Deployer) compose(ctx context.Context, dir, app, env string, args ...string) ([]byte, error) {
+	full := []string{"compose", "-p", project(app, env)}
+	if _, err := os.Stat(filepath.Join(dir, "compose.yaml")); err == nil {
+		full = append(full, "-f", "compose.yaml")
+	} else {
+		dir = d.root // no project folder yet: containers are still found by project name
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, err
+		}
+	}
+	full = append(full, args...)
+	cmd := exec.CommandContext(ctx, d.bin, full...)
+	cmd.Dir = dir
+	cmd.Env = d.env()
+	out := &tailBuffer{max: maxLogBytes}
+	cmd.Stdout, cmd.Stderr = out, out
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("docker compose %s failed for %s/%s: %w\n%s", args[0], app, env, err, lastLines(out.Bytes(), errTailLines))
+	}
+	return out.Bytes(), nil
+}
+
+// lastLines returns the last n lines of b, trimmed.
+func lastLines(b []byte, n int) string {
+	s := strings.TrimSpace(string(b))
+	ls := strings.Split(s, "\n")
+	if len(ls) > n {
+		ls = ls[len(ls)-n:]
+	}
+	return strings.Join(ls, "\n")
+}
+
+// tailBuffer keeps the last max bytes written to it.
+type tailBuffer struct {
+	max int
+	buf bytes.Buffer
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	t.buf.Write(p)
+	if over := t.buf.Len() - t.max; over > 0 {
+		t.buf.Next(over)
+	}
+	return n, nil
+}
+
+func (t *tailBuffer) Bytes() []byte { return t.buf.Bytes() }
