@@ -189,9 +189,19 @@ func (a *Addresses) Remove(_ context.Context, name string) error {
 	delete(a.errs, name)
 	a.mu.Unlock()
 	if e != nil {
-		return e.srv.Close()
+		return e.close()
 	}
 	return nil
+}
+
+// close stops serving. It closes the listener itself too: http.Server.Close only knows
+// about a listener once Serve has started, which may not have happened yet.
+func (e *entry) close() error {
+	err := e.srv.Close()
+	if lerr := e.ln.Close(); err == nil && lerr != nil && !errors.Is(lerr, net.ErrClosed) {
+		err = lerr
+	}
+	return err
 }
 
 // Observe reports every address.
@@ -216,7 +226,7 @@ func (a *Addresses) Close() error {
 	a.mu.Unlock()
 	var first error
 	for _, e := range es {
-		if err := e.srv.Close(); err != nil && first == nil {
+		if err := e.close(); err != nil && first == nil {
 			first = err
 		}
 	}
