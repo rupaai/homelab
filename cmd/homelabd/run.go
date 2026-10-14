@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -18,13 +19,16 @@ import (
 	"github.com/rupaai/homelab/internal/adapters/docker"
 	"github.com/rupaai/homelab/internal/adapters/filesecrets"
 	"github.com/rupaai/homelab/internal/adapters/github"
+	"github.com/rupaai/homelab/internal/adapters/gitmirror"
 	"github.com/rupaai/homelab/internal/adapters/httphealth"
 	"github.com/rupaai/homelab/internal/adapters/local"
+	"github.com/rupaai/homelab/internal/adapters/secretstore"
 	"github.com/rupaai/homelab/internal/adapters/tailscale"
 	"github.com/rupaai/homelab/internal/api"
 	"github.com/rupaai/homelab/internal/companion"
 	"github.com/rupaai/homelab/internal/core"
 	"github.com/rupaai/homelab/internal/hub"
+	"github.com/rupaai/homelab/internal/identity"
 	"github.com/rupaai/homelab/internal/state"
 )
 
@@ -64,7 +68,19 @@ func cmdRun(args []string) error {
 }
 
 func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
-	secrets := filesecrets.New(filepath.Join(home, "secrets"))
+	secretsDir := filepath.Join(home, "secrets")
+	secrets, err := secretstore.Open(filepath.Join(secretsDir, "secrets.db"), filepath.Join(secretsDir, "master.key"))
+	if err != nil {
+		return fmt.Errorf("secrets: %w", err)
+	}
+	defer secrets.Close()
+	if err := importSecretFiles(secretsDir, secrets, os.Stdout); err != nil {
+		return fmt.Errorf("import secrets files: %w", err)
+	}
+	signer, err := identitySigner(secrets)
+	if err != nil {
+		return fmt.Errorf("identity key: %w", err)
+	}
 
 	store, err := state.Open(filepath.Join(home, "homelab.db"))
 	if err != nil {
@@ -96,15 +112,20 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("docker: %w", err)
 	}
-	token, ok := secrets.Platform("GITHUB_TOKEN")
-	if !ok || token == "" {
-		log.Warn("GITHUB_TOKEN is not set in secrets/platform.env; private repos and ghcr.io images won't work")
+	token := func() string { t, _ := secrets.Platform("GITHUB_TOKEN"); return t }
+	if token() == "" {
+		log.Warn("GITHUB_TOKEN is not set: private repos and ghcr.io images won't work. Set it in the companion under Settings")
 	}
-	gh := github.New(github.Options{Token: token, Logger: log})
+	gh := github.New(github.Options{TokenFunc: token, Logger: log})
+	mirror, err := gitmirror.New(gitmirror.Options{Dir: filepath.Join(home, "mirrors"), Token: token, Logger: log})
+	if err != nil {
+		return fmt.Errorf("mirrors: %w", err)
+	}
 
-	h := hub.New(hub.Config{DataDir: home, Logger: log}, store, hub.Adapters{
+	h := hub.New(hub.Config{DataDir: home, Logger: log, Owners: cfg.Owners, Identity: signer}, store, hub.Adapters{
 		Source: gh, Builder: gh, Registry: gh, Deployer: deployer,
 		Addresses: addrs, Health: httphealth.New(nil), Secrets: secrets,
+		Smoke: deployer, Mirror: mirror,
 	})
 
 	apiHandler := api.New(h, api.Options{Owners: cfg.Owners, Version: version, Static: companion.Site(), Logger: log})
@@ -171,4 +192,64 @@ func announceTailscale(ctx context.Context, addrs core.Addresses) {
 			}
 		}
 	}
+}
+
+// identityKeyName is the platform secret holding the key that signs identity headers. Homelab
+// makes it itself (S5); it's never listed in the companion.
+const identityKeyName = "HOMELAB_IDENTITY_KEY"
+
+// identitySigner loads the identity key, making one the first time.
+func identitySigner(secrets core.Secrets) (*identity.Signer, error) {
+	key, ok := secrets.Platform(identityKeyName)
+	if !ok {
+		k, err := identity.NewKey()
+		if err != nil {
+			return nil, err
+		}
+		if err := secrets.Set("", "", identityKeyName, k, core.ActorHomelab); err != nil {
+			return nil, err
+		}
+		key = k
+	}
+	return identity.NewSigner(key)
+}
+
+// importSecretFiles moves milestone 1's plain secrets files into the encrypted store, once.
+// Values already in the store win. Each imported file is renamed to <file>.imported, and
+// the command to delete them is printed.
+func importSecretFiles(dir string, secrets core.Secrets, out io.Writer) error {
+	files, err := filesecrets.New(dir).Files()
+	if err != nil {
+		return err
+	}
+	var done []string
+	for _, f := range files {
+		have, err := secrets.List(f.App, f.Env)
+		if err != nil {
+			return err
+		}
+		stored := map[string]bool{}
+		for _, i := range have {
+			stored[i.Name] = true
+		}
+		n := 0
+		for name, value := range f.Values {
+			if value == "" || stored[name] {
+				continue
+			}
+			if err := secrets.Set(f.App, f.Env, name, value, "imported from "+filepath.Base(f.Path)); err != nil {
+				return fmt.Errorf("%s: %s: %w", filepath.Base(f.Path), name, err)
+			}
+			n++
+		}
+		if err := os.Rename(f.Path, f.Path+".imported"); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Moved %d secret(s) from %s into the encrypted store.\n", n, f.Path)
+		done = append(done, f.Path+".imported")
+	}
+	if len(done) > 0 {
+		fmt.Fprintf(out, "The old files aren't read any more. Once Homelab works, delete them:\n  rm %s\n", strings.Join(done, " "))
+	}
+	return nil
 }

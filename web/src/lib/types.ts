@@ -47,6 +47,50 @@ export interface EnvView {
 	deployedAt: string | null;
 	deployKind: DeployKind | '';
 	canRollback: boolean;
+	missingSecrets: string[];
+}
+
+export type PromotionMode = 'manual' | 'auto-dev' | 'auto';
+
+export interface AutoPromote {
+	state: 'waiting' | 'smoke-testing' | 'held' | 'blocked' | 'done' | string;
+	at?: string;
+	detail: string;
+}
+
+export interface HeldCommit {
+	commit: string;
+	short: string;
+	reason: string;
+	at: string;
+}
+
+export interface MirrorStatus {
+	path: string;
+	lastSync?: string;
+	error?: string;
+}
+
+export interface SecretView {
+	name: string;
+	declared: boolean;
+	set: boolean;
+	updatedAt?: string;
+	updatedBy?: string;
+}
+
+export interface EnvSecrets {
+	env: EnvName;
+	secrets: SecretView[];
+}
+
+export interface SettingView {
+	name: string;
+	description: string;
+	set: boolean;
+	updatedAt?: string;
+	updatedBy?: string;
+	appliesAfterRestart: boolean;
 }
 
 export interface AppView {
@@ -55,7 +99,11 @@ export interface AppView {
 	icon: string;
 	repo: string;
 	repoUrl: string;
-	promotion: 'manual' | 'auto-dev' | string;
+	promotion: PromotionMode | string;
+	promoteAfter: string;
+	autoPromote: AutoPromote | null;
+	held: HeldCommit[];
+	mirror: MirrorStatus | null;
 	envs: EnvView[];
 	latestBuild: BuildView | null;
 }
@@ -113,4 +161,12 @@ export interface Api {
 	rollback(appId: string, env: EnvName): Promise<void>;
 	logs(appId: string, env: EnvName, lines: number): Promise<string>;
 	activity(q?: ActivityQuery): Promise<ActivityEvent[]>;
+	setPromotion(appId: string, mode: PromotionMode): Promise<AppView>;
+	removeApp(appId: string): Promise<void>;
+	appSecrets(appId: string): Promise<EnvSecrets[]>;
+	setSecret(appId: string, env: EnvName, name: string, value: string): Promise<void>;
+	deleteSecret(appId: string, env: EnvName, name: string): Promise<void>;
+	settings(): Promise<SettingView[]>;
+	setSetting(name: string, value: string): Promise<void>;
+	deleteSetting(name: string): Promise<void>;
 }

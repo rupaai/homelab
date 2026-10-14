@@ -1,8 +1,8 @@
-// Package filesecrets hands out Homelab's secrets from plain KEY=VALUE files in one folder.
-// This is milestone 1; the encrypted store replaces it behind the same core.Secrets contract.
+// Package filesecrets reads Homelab's milestone 1 secrets: plain KEY=VALUE files in one
+// folder. Since milestone 2 the encrypted store (adapters/secretstore) holds secrets, and
+// homelabd only uses this package to import old files into it once (Files).
 //
-// Files are read on every call, because people edit them while homelabd runs. A file
-// that any other user can read is refused, with the command that fixes it.
+// A file that any other user can read is refused, with the command that fixes it.
 package filesecrets
 
 import (
@@ -13,8 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/rupaai/homelab/internal/core"
 )
 
 // platformFile holds Homelab's own credentials, such as GITHUB_TOKEN and TS_AUTHKEY.
@@ -24,8 +22,6 @@ const platformFile = "platform.env"
 type Store struct {
 	dir string
 }
-
-var _ core.Secrets = (*Store)(nil)
 
 // New returns a Store that reads files from dir.
 func New(dir string) *Store {
@@ -82,6 +78,48 @@ func (s *Store) Inject(app, env string, names []string) (map[string]string, erro
 		if v := vals[n]; v != "" {
 			out[n] = v
 		}
+	}
+	return out, nil
+}
+
+// File is one secrets file and its values. App is "" for platform.env.
+type File struct {
+	Path   string
+	App    string
+	Env    string
+	Values map[string]string
+}
+
+// Files reads every secrets file in the folder: platform.env and <app>.<env>.env. Other
+// files (such as ones already imported) are ignored.
+func (s *Store) Files() ([]File, error) {
+	entries, err := os.ReadDir(s.dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []File
+	for _, e := range entries {
+		n := e.Name()
+		if !e.Type().IsRegular() || !strings.HasSuffix(n, ".env") {
+			continue
+		}
+		f := File{Path: filepath.Join(s.dir, n)}
+		if n != platformFile {
+			parts := strings.Split(strings.TrimSuffix(n, ".env"), ".")
+			if len(parts) != 2 {
+				continue
+			}
+			f.App, f.Env = parts[0], parts[1]
+		}
+		vals, err := s.load(n)
+		if err != nil {
+			return nil, err
+		}
+		f.Values = vals
+		out = append(out, f)
 	}
 	return out, nil
 }

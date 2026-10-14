@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appInitial, deployedLabel, healthLabel, healthSentence, isProblemAction, relativeTime } from './format';
+import { appInitial, countdown, promotionHelp, deployedLabel, healthLabel, healthSentence, isProblemAction, relativeTime } from './format';
 
 const now = Date.parse('2026-10-14T12:00:00Z');
 const ago = (ms: number) => new Date(now - ms).toISOString();
@@ -49,4 +49,25 @@ describe('small helpers', () => {
 		expect(isProblemAction('deploy.done')).toBe(false);
 	});
 	it('makes an initial', () => expect(appInitial(' movie night')).toBe('M'));
+});
+
+describe('countdown', () => {
+	const at = (ms: number) => new Date(now + ms).toISOString();
+	it('counts minutes', () => expect(countdown(at(12 * MIN), now)).toBe('in 12 min'));
+	it('counts hours', () => {
+		expect(countdown(at(60 * MIN), now)).toBe('in 1 hour');
+		expect(countdown(at(3 * 60 * MIN), now)).toBe('in 3 hours');
+	});
+	it('says any moment now when due or past', () => {
+		expect(countdown(at(10_000), now)).toBe('any moment now');
+		expect(countdown(at(-5 * MIN), now)).toBe('any moment now');
+	});
+	it('copes with bad input', () => {
+		expect(countdown(null, now)).toBe('');
+		expect(countdown('nope', now)).toBe('');
+	});
+});
+
+describe('promotionHelp', () => {
+	it('names the delay for auto', () => expect(promotionHelp('auto', '30m')).toContain('healthy for 30m'));
 });

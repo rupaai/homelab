@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -143,6 +144,7 @@ type Deployer struct {
 	Specs   map[string]core.EnvSpec
 	FailFor map[string]error // digest -> error from Deploy
 	Calls   []string
+	LogTail string // added to every Logs answer
 }
 
 func NewDeployer() *Deployer {
@@ -200,7 +202,9 @@ func (d *Deployer) Observe(context.Context) ([]core.Running, error) {
 }
 
 func (d *Deployer) Logs(_ context.Context, app, env string, _ int) (string, error) {
-	return "logs of " + app + "/" + env + "\n", nil
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return "logs of " + app + "/" + env + "\n" + d.LogTail, nil
 }
 
 // Addresses records which names are served.
@@ -281,10 +285,57 @@ func NewSecrets() *Secrets {
 	return &Secrets{Values: map[string]string{}, PlatformValues: map[string]string{}}
 }
 
-func (s *Secrets) Set(app, env, name, value string) {
+func (s *Secrets) Set(app, env, name, value, _ string) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if app == "" {
+		s.PlatformValues[name] = value
+		return nil
+	}
 	s.Values[app+"/"+env+"/"+name] = value
-	s.mu.Unlock()
+	return nil
+}
+
+func (s *Secrets) Delete(app, env, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if app == "" {
+		delete(s.PlatformValues, name)
+		return nil
+	}
+	delete(s.Values, app+"/"+env+"/"+name)
+	return nil
+}
+
+func (s *Secrets) List(app, env string) ([]core.SecretInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []core.SecretInfo
+	if app == "" {
+		for k := range s.PlatformValues {
+			out = append(out, core.SecretInfo{Name: k})
+		}
+	} else {
+		prefix := app + "/" + env + "/"
+		for k := range s.Values {
+			if strings.HasPrefix(k, prefix) {
+				out = append(out, core.SecretInfo{Name: strings.TrimPrefix(k, prefix)})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (s *Secrets) DeleteApp(app string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k := range s.Values {
+		if strings.HasPrefix(k, app+"/") {
+			delete(s.Values, k)
+		}
+	}
+	return nil
 }
 
 func (s *Secrets) Missing(app, env string, names []string) ([]string, error) {
@@ -327,4 +378,54 @@ var (
 	_ core.Addresses     = (*Addresses)(nil)
 	_ core.HealthChecker = (*Health)(nil)
 	_ core.Secrets       = (*Secrets)(nil)
+)
+
+// Smoke records smoke tests and passes them unless Fail is set for the commit.
+type Smoke struct {
+	mu   sync.Mutex
+	Runs []core.SmokeTest
+	Fail map[string]bool // commit -> fails
+}
+
+func NewSmoke() *Smoke { return &Smoke{Fail: map[string]bool{}} }
+
+func (s *Smoke) Smoke(_ context.Context, t core.SmokeTest) (bool, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Runs = append(s.Runs, t)
+	if s.Fail[t.Release.Commit] {
+		return false, "checking /health\nexpected 200, got 500", nil
+	}
+	return true, "ok", nil
+}
+
+// Mirror records which repos were synced.
+type Mirror struct {
+	mu     sync.Mutex
+	Synced map[string]int
+}
+
+func NewMirror() *Mirror { return &Mirror{Synced: map[string]int{}} }
+
+func (m *Mirror) Sync(_ context.Context, repo string) error {
+	m.mu.Lock()
+	m.Synced[repo]++
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *Mirror) Status(repo string) core.MirrorStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st := core.MirrorStatus{Path: "/mirrors/" + repo + ".git"}
+	if m.Synced[repo] > 0 {
+		t := time.Unix(0, 0)
+		st.LastSync = &t
+	}
+	return st
+}
+
+var (
+	_ core.SmokeTester = (*Smoke)(nil)
+	_ core.Mirror      = (*Mirror)(nil)
 )

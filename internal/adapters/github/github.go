@@ -37,16 +37,17 @@ const (
 
 // Options configures a Client.
 type Options struct {
-	Token        string // GitHub token with read access to repos, Actions and packages; may be empty for public repos
-	APIBase      string // default https://api.github.com
-	RegistryBase string // default https://ghcr.io
+	Token        string        // GitHub token with read access to repos, Actions and packages; may be empty for public repos
+	TokenFunc    func() string // when set, read for every request instead of Token, so a new token applies at once
+	APIBase      string        // default https://api.github.com
+	RegistryBase string        // default https://ghcr.io
 	HTTP         *http.Client
 	Logger       *slog.Logger
 }
 
 // Client talks to GitHub. It is safe for concurrent use.
 type Client struct {
-	token        string
+	tokenFn      func() string
 	apiBase      string
 	registryBase string
 	registryHost string
@@ -72,7 +73,7 @@ type cachedToken struct {
 // New returns a Client with defaults filled in.
 func New(opts Options) *Client {
 	c := &Client{
-		token:        opts.Token,
+		tokenFn:      opts.TokenFunc,
 		apiBase:      strings.TrimRight(opts.APIBase, "/"),
 		registryBase: strings.TrimRight(opts.RegistryBase, "/"),
 		http:         opts.HTTP,
@@ -80,6 +81,10 @@ func New(opts Options) *Client {
 		etags:        map[string]cachedResponse{},
 		tokens:       map[string]cachedToken{},
 		now:          time.Now,
+	}
+	if c.tokenFn == nil {
+		tok := opts.Token
+		c.tokenFn = func() string { return tok }
 	}
 	if c.apiBase == "" {
 		c.apiBase = defaultAPIBase
@@ -115,8 +120,8 @@ func (c *Client) get(ctx context.Context, path, accept string, useETag bool) ([]
 	req.Header.Set("Accept", accept)
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("X-GitHub-Api-Version", apiVersion)
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if tok := c.tokenFn(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 	var cached cachedResponse
 	var haveCached bool
@@ -156,7 +161,7 @@ func (c *Client) apiError(resp *http.Response, body []byte, path string) error {
 	switch code {
 	case http.StatusNotFound:
 		hint := ""
-		if c.token == "" {
+		if c.tokenFn() == "" {
 			hint = " (no GitHub token is set, so private repos look missing)"
 		}
 		return fmt.Errorf("GitHub has no %s%s: %w", path, hint, core.ErrNotFound)
@@ -454,8 +459,8 @@ func (c *Client) registryToken(ctx context.Context, realm, service, scope string
 		return "", err
 	}
 	req.Header.Set("User-Agent", userAgent)
-	if c.token != "" {
-		req.SetBasicAuth(registryUser, c.token)
+	if tok := c.tokenFn(); tok != "" {
+		req.SetBasicAuth(registryUser, tok)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -537,8 +542,9 @@ func parseBearer(h string) (realm, service, scope string, ok bool) {
 // PullAuth returns credentials for pulling image: the GitHub token for ghcr images.
 func (c *Client) PullAuth(ctx context.Context, image string) (core.RegistryAuth, error) {
 	host, _ := splitImage(image)
-	if c.token == "" || host != c.registryHost {
+	tok := c.tokenFn()
+	if tok == "" || host != c.registryHost {
 		return core.RegistryAuth{}, nil
 	}
-	return core.RegistryAuth{Server: host, Username: registryUser, Password: c.token}, nil
+	return core.RegistryAuth{Server: host, Username: registryUser, Password: tok}, nil
 }

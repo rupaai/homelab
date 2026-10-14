@@ -304,3 +304,63 @@ func TestLocalNeedsLoopbackHost(t *testing.T) {
 		t.Fatalf("got %d", rec.Code)
 	}
 }
+
+func TestMilestone2Endpoints(t *testing.T) {
+	r := newRig(t)
+	h := r.handler()
+	send := func(method, path, body string) *httptest.ResponseRecorder {
+		return do(h, method, path, body, &local, "X-Homelab-Request", "1", "Content-Type", "application/json")
+	}
+	r.src.Push("rupaai/movies", "main", "aaaaaaa1", "first", []byte(manifestDoc))
+	if rec := post(h, "/api/apps", `{"repo":"rupaai/movies"}`, &local); rec.Code != 201 {
+		t.Fatalf("add: %d %s", rec.Code, rec.Body)
+	}
+
+	// Changes other than POST need the header too.
+	if rec := do(h, "PUT", "/api/apps/movies/promotion", `{"mode":"auto"}`, &local, "Content-Type", "application/json"); rec.Code != 403 {
+		t.Fatalf("PUT without header: %d", rec.Code)
+	}
+	if rec := do(h, "DELETE", "/api/apps/movies", "", &local); rec.Code != 403 {
+		t.Fatalf("DELETE without header: %d", rec.Code)
+	}
+
+	rec := send("PUT", "/api/apps/movies/promotion", `{"mode":"auto"}`)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"promotion":"auto"`) {
+		t.Fatalf("promotion: %d %s", rec.Code, rec.Body)
+	}
+	if rec := send("PUT", "/api/apps/movies/promotion", `{"mode":"often"}`); rec.Code != 400 {
+		t.Fatalf("bad mode: %d", rec.Code)
+	}
+
+	if rec := send("PUT", "/api/apps/movies/envs/prod/secrets/TMDB_API_KEY", `{"value":"secret-value"}`); rec.Code != 204 {
+		t.Fatalf("set secret: %d %s", rec.Code, rec.Body)
+	}
+	if rec := send("PUT", "/api/apps/movies/envs/prod/secrets/TMDB_API_KEY", `{"value":"a\nb"}`); rec.Code != 400 {
+		t.Fatalf("value with a line break: %d %s", rec.Code, rec.Body)
+	}
+	rec = do(h, "GET", "/api/apps/movies/secrets", "", &local)
+	if rec.Code != 200 || strings.Contains(rec.Body.String(), "secret-value") || !strings.Contains(rec.Body.String(), `"set":true`) {
+		t.Fatalf("secrets: %d %s", rec.Code, rec.Body)
+	}
+	if rec := send("DELETE", "/api/apps/movies/envs/prod/secrets/TMDB_API_KEY", ""); rec.Code != 204 {
+		t.Fatalf("delete secret: %d", rec.Code)
+	}
+
+	if rec := send("PUT", "/api/settings/secrets/GITHUB_TOKEN", `{"value":"ghp_x"}`); rec.Code != 204 {
+		t.Fatalf("set setting: %d %s", rec.Code, rec.Body)
+	}
+	if rec := send("PUT", "/api/settings/secrets/NOPE", `{"value":"x"}`); rec.Code != 400 {
+		t.Fatalf("unknown setting: %d", rec.Code)
+	}
+	rec = do(h, "GET", "/api/settings/secrets", "", &local)
+	if rec.Code != 200 || strings.Contains(rec.Body.String(), "ghp_x") || !strings.Contains(rec.Body.String(), `"appliesAfterRestart":true`) {
+		t.Fatalf("settings: %d %s", rec.Code, rec.Body)
+	}
+
+	if rec := send("DELETE", "/api/apps/movies", ""); rec.Code != 204 {
+		t.Fatalf("remove: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(h, "GET", "/api/apps/movies", "", &local); rec.Code != 404 {
+		t.Fatalf("after remove: %d", rec.Code)
+	}
+}

@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/rupaai/homelab/internal/core"
@@ -22,6 +23,19 @@ type AppView struct {
 	Promotion   string     `json:"promotion"`
 	Envs        []EnvView  `json:"envs"` // dev first, then prod
 	LatestBuild *BuildView `json:"latestBuild"`
+
+	PromoteAfter string             `json:"promoteAfter"` // e.g. "30m"
+	AutoPromote  *autoState         `json:"autoPromote"`  // only for apps on auto
+	Held         []HoldView         `json:"held"`         // commits auto-promote leaves alone
+	Mirror       *core.MirrorStatus `json:"mirror"`       // nil when there's no mirror
+}
+
+// HoldView is a commit auto-promote leaves alone.
+type HoldView struct {
+	Commit string    `json:"commit"`
+	Short  string    `json:"short"`
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
 }
 
 // BuildView is the newest build Homelab has seen for an app.
@@ -58,6 +72,8 @@ type EnvView struct {
 	DeployedAt   *time.Time   `json:"deployedAt"`
 	DeployKind   string       `json:"deployKind"` // deploy | promote | rollback
 	CanRollback  bool         `json:"canRollback"`
+	// MissingSecrets are secrets homelab.yaml declares that have no value here.
+	MissingSecrets []string `json:"missingSecrets"`
 }
 
 func (h *Hub) releaseView(a state.App, r *core.Release) *ReleaseView {
@@ -95,9 +111,21 @@ func (h *Hub) App(ctx context.Context, id string) (AppView, error) {
 }
 
 func (h *Hub) appView(ctx context.Context, a state.App, addrs map[string]core.Address) (AppView, error) {
-	v := AppView{ID: a.ID, Name: a.Name, Repo: a.Repo, RepoURL: h.ad.Source.WebURL(a.Repo, "", ""), Promotion: a.Promotion}
-	if m, err := manifest.Parse(a.Manifest); err == nil {
+	v := AppView{ID: a.ID, Name: a.Name, Repo: a.Repo, RepoURL: h.ad.Source.WebURL(a.Repo, "", ""), Promotion: a.Promotion, Held: []HoldView{}}
+	var declared []string
+	if m, err := h.parse(a.Manifest, a.Repo); err == nil {
 		v.Icon = m.Icon
+		v.PromoteAfter = shortDuration(m.PromoteAfter)
+		declared = m.Secrets
+	}
+	if holds, err := h.store.Holds(ctx, a.ID); err == nil {
+		for _, hd := range holds {
+			v.Held = append(v.Held, HoldView{Commit: hd.Commit, Short: short(hd.Commit), Reason: hd.Reason, At: hd.At})
+		}
+	}
+	if h.ad.Mirror != nil {
+		ms := h.ad.Mirror.Status(a.Repo)
+		v.Mirror = &ms
 	}
 	var devCommit, devLastBuild string
 	for _, env := range []string{core.Dev, core.Prod} {
@@ -106,7 +134,10 @@ func (h *Hub) appView(ctx context.Context, a state.App, addrs map[string]core.Ad
 			return v, err
 		}
 		name := manifest.AddressName(a.ID, env)
-		ev := EnvView{Env: env, AddressName: name, Version: h.releaseView(a, e.Want)}
+		ev := EnvView{Env: env, AddressName: name, Version: h.releaseView(a, e.Want), MissingSecrets: []string{}}
+		if miss, err := h.ad.Secrets.Missing(a.ID, env, declared); err == nil && miss != nil {
+			ev.MissingSecrets = miss
+		}
 		if ad, ok := addrs[name]; ok {
 			ev.Address, ev.AddressReady = ad.URL, ad.Ready
 		}
@@ -148,9 +179,28 @@ func (h *Hub) appView(ctx context.Context, a state.App, addrs map[string]core.Ad
 		v.Envs = append(v.Envs, ev)
 	}
 	h.mu.Lock()
+	if a.Promotion == core.PromotionAuto {
+		if n, ok := h.autoNote[a.ID]; ok {
+			v.AutoPromote = &n
+		} else {
+			v.AutoPromote = &autoState{State: "waiting", Detail: "Checking whether dev is ready to promote."}
+		}
+	}
 	if b, ok := h.builds[a.ID]; ok {
 		v.LatestBuild = &BuildView{Commit: b.Commit, Short: short(b.Commit), Status: b.Status, URL: b.URL, Deployed: b.Commit == devCommit || b.Commit == devLastBuild}
 	}
 	h.mu.Unlock()
 	return v, nil
+}
+
+// shortDuration writes 30m0s as 30m and 1h30m0s as 1h30m.
+func shortDuration(d time.Duration) string {
+	s := d.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
 }

@@ -15,7 +15,8 @@ const (
 	Prod = "prod"
 )
 
-// Promotion modes (C5). Milestone 1 implements manual and auto-dev; auto arrives in milestone 2.
+// Promotion modes (C5): manual (people deploy and promote), auto-dev (new builds go to dev
+// by themselves) and auto (dev is also promoted once it has been healthy for a while).
 const (
 	PromotionManual  = "manual"
 	PromotionAutoDev = "auto-dev"

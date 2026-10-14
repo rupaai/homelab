@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
-
-	"github.com/rupaai/homelab/internal/core"
 )
 
 // writeSecrets writes name in dir with exactly mode (umask does not apply).
@@ -254,4 +252,30 @@ func TestDir(t *testing.T) {
 	}
 }
 
-var _ core.Secrets = (*Store)(nil)
+func TestFiles(t *testing.T) {
+	dir := t.TempDir()
+	write := func(n, c string) {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte(c), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("platform.env", "GITHUB_TOKEN=abc\n")
+	write("movies.prod.env", "TMDB_API_KEY=k\n")
+	write("movies.prod.env.imported", "TMDB_API_KEY=old\n")
+	write("notes.txt", "x")
+	files, err := New(dir).Files()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("files = %+v", files)
+	}
+	for _, f := range files {
+		switch {
+		case f.App == "" && f.Values["GITHUB_TOKEN"] == "abc":
+		case f.App == "movies" && f.Env == "prod" && f.Values["TMDB_API_KEY"] == "k":
+		default:
+			t.Errorf("unexpected %+v", f)
+		}
+	}
+}

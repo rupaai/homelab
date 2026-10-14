@@ -1,21 +1,27 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
+	import { clock } from '#lib/clock.svelte.ts';
 	import { api } from '#lib/api.ts';
 	import { appsStore } from '#lib/apps.svelte.ts';
 	import { startPolling } from '#lib/poll.ts';
-	import type { ActivityEvent, EnvName } from '#lib/types.ts';
+	import { autoStateLabel, countdown, promotionHelp, promotionLabel, relativeTime } from '#lib/format.ts';
+	import type { ActivityEvent, EnvName, PromotionMode } from '#lib/types.ts';
 	import DeploySheet from '#lib/components/DeploySheet.svelte';
 	import EnvCard from '#lib/components/EnvCard.svelte';
 	import EventList from '#lib/components/EventList.svelte';
+	import PromotionSheet from '#lib/components/PromotionSheet.svelte';
 	import PromoteSheet from '#lib/components/PromoteSheet.svelte';
 	import RollbackSheet from '#lib/components/RollbackSheet.svelte';
+	import RemoveAppSheet from '#lib/components/RemoveAppSheet.svelte';
 	import Spinner from '#lib/components/Spinner.svelte';
 
 	const id = $derived(page.params.id ?? '');
 	const app = $derived(appsStore.get(id));
 
-	let sheet = $state<null | { kind: 'promote' | 'deploy' } | { kind: 'rollback'; env: EnvName }>(null);
+	let sheet = $state<null | { kind: 'promote' | 'deploy' } | { kind: 'rollback'; env: EnvName } | { kind: 'mode'; mode: PromotionMode } | { kind: 'remove' }>(null);
+	const modes: PromotionMode[] = ['manual', 'auto-dev', 'auto'];
 	let events = $state<ActivityEvent[]>([]);
 	let eventsLoaded = $state(false);
 
@@ -42,6 +48,12 @@
 		sheet = null;
 		appsStore.refresh();
 		loadEvents();
+	}
+
+	async function removed() {
+		sheet = null;
+		await appsStore.refresh();
+		goto('/');
 	}
 </script>
 
@@ -85,6 +97,62 @@
 			/>
 		{/each}
 
+		<section class="card" aria-labelledby="promotion">
+			<h2 id="promotion">Promotion</h2>
+			<fieldset>
+				<legend class="sr-only">Promotion mode</legend>
+				{#each modes as m}
+					<label class="mode">
+						<input
+							type="radio"
+							name="mode"
+							value={m}
+							checked={app.promotion === m}
+							onchange={(e) => {
+								e.currentTarget.checked = app.promotion === m;
+								sheet = { kind: 'mode', mode: m };
+							}}
+						/>
+						<span><strong>{promotionLabel(m)}</strong><span class="muted small">{promotionHelp(m, app.promoteAfter)}</span></span>
+					</label>
+				{/each}
+			</fieldset>
+
+			{#if app.autoPromote}
+				<p class="auto" role="status">
+					<strong>{autoStateLabel(app.autoPromote.state)}.</strong>
+					{app.autoPromote.detail}
+					{#if app.autoPromote.state === 'waiting' && app.autoPromote.at}
+						<span class="muted">Promotes {countdown(app.autoPromote.at, clock.now)}.</span>
+					{/if}
+				</p>
+			{/if}
+
+			{#if app.held.length}
+				<h3>Held commits</h3>
+				<ul class="held">
+					{#each app.held as h (h.commit)}
+						<li><code>{h.short}</code> {h.reason} <span class="muted small">{relativeTime(h.at, clock.now)}</span></li>
+					{/each}
+				</ul>
+				<p class="hint">Homelab won't promote these by itself. You can still promote them by hand.</p>
+			{/if}
+		</section>
+
+		<section class="card" aria-labelledby="more">
+			<h2 id="more">Secrets and code</h2>
+			<p><a href="/apps/{encodeURIComponent(app.id)}/secrets">Secrets for dev and prod</a></p>
+			{#if app.mirror}
+				{#if app.mirror.error}
+					<p class="notice bad">The copy of the code on this computer isn't working. {app.mirror.error}{#if app.mirror.lastSync} It last worked <span>{relativeTime(app.mirror.lastSync, clock.now)}</span>.{/if}</p>
+				{:else if app.mirror.lastSync}
+					<p class="muted">Copy of the code on this computer, updated {relativeTime(app.mirror.lastSync, clock.now)}</p>
+				{:else}
+					<p class="muted">Copy of the code on this computer is being made.</p>
+				{/if}
+			{/if}
+		</section>
+
 		<section aria-labelledby="recent">
 			<div class="page-head">
 				<h2 id="recent">Recent activity</h2>
@@ -101,7 +169,15 @@
 			</div>
 		</section>
 
-		{#if sheet?.kind === 'promote'}
+		<div class="danger-zone">
+			<button class="btn" type="button" onclick={() => (sheet = { kind: 'remove' })}>Remove app…</button>
+		</div>
+
+		{#if sheet?.kind === 'mode'}
+			<PromotionSheet {app} mode={sheet.mode} onclose={() => (sheet = null)} ondone={started} />
+		{:else if sheet?.kind === 'remove'}
+			<RemoveAppSheet {app} onclose={() => (sheet = null)} ondone={removed} />
+		{:else if sheet?.kind === 'promote'}
 			<PromoteSheet appId={app.id} onclose={() => (sheet = null)} ondone={started} />
 		{:else if sheet?.kind === 'rollback'}
 			<RollbackSheet appId={app.id} env={sheet.env} onclose={() => (sheet = null)} ondone={started} />
@@ -151,6 +227,51 @@
 	}
 	h2 {
 		margin: 0;
+	}
+	fieldset {
+		border: 0;
+		padding: 0;
+		margin: 0.5rem 0 0;
+		display: grid;
+		gap: 0.5rem;
+	}
+	.mode {
+		display: flex;
+		gap: 0.7rem;
+		align-items: flex-start;
+		margin: 0;
+		padding: 0.6rem 0.7rem;
+		border: 1px solid var(--border);
+		border-radius: 10px;
+		font-weight: normal;
+		cursor: pointer;
+	}
+	.mode:has(input:checked) {
+		border-color: var(--accent);
+		background: var(--accent-soft);
+	}
+	.mode input {
+		margin-top: 0.3rem;
+		width: 1.1rem;
+		height: 1.1rem;
+		flex-shrink: 0;
+	}
+	.mode span {
+		display: flex;
+		flex-direction: column;
+	}
+	.auto {
+		margin: 0.8rem 0 0;
+	}
+	.held {
+		margin: 0;
+		padding-left: 1.2rem;
+	}
+	#more + p {
+		margin-top: 0.5rem;
+	}
+	.danger-zone {
+		margin-top: 0.5rem;
 	}
 	section .page-head {
 		margin-bottom: 0.5rem;

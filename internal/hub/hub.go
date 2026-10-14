@@ -21,19 +21,26 @@ import (
 	"time"
 
 	"github.com/rupaai/homelab/internal/core"
+	"github.com/rupaai/homelab/internal/identity"
 	"github.com/rupaai/homelab/internal/manifest"
 	"github.com/rupaai/homelab/internal/state"
 )
 
 // Config tunes the hub. Zero values get sensible defaults.
 type Config struct {
-	DataDir        string        // root of everything Homelab keeps, e.g. ~/.homelab
-	HostPortBase   int           // app environments publish on 127.0.0.1:HostPortBase+slot*10+n
-	ReconcileEvery time.Duration // default 15s
-	HealthEvery    time.Duration // default 30s (O1)
-	BuildsEvery    time.Duration // default 60s (C4)
-	HealthyWait    time.Duration // how long promote and rollback wait for health; default 3m
-	KeepBackups    int           // data copies kept per environment; default 5
+	DataDir        string           // root of everything Homelab keeps, e.g. ~/.homelab
+	HostPortBase   int              // app environments publish on 127.0.0.1:HostPortBase+slot*10+n
+	ReconcileEvery time.Duration    // default 15s
+	HealthEvery    time.Duration    // default 30s (O1)
+	BuildsEvery    time.Duration    // default 60s (C4)
+	HealthyWait    time.Duration    // how long promote and rollback wait for health; default 3m
+	KeepBackups    int              // data copies kept per environment; default 5
+	ImageHost      string           // registry for images a manifest doesn't name; default ghcr.io
+	WatchFor       time.Duration    // how long prod is watched after a promote (C7); default 10m
+	MirrorEvery    time.Duration    // how often repos are mirrored (G2); default 10m
+	SmokeTimeout   time.Duration    // longest a smoke test may run; default 5m
+	Owners         []string         // Tailscale logins of the owners, from config.yaml
+	Identity       *identity.Signer // signs the identity headers apps get (A2); nil sends none
 	Now            func() time.Time
 	Logger         *slog.Logger
 }
@@ -47,6 +54,8 @@ type Adapters struct {
 	Addresses core.Addresses
 	Health    core.HealthChecker
 	Secrets   core.Secrets
+	Smoke     core.SmokeTester // may be nil: auto promote then refuses apps with a smoke test
+	Mirror    core.Mirror      // may be nil: no mirrors
 }
 
 // Hub is the core. Create it with New and run it with Run.
@@ -64,7 +73,18 @@ type Hub struct {
 	builds    map[string]core.Build // latest build seen per app
 	failed    map[string]string     // app -> failed build commit already logged
 	addresses map[string]int        // address name -> host port it forwards to
+	watches   map[string]*watch     // app -> prod being watched after a promote
+	smoked    map[string]string     // app -> dev commit whose smoke test passed
+	autoNote  map[string]autoState  // app -> what auto-promote is doing, for people
 	kick      chan struct{}
+}
+
+// watch is prod being watched after a promote (C7).
+type watch struct {
+	until time.Time
+	rel   core.Release
+	prev  *core.Release
+	fails int
 }
 
 type envKey struct{ app, env string }
@@ -101,6 +121,18 @@ func New(cfg Config, store *state.Store, ad Adapters) *Hub {
 	if cfg.KeepBackups == 0 {
 		cfg.KeepBackups = 5
 	}
+	if cfg.ImageHost == "" {
+		cfg.ImageHost = "ghcr.io"
+	}
+	if cfg.WatchFor == 0 {
+		cfg.WatchFor = 10 * time.Minute
+	}
+	if cfg.MirrorEvery == 0 {
+		cfg.MirrorEvery = 10 * time.Minute
+	}
+	if cfg.SmokeTimeout == 0 {
+		cfg.SmokeTimeout = 5 * time.Minute
+	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -114,6 +146,9 @@ func New(cfg Config, store *state.Store, ad Adapters) *Hub {
 		builds:    map[string]core.Build{},
 		failed:    map[string]string{},
 		addresses: map[string]int{},
+		watches:   map[string]*watch{},
+		smoked:    map[string]string{},
+		autoNote:  map[string]autoState{},
 		kick:      make(chan struct{}, 1),
 	}
 }
@@ -122,7 +157,13 @@ func New(cfg Config, store *state.Store, ad Adapters) *Hub {
 func (h *Hub) Run(ctx context.Context) {
 	h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, Action: "homelab.started", Detail: "Homelab started and is checking that everything runs as it should"})
 	go h.every(ctx, h.cfg.BuildsEvery, h.CheckBuilds)
-	go h.every(ctx, h.cfg.HealthEvery, h.CheckHealth)
+	go h.every(ctx, h.cfg.HealthEvery, func(ctx context.Context) {
+		h.CheckHealth(ctx)
+		h.AutoPromote(ctx)
+	})
+	if h.ad.Mirror != nil {
+		go h.every(ctx, h.cfg.MirrorEvery, h.SyncMirrors)
+	}
 	go h.every(ctx, 24*time.Hour, func(ctx context.Context) { _ = h.store.PruneEvents(ctx, 366*24*time.Hour) })
 	t := time.NewTicker(h.cfg.ReconcileEvery)
 	defer t.Stop()
@@ -184,6 +225,11 @@ func (h *Hub) logEvent(ctx context.Context, e state.Event) {
 		h.log.Error("activity log", "err", err)
 	}
 	h.log.Info(e.Action, "app", e.App, "env", e.Env, "actor", e.Actor, "detail", e.Detail)
+}
+
+// parse reads an app's manifest with the defaults that come from its repo.
+func (h *Hub) parse(raw []byte, repo string) (*manifest.Manifest, error) {
+	return manifest.Parse(raw, manifest.Defaults{Repo: repo, ImageHost: h.cfg.ImageHost})
 }
 
 // hostPort is where an environment's app is published on 127.0.0.1.
@@ -284,7 +330,7 @@ func (h *Hub) reconcileEnv(ctx context.Context, a state.App, env string, r *core
 			}
 		}
 	}
-	h.ensureAddress(ctx, name, h.hostPort(a.Slot, env), a.Name, env)
+	h.ensureAddress(ctx, name, h.hostPort(a.Slot, env), a.ID, a.Name, env)
 }
 
 func (h *Hub) deployOK(app, env string) {
@@ -310,7 +356,7 @@ func (h *Hub) deployFailed(ctx context.Context, app, env string, err error, logI
 
 // spec builds what the deploy adapter needs for one release in one environment.
 func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Release) (core.EnvSpec, error) {
-	m, err := manifest.Parse(rel.Manifest)
+	m, err := h.parse(rel.Manifest, a.Repo)
 	if err != nil {
 		return core.EnvSpec{}, err
 	}
@@ -323,6 +369,9 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 		vars[k] = v
 	}
 	vars["HOMELAB_APP"], vars["HOMELAB_ENV"], vars["HOMELAB_COMMIT"] = a.ID, env, rel.Commit
+	if h.cfg.Identity != nil {
+		vars[identity.EnvPublicKey] = h.cfg.Identity.PublicKey()
+	}
 	var mounts []core.Mount
 	for _, d := range m.Data {
 		dir := filepath.Join(h.dataDir(a.ID, env), d.Name)
@@ -354,14 +403,14 @@ func (h *Hub) deploy(ctx context.Context, a state.App, env string, rel core.Rele
 
 // ---- Addresses ----
 
-func (h *Hub) ensureAddress(ctx context.Context, name string, port int, appName, env string) {
+func (h *Hub) ensureAddress(ctx context.Context, name string, port int, app, appName, env string) {
 	h.mu.Lock()
 	cur, ok := h.addresses[name]
 	h.mu.Unlock()
 	if ok && cur == port {
 		return
 	}
-	if err := h.ad.Addresses.Ensure(ctx, name, appProxy(port, appName, env)); err != nil {
+	if err := h.ad.Addresses.Ensure(ctx, name, h.appProxy(port, app, appName, env)); err != nil {
 		h.log.Error("address", "name", name, "err", err)
 		return
 	}
@@ -380,13 +429,14 @@ func (h *Hub) removeAddress(ctx context.Context, name string) {
 	}
 }
 
-// appProxy forwards an address's traffic to the app's published port.
-func appProxy(port int, appName, env string) http.Handler {
+// appProxy forwards an address's traffic to the app's published port, with signed headers
+// saying who is asking (A2).
+func (h *Hub) appProxy(port int, app, appName, env string) http.Handler {
 	target := &url.URL{Scheme: "http", Host: net.JoinHostPort("127.0.0.1", strconv.Itoa(port))}
 	p := httputil.NewSingleHostReverseProxy(target)
 	base := p.Director
 	p.Director = func(r *http.Request) {
-		// Only Homelab may set its identity headers (A2, milestone 3), so drop any a client sent.
+		// Only Homelab may set its identity headers, so drop any a client sent.
 		for k := range r.Header {
 			if strings.HasPrefix(strings.ToLower(k), "x-homelab-") {
 				r.Header.Del(k)
@@ -394,6 +444,13 @@ func appProxy(port int, appName, env string) http.Handler {
 		}
 		base(r)
 		r.Header.Set("X-Forwarded-Proto", "https")
+		if h.cfg.Identity != nil {
+			v, _ := core.ViewerFrom(r.Context())
+			if err := h.cfg.Identity.Apply(r, app, env, h.person(v), h.cfg.Now()); err != nil {
+				h.log.Warn("identity headers", "app", app, "err", err)
+				_ = h.cfg.Identity.Apply(r, app, env, nil, h.cfg.Now())
+			}
+		}
 	}
 	label := appName
 	if env != core.Prod {
@@ -408,6 +465,28 @@ func appProxy(port int, appName, env string) http.Handler {
 			`<p>It may be starting up. Try again in a moment, or check it in the Homelab companion.</p>`, htmlEscape(label))
 	}
 	return p
+}
+
+// person is who a viewer is to apps. Milestone 2 knows only the owners; everyone else is
+// anonymous (nil). Real people and roles arrive in milestone 3 on the same headers.
+func (h *Hub) person(v core.Viewer) *identity.Person {
+	switch {
+	case v.Tagged:
+		return nil
+	case v.Local:
+		return &identity.Person{User: "owner", Name: "Owner", Groups: []string{"role:owner"}}
+	case v.Login == "":
+		return nil
+	}
+	if len(h.cfg.Owners) == 0 { // as the companion: with no owners listed, every person on the tailnet is one
+		return &identity.Person{User: v.Login, Name: firstNonEmpty(v.Name, v.Login), Groups: []string{"role:owner"}}
+	}
+	for _, o := range h.cfg.Owners {
+		if strings.EqualFold(strings.TrimSpace(o), v.Login) {
+			return &identity.Person{User: v.Login, Name: firstNonEmpty(v.Name, v.Login), Groups: []string{"role:owner"}}
+		}
+	}
+	return nil
 }
 
 func htmlEscape(s string) string {
@@ -440,7 +519,10 @@ func (h *Hub) CheckHealth(ctx context.Context) {
 			if x, ok := byKey[envKey{a.ID, env}]; ok {
 				r = &x
 			}
-			h.checkEnv(ctx, a, env, e.Want, r)
+			status := h.checkEnv(ctx, a, env, e.Want, r)
+			if env == core.Prod {
+				h.watchStep(ctx, a, e.Want, status)
+			}
 		}
 	}
 }
@@ -456,7 +538,7 @@ func (h *Hub) checkEnv(ctx context.Context, a state.App, env string, want *core.
 		detail = "Running an older version while the new one starts"
 		status = core.Degraded
 	default:
-		m, err := manifest.Parse(want.Manifest)
+		m, err := h.parse(want.Manifest, a.Repo)
 		if err != nil {
 			status, detail = core.Degraded, err.Error()
 			break
