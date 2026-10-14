@@ -41,7 +41,8 @@ func (h *Hub) AddApp(ctx context.Context, repo, branch string, by core.Viewer) (
 	}
 	raw, err := h.ad.Source.ReadFile(ctx, repo, branch, manifest.FileName)
 	if errors.Is(err, core.ErrNotFound) {
-		return state.App{}, userErr("%s has no %s on its %s branch yet.", repo, manifest.FileName, branch)
+		return state.App{}, userErr("Couldn't find %s on the %s branch of %s. If the file is there, the repo is probably private "+
+			"and the GitHub token can't see it: give the token the \"repo\" scope and restart homelabd.", manifest.FileName, branch, repo)
 	}
 	if err != nil {
 		return state.App{}, fmt.Errorf("read %s from %s: %w", manifest.FileName, repo, err)
