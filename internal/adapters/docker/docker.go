@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/rupaai/homelab/internal/core"
 )
@@ -188,9 +189,36 @@ func (d *Deployer) Stop(ctx context.Context, app, env string) error {
 	if len(cs) == 0 {
 		return nil
 	}
-	_, err = d.compose(ctx, d.envDir(app, env), app, env, "stop")
-	return err
+	if _, err := d.compose(ctx, d.envDir(app, env), app, env, "stop"); err != nil {
+		return err
+	}
+	// Callers copy the data folder next, so make sure the engine no longer reports the
+	// container as running (it can lag behind compose after a slow, killed stop).
+	for deadline := time.Now().Add(stopSettle); ; {
+		cs, err := d.api.containers(ctx, labelApp+"="+app, labelEnv+"="+env)
+		if err != nil {
+			return err
+		}
+		running := false
+		for _, c := range cs {
+			running = running || c.State == "running" || c.State == "restarting"
+		}
+		if !running {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s/%s is still running after being stopped", app, env)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
 }
+
+// stopSettle is how long Stop waits for the engine to report a stopped container.
+const stopSettle = 15 * time.Second
 
 // Observe reports one entry per environment Homelab has containers for.
 func (d *Deployer) Observe(ctx context.Context) ([]core.Running, error) {
