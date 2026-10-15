@@ -205,6 +205,31 @@ func (c *Client) Ensure(ctx context.Context, p core.Person, groups []string) (st
 	if !strings.Contains(err.Error(), "404") {
 		return "", err
 	}
+	// Removing a Homelab person disables, but deliberately does not delete, the
+	// Pocket ID account. If that email is invited again, reattach only an account
+	// Homelab itself created; never adopt a provider-managed account by email alone.
+	reusable, err := c.findManagedUserByEmail(ctx, p.Email)
+	if err != nil {
+		return "", err
+	}
+	if reusable != nil {
+		if reusable.Disabled {
+			// A removed Homelab person must return as a fresh Pocket ID account, so
+			// their old passkeys and the email reservation are removed before re-invite.
+			if err := c.request(ctx, http.MethodDelete, "/api/users/"+url.PathEscape(reusable.ID), nil, nil); err != nil {
+				return "", err
+			}
+		} else {
+			body["id"] = reusable.ID
+			if err := c.request(ctx, http.MethodPut, "/api/users/"+url.PathEscape(reusable.ID), body, &existing); err != nil {
+				return "", err
+			}
+			if existing.ID == "" {
+				existing.ID = reusable.ID
+			}
+			return existing.ID, nil
+		}
+	}
 	if err := c.request(ctx, http.MethodPost, "/api/users", body, &existing); err != nil {
 		return "", err
 	}
@@ -212,6 +237,26 @@ func (c *Client) Ensure(ctx context.Context, p core.Person, groups []string) (st
 		return "", fmt.Errorf("Pocket ID didn't return the created account id")
 	}
 	return existing.ID, nil
+}
+
+func (c *Client) findManagedUserByEmail(ctx context.Context, email string) (*userDTO, error) {
+	var users page[userDTO]
+	route := "/api/users?search=" + url.QueryEscape(email) + "&pagination%5Blimit%5D=100"
+	if err := c.request(ctx, http.MethodGet, route, nil, &users); err != nil {
+		return nil, err
+	}
+	var match *userDTO
+	for i := range users.Data {
+		user := &users.Data[i]
+		if !strings.EqualFold(strings.TrimSpace(user.Email), strings.TrimSpace(email)) || !strings.HasPrefix(user.Username, "homelab-") {
+			continue
+		}
+		if match != nil && match.ID != user.ID {
+			return nil, fmt.Errorf("multiple Homelab Pocket ID accounts use %q; resolve the duplicate accounts before inviting this person", email)
+		}
+		match = user
+	}
+	return match, nil
 }
 
 // Disable prevents further Pocket ID sign-ins for this user.
@@ -229,11 +274,11 @@ func (c *Client) Disable(ctx context.Context, id string) error {
 }
 
 // LoginLink creates a one-time Pocket ID link for passkey registration or sign-in.
-func (c *Client) LoginLink(ctx context.Context, id string, _ time.Duration) (string, error) {
+func (c *Client) LoginLink(ctx context.Context, id string, ttl time.Duration) (string, error) {
 	var response struct {
 		Token string `json:"token"`
 	}
-	if err := c.request(ctx, http.MethodPost, "/api/users/"+url.PathEscape(id)+"/one-time-access-token", map[string]any{}, &response); err != nil {
+	if err := c.request(ctx, http.MethodPost, "/api/users/"+url.PathEscape(id)+"/one-time-access-token", map[string]any{"ttl": int64(ttl.Seconds())}, &response); err != nil {
 		return "", err
 	}
 	if response.Token == "" {
