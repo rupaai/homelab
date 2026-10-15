@@ -104,6 +104,32 @@ var migrations = []string{
 	`CREATE TABLE holds (
 		app TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE, commit_sha TEXT NOT NULL,
 		reason TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (app, commit_sha));`,
+	`CREATE TABLE people (
+		id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL DEFAULT '', identity_id TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL, created_at INTEGER NOT NULL, last_sign_in INTEGER);
+	CREATE UNIQUE INDEX people_email ON people(email) WHERE email <> '';
+	CREATE TABLE person_roles (person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE, role TEXT NOT NULL, PRIMARY KEY(person_id,role));
+	CREATE UNIQUE INDEX one_household_owner ON person_roles(role) WHERE role='owner';
+	CREATE TABLE person_grants (person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+		app TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE, level TEXT NOT NULL CHECK(level IN ('use','build')), PRIMARY KEY(person_id,app));
+	CREATE TABLE invites (token_hash BLOB PRIMARY KEY, person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+		expires_at INTEGER NOT NULL, used_at INTEGER, created_at INTEGER NOT NULL);
+	CREATE TABLE sessions (id_hash BLOB PRIMARY KEY, person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+		created_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+	CREATE INDEX sessions_person ON sessions(person_id);
+	CREATE TABLE recovery (person_id TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE, code_hash TEXT NOT NULL, used_at INTEGER);
+	CREATE TABLE one_time_codes (code_hash BLOB PRIMARY KEY, person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+		purpose TEXT NOT NULL, expires_at INTEGER NOT NULL, used_at INTEGER);`,
+	`CREATE TABLE app_auth_codes (
+		code_hash BLOB PRIMARY KEY, person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+		app TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE, env TEXT NOT NULL,
+		return_path TEXT NOT NULL, expires_at INTEGER NOT NULL);
+	CREATE TABLE app_sessions (
+		token_hash BLOB PRIMARY KEY, person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+		app TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE, env TEXT NOT NULL,
+		created_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+	CREATE INDEX app_sessions_person ON app_sessions(person_id);
+	CREATE INDEX app_sessions_app ON app_sessions(app,env);`,
 }
 
 func (s *Store) migrate() error {

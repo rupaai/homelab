@@ -145,3 +145,16 @@ type MirrorStatus struct {
 
 // Clock lets tests control time.
 type Clock interface{ Now() time.Time }
+
+// Identity mirrors Homelab people to the sign-in provider.
+type Identity interface {
+	Ensure(ctx context.Context, person Person, groups []string) error
+	Disable(ctx context.Context, personID string) error
+	LoginLink(ctx context.Context, personID string, ttl time.Duration) (string, error)
+	Observe(ctx context.Context) ([]IdentityUser, error)
+}
+
+// Email sends optional household messages. The default implementation is a no-op.
+type Email interface {
+	Send(ctx context.Context, to, subject, body string) error
+}
