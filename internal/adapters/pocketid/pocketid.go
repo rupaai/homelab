@@ -187,10 +187,13 @@ func (c *Client) Ensure(ctx context.Context, p core.Person, groups []string) (st
 	if len(username) > 50 {
 		username = username[:50]
 	}
-	body := map[string]any{"id": providerUserID, "username": username, "displayName": p.Name, "email": p.Email, "disabled": false, "isAdmin": false, "userGroupIds": groupIDs}
+	body := map[string]any{"username": username, "displayName": p.Name, "email": p.Email, "disabled": false, "isAdmin": false, "userGroupIds": groupIDs}
 	var existing userDTO
 	err := c.request(ctx, http.MethodGet, "/api/users/"+url.PathEscape(providerUserID), nil, &existing)
 	if err == nil {
+		// Pocket ID owns user ids. The local person id is only a lookup fallback for
+		// accounts created before Homelab stored the provider's canonical id.
+		body["id"] = existing.ID
 		if err := c.request(ctx, http.MethodPut, "/api/users/"+url.PathEscape(providerUserID), body, &existing); err != nil {
 			return "", err
 		}
