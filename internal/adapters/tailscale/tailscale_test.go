@@ -234,3 +234,59 @@ func TestBadName(t *testing.T) {
 }
 
 func bufioReader(c net.Conn) *bufio.Reader { return bufio.NewReader(c) }
+
+func TestEachAddressGetsItsOwnTaggedKey(t *testing.T) {
+	var mu sync.Mutex
+	minted := map[string]bool{}
+	got := map[string]Options{}
+	opts := Options{
+		TagsFor: func(name string) []string { return []string{"tag:hl-" + name} },
+		MintKey: func(_ context.Context, tags []string) (string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			minted[tags[0]] = true
+			return "key-" + tags[0], nil
+		},
+	}
+	a, _ := newTest(t, opts, func(name string) *fakeNode { return &fakeNode{dns: name + ".tail1234.ts.net."} })
+	inner := a.newNode
+	a.newNode = func(name, dir string, o Options, log *slog.Logger) node {
+		mu.Lock()
+		got[name] = o
+		mu.Unlock()
+		return inner(name, dir, o, log)
+	}
+	for _, name := range []string{"movies", "movies-dev"} {
+		if err := a.Ensure(context.Background(), name, http.NotFoundHandler()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor(t, func() bool { return a.Observe()["movies"].Ready && a.Observe()["movies-dev"].Ready })
+	mu.Lock()
+	defer mu.Unlock()
+	if got["movies-dev"].AuthKey != "key-tag:hl-movies-dev" || len(got["movies-dev"].Tags) != 1 || got["movies-dev"].Tags[0] != "tag:hl-movies-dev" {
+		t.Fatalf("dev node options = %+v", got["movies-dev"])
+	}
+	if !minted["tag:hl-movies"] || !minted["tag:hl-movies-dev"] {
+		t.Fatalf("minted = %v", minted)
+	}
+}
+
+func TestMintFailureIsShownAndRetried(t *testing.T) {
+	calls := 0
+	var mu sync.Mutex
+	opts := Options{MintKey: func(context.Context, []string) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		return "", errors.New("Tailscale refused Homelab's credentials")
+	}}
+	a, _ := newTest(t, opts, func(name string) *fakeNode { return &fakeNode{dns: name + ".ts.net."} })
+	if err := a.Ensure(context.Background(), "movies", http.NotFoundHandler()); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { mu.Lock(); defer mu.Unlock(); return calls >= 2 })
+	if e := a.Observe()["movies"].Error; e == "" || a.Observe()["movies"].Ready {
+		t.Fatalf("address = %+v", a.Observe()["movies"])
+	}
+}

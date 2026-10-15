@@ -15,6 +15,11 @@ import (
 )
 
 func (s *server) bootstrapStatus(w http.ResponseWriter, r *http.Request) {
+	if v, ok := core.ViewerFrom(r.Context()); ok && !v.Local {
+		// Over the tailnet there is no setup or passkey: the Tailscale login is the sign-in.
+		writeJSON(w, http.StatusOK, map[string]any{"needsSetup": false, "signInReady": true, "remote": true, "login": v.Login, "known": v.PersonID != ""})
+		return
+	}
 	if !loopbackHost(r.Host) {
 		writeErr(w, http.StatusForbidden, "Open Homelab at http://localhost:7080 on this computer.")
 		return

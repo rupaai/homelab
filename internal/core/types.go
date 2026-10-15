@@ -164,6 +164,11 @@ type Person struct {
 	Roles      []string          `json:"roles"`
 	Grants     map[string]string `json:"grants"`
 	LastSignIn *time.Time        `json:"lastSignIn,omitempty"`
+	// Remote access (milestone 4).
+	TailscaleLogin  string     `json:"tailscaleLogin,omitempty"`
+	RemoteInviteID  string     `json:"-"`
+	RemoteInviteURL string     `json:"remoteInviteUrl,omitempty"`
+	ConnectedAt     *time.Time `json:"connectedAt,omitempty"`
 }
 
 // IdentityUser is a person observed at the configured identity provider.

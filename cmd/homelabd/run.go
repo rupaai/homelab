@@ -29,6 +29,7 @@ import (
 	"github.com/rupaai/homelab/internal/adapters/pocketid"
 	"github.com/rupaai/homelab/internal/adapters/secretstore"
 	"github.com/rupaai/homelab/internal/adapters/tailscale"
+	"github.com/rupaai/homelab/internal/adapters/tsapi"
 	"github.com/rupaai/homelab/internal/api"
 	"github.com/rupaai/homelab/internal/companion"
 	"github.com/rupaai/homelab/internal/core"
@@ -118,12 +119,20 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	defer store.Close()
 
 	var addrs core.Addresses
+	var remote core.RemoteAccess
 	switch cfg.Addresses {
 	case "tailscale":
 		key, _ := secrets.Platform("TS_AUTHKEY")
-		a, err := tailscale.New(tailscale.Options{
-			StateDir: filepath.Join(home, "tailscale"), AuthKey: key, Tags: cfg.Tailscale.Tags, Logger: log,
-		})
+		opts := tailscale.Options{StateDir: filepath.Join(home, "tailscale"), AuthKey: key, Tags: cfg.Tailscale.Tags, Logger: log}
+		if client, err := tailscaleClient(secrets); err != nil {
+			log.Warn("Tailscale OAuth client is not set: people can't be invited to the tailnet and its access rules aren't managed. Set it in the companion under Settings", "err", err)
+		} else {
+			remote = client
+			// Each address joins with its own tag, so the access rules can tell them apart (milestone 4).
+			opts.TagsFor = func(name string) []string { return []string{hub.AddressTag(name)} }
+			opts.MintKey = client.AuthKey
+		}
+		a, err := tailscale.New(opts)
 		if err != nil {
 			return fmt.Errorf("tailscale: %w", err)
 		}
@@ -158,7 +167,7 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	h := hub.New(hub.Config{DataDir: home, Logger: log, Owners: cfg.Owners, Identity: signer}, store, hub.Adapters{
 		Source: gh, Builder: gh, Registry: gh, Deployer: deployer,
 		Addresses: addrs, Health: httphealth.New(nil), Secrets: secrets,
-		Smoke: deployer, Mirror: mirror, Identity: idp, Email: noop.Email{},
+		Smoke: deployer, Mirror: mirror, Identity: idp, Email: noop.Email{}, Remote: remote,
 	})
 
 	oidcConfig := api.NewOIDCConfig("", "", "")
@@ -257,6 +266,13 @@ func configurePocketID(ctx context.Context, deployer *docker.Deployer, idp *pock
 			}
 		}
 	}
+}
+
+// tailscaleClient is the Tailscale API client from the OAuth client set in Settings.
+func tailscaleClient(secrets core.Secrets) (*tsapi.Client, error) {
+	id, _ := secrets.Platform("TS_OAUTH_CLIENT_ID")
+	secret, _ := secrets.Platform("TS_OAUTH_CLIENT_SECRET")
+	return tsapi.New(tsapi.Options{ClientID: id, ClientSecret: secret})
 }
 
 func ensurePlatformSecret(secrets core.Secrets, name string) (string, error) {

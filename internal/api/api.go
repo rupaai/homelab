@@ -176,6 +176,13 @@ func New(h *hub.Hub, opts Options) http.Handler {
 				}
 			}
 		}
+		// Over the tailnet, Tailscale already knows who is asking (milestone 4).
+		if v, ok := core.ViewerFrom(r.Context()); ok && v.PersonID == "" && s.hub != nil {
+			if p, ok := s.hub.TailnetPerson(r.Context(), v); ok {
+				v.PersonID, v.Name = p.ID, p.Name
+				r = r.WithContext(core.WithViewer(r.Context(), v))
+			}
+		}
 		if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
 			hd.Set("Cache-Control", "no-store")
 			if r.URL.Path == "/api/bootstrap" || (r.URL.Path == "/api/setup" && r.Method == http.MethodPost) || (r.URL.Path == "/api/setup/passkey-link" && r.Method == http.MethodPost) || (r.URL.Path == "/api/recover" && r.Method == http.MethodPost) || (r.URL.Path == "/api/logout" && r.Method == http.MethodPost) || (strings.HasPrefix(r.URL.Path, "/api/invites/") && strings.HasSuffix(r.URL.Path, "/redeem") && r.Method == http.MethodPost) {
@@ -370,7 +377,7 @@ func (s *server) me(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"login": p.Email, "name": p.Name, "local": v.Local, "roles": p.Roles})
+	writeJSON(w, http.StatusOK, map[string]any{"login": p.Email, "name": p.Name, "local": v.Local, "roles": p.Roles, "tailscale": !v.Local && !v.Tagged})
 }
 
 func (s *server) passkeyLink(w http.ResponseWriter, r *http.Request) {
@@ -413,12 +420,12 @@ func (s *server) invitePerson(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &p, true) {
 		return
 	}
-	link, err := s.hub.InvitePerson(actionCtx(r), p)
+	inv, err := s.hub.InvitePerson(actionCtx(r), p)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]string{"url": link})
+	writeJSON(w, http.StatusCreated, inv)
 }
 func (s *server) updatePerson(w http.ResponseWriter, r *http.Request) {
 	var p core.Person

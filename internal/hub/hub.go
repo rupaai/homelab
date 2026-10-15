@@ -61,6 +61,7 @@ type Adapters struct {
 	Mirror    core.Mirror      // may be nil: no mirrors
 	Identity  core.Identity
 	Email     core.Email
+	Remote    core.RemoteAccess // may be nil: local addresses, nobody joins from elsewhere
 }
 
 // Hub is the core. Create it with New and run it with Run.
@@ -81,7 +82,11 @@ type Hub struct {
 	watches   map[string]*watch     // app -> prod being watched after a promote
 	smoked    map[string]string     // app -> dev commit whose smoke test passed
 	autoNote  map[string]autoState  // app -> what auto-promote is doing, for people
-	kick      chan struct{}
+
+	remotePolicy     string    // the tailnet rules last sent
+	remotePolicyAt   time.Time // when they were sent
+	remoteObservedAt time.Time // when the tailnet was last looked at
+	kick             chan struct{}
 }
 
 // watch is prod being watched after a promote (C7).
@@ -255,6 +260,7 @@ func (h *Hub) dataDir(app, env string) string {
 // Reconcile makes every environment match its desired state, once.
 func (h *Hub) Reconcile(ctx context.Context) {
 	h.reconcilePeople(ctx)
+	h.reconcileRemote(ctx)
 	apps, err := h.store.Apps(ctx)
 	if err != nil {
 		h.log.Error("reconcile: read state", "err", err)
@@ -541,6 +547,20 @@ func (h *Hub) appProxy(port int, app, appName, env string) http.Handler {
 			h.appCallback(w, r, app, env)
 			return
 		}
+		if v, _ := core.ViewerFrom(r.Context()); !v.Local {
+			// Over the tailnet the login is the sign-in; there is no localhost to send them to.
+			person, ok := h.TailnetPerson(r.Context(), v)
+			if !ok {
+				h.proxyNotInvited(w)
+				return
+			}
+			if !Can(person, ActionApps, app) || (env == core.Dev && !Can(person, ActionProjects, app)) {
+				h.proxyForbidden(w)
+				return
+			}
+			h.serveAs(w, r, person, serve)
+			return
+		}
 		person, ok := h.appSessionPerson(r, app, env)
 		if !ok {
 			if companion, signed := h.personFromRequest(r); signed && (!Can(companion, ActionApps, app) || (env == core.Dev && !Can(companion, ActionProjects, app))) {
@@ -560,19 +580,32 @@ func (h *Hub) appProxy(port int, app, appName, env string) http.Handler {
 			h.proxyForbidden(w)
 			return
 		}
-		for name := range r.Header {
-			if strings.HasPrefix(strings.ToLower(name), "x-homelab-") {
-				r.Header.Del(name)
-			}
-		}
-		kept := forwardedCookies(r.Header.Values("Cookie"))
-		r.Header.Del("Cookie")
-		if kept != "" {
-			r.Header.Set("Cookie", kept)
-		}
-		r = r.WithContext(core.WithViewer(r.Context(), core.Viewer{PersonID: person.ID, Login: person.Email, Name: person.Name}))
-		serve(w, r)
+		h.serveAs(w, r, person, serve)
 	})
+}
+
+// serveAs forwards r to the app as person, without Homelab's own headers and cookies.
+func (h *Hub) serveAs(w http.ResponseWriter, r *http.Request, person core.Person, serve http.HandlerFunc) {
+	for name := range r.Header {
+		if strings.HasPrefix(strings.ToLower(name), "x-homelab-") {
+			r.Header.Del(name)
+		}
+	}
+	kept := forwardedCookies(r.Header.Values("Cookie"))
+	r.Header.Del("Cookie")
+	if kept != "" {
+		r.Header.Set("Cookie", kept)
+	}
+	r = r.WithContext(core.WithViewer(r.Context(), core.Viewer{PersonID: person.ID, Login: person.Email, Name: person.Name}))
+	serve(w, r)
+}
+
+func (h *Hub) proxyNotInvited(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.Write([]byte(`<!doctype html><meta name="viewport" content="width=device-width"><title>Not invited yet</title>` +
+		`<body style="font-family:system-ui;padding:2rem;max-width:30rem;margin:auto"><h1>You're not in this household yet</h1>` +
+		`<p>Your Tailscale account isn't linked to anyone in Homelab. Ask the owner to invite you, or to add your Tailscale login to your profile.</p>`))
 }
 
 func forwardedCookies(headers []string) string {

@@ -621,7 +621,7 @@ func TestInviteRedemptionReturnsPasskeyRegistrationLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token := strings.TrimPrefix(invite, "http://localhost:7080/invite/")
+	token := strings.TrimPrefix(invite.URL, "http://localhost:7080/invite/")
 	h := r.handler()
 	path := "/api/invites/" + token + "/redeem"
 	got := post(h, path, `{}`, nil)
@@ -786,7 +786,7 @@ func TestPasskeyLinksAreReissuedAfterAnEarlierLinkIsUsed(t *testing.T) {
 			t.Fatal(err)
 		}
 		h := r.handler()
-		path := "/api/invites/" + strings.TrimPrefix(invite, "http://localhost:7080/invite/") + "/redeem"
+		path := "/api/invites/" + strings.TrimPrefix(invite.URL, "http://localhost:7080/invite/") + "/redeem"
 		before := r.idp.LoginLinkCalls
 		for attempt := 1; attempt <= 3; attempt++ {
 			if got := post(h, path, `{}`, nil); got.Code != http.StatusCreated {
@@ -797,4 +797,42 @@ func TestPasskeyLinksAreReissuedAfterAnEarlierLinkIsUsed(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestTailnetLoginIsTheSignIn(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if err := r.store.SavePerson(ctx, core.Person{ID: "sam", Name: "Sam", Email: "sam@example.test", Status: "invited", Roles: []string{"member"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.SetTailscaleLogin(ctx, "sam", "sam@gmail.test"); err != nil {
+		t.Fatal(err)
+	}
+	h := r.handler()
+	sam := &core.Viewer{Login: "sam@gmail.test", Name: "Sam"}
+	if rec := do(h, "GET", "/api/me", "", sam); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"tailscale":true`) {
+		t.Fatalf("me = %d %s", rec.Code, rec.Body)
+	}
+	if p, _ := r.store.Person(ctx, "sam"); p.Status != "signed_in" {
+		t.Fatalf("first visit didn't count as sign-in: %+v", p)
+	}
+	for _, path := range []string{"/api/people", "/api/settings/secrets", "/api/projects"} {
+		if rec := do(h, "GET", path, "", sam); rec.Code != http.StatusForbidden {
+			t.Errorf("%s = %d, want 403", path, rec.Code)
+		}
+	}
+	stranger := &core.Viewer{Login: "who@gmail.test"}
+	if rec := do(h, "GET", "/api/me", "", stranger); rec.Code != http.StatusForbidden {
+		t.Fatalf("stranger me = %d", rec.Code)
+	}
+	if rec := do(h, "GET", "/api/bootstrap", "", stranger); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"known":false`) || !strings.Contains(rec.Body.String(), `"remote":true`) {
+		t.Fatalf("stranger bootstrap = %d %s", rec.Code, rec.Body)
+	}
+	tagged := &core.Viewer{Login: "sam@gmail.test", Tagged: true}
+	if rec := do(h, "GET", "/api/me", "", tagged); rec.Code != http.StatusForbidden {
+		t.Fatalf("tagged node me = %d", rec.Code)
+	}
+	if rec := do(h, "POST", "/api/logout", "", sam); rec.Code == 200 {
+		t.Fatalf("logout without the companion header = %d", rec.Code)
+	}
 }

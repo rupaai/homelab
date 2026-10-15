@@ -51,8 +51,10 @@ func (s *Store) SavePerson(ctx context.Context, p core.Person) error {
 // Person reads a person and their access sets.
 func (s *Store) Person(ctx context.Context, id string) (core.Person, error) {
 	var p core.Person
-	var last sql.NullInt64
-	err := s.db.QueryRowContext(ctx, `SELECT id,name,email,identity_id,status,last_sign_in FROM people WHERE id=?`, id).Scan(&p.ID, &p.Name, &p.Email, &p.IdentityID, &p.Status, &last)
+	var last, connected sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT id,name,email,identity_id,status,last_sign_in,tailscale_login,remote_invite_id,remote_invite_url,connected_at
+		FROM people WHERE id=?`, id).Scan(&p.ID, &p.Name, &p.Email, &p.IdentityID, &p.Status, &last,
+		&p.TailscaleLogin, &p.RemoteInviteID, &p.RemoteInviteURL, &connected)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, core.ErrNotFound
 	}
@@ -62,6 +64,10 @@ func (s *Store) Person(ctx context.Context, id string) (core.Person, error) {
 	if last.Valid {
 		v := time.UnixMilli(last.Int64)
 		p.LastSignIn = &v
+	}
+	if connected.Valid {
+		v := time.UnixMilli(connected.Int64)
+		p.ConnectedAt = &v
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT role FROM person_roles WHERE person_id=? ORDER BY role`, id)
 	if err != nil {
@@ -374,4 +380,48 @@ func (s *Store) AppSessionPerson(ctx context.Context, hash []byte, app, env stri
 		return core.Person{}, err
 	}
 	return s.Person(ctx, id)
+}
+
+// PersonByTailscaleLogin finds the person a tailnet login belongs to.
+func (s *Store) PersonByTailscaleLogin(ctx context.Context, login string) (core.Person, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM people WHERE tailscale_login=? COLLATE NOCASE AND tailscale_login<>''`, login).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return core.Person{}, core.ErrNotFound
+	}
+	if err != nil {
+		return core.Person{}, err
+	}
+	return s.Person(ctx, id)
+}
+
+// SetTailscaleLogin binds a tailnet login to a person ("" unbinds).
+func (s *Store) SetTailscaleLogin(ctx context.Context, id, login string) error {
+	r, err := s.db.ExecContext(ctx, `UPDATE people SET tailscale_login=? WHERE id=?`, login, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := r.RowsAffected(); n == 0 {
+		return core.ErrNotFound
+	}
+	return nil
+}
+
+// SetRemoteInvite records the person's pending tailnet invite ("" clears it).
+func (s *Store) SetRemoteInvite(ctx context.Context, id, inviteID, url string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE people SET remote_invite_id=?,remote_invite_url=? WHERE id=?`, inviteID, url, id)
+	return err
+}
+
+// MarkConnected records the first time one of the person's devices was seen on the tailnet,
+// and clears the invite, which has done its job.
+func (s *Store) MarkConnected(ctx context.Context, id string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE people SET connected_at=COALESCE(connected_at,?),remote_invite_id='',remote_invite_url='' WHERE id=?`, at.UnixMilli(), id)
+	return err
+}
+
+// MarkTailnetSignIn records a person's first visit over the tailnet as a sign-in.
+func (s *Store) MarkTailnetSignIn(ctx context.Context, id string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE people SET status='signed_in',last_sign_in=? WHERE id=?`, at.UnixMilli(), id)
+	return err
 }

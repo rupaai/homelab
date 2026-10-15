@@ -44,6 +44,7 @@ type rig struct {
 	smoke    *fake.Smoke
 	mirror   *fake.Mirror
 	identity *fake.Identity
+	remote   *fake.Remote // nil unless a test sets it before open
 
 	clockMu sync.Mutex
 	clock   time.Time // zero means the real time
@@ -88,10 +89,14 @@ func (r *rig) open() {
 	r.store = s
 	key, _ := identity.NewKey()
 	signer, _ := identity.NewSigner(key)
-	r.hub = New(Config{DataDir: r.dir, HealthyWait: 3 * time.Second, Now: r.now, Identity: signer}, s, Adapters{
+	ad := Adapters{
 		Source: r.src, Builder: r.build, Registry: r.reg, Deployer: r.dep,
 		Addresses: r.addr, Health: r.health, Secrets: r.sec, Smoke: r.smoke, Mirror: r.mirror, Identity: r.identity,
-	})
+	}
+	if r.remote != nil {
+		ad.Remote = r.remote
+	}
+	r.hub = New(Config{DataDir: r.dir, HealthyWait: 3 * time.Second, Now: r.now, Identity: signer}, s, ad)
 	r.t.Cleanup(func() { s.Close() })
 }
 
