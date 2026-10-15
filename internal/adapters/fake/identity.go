@@ -2,6 +2,7 @@ package fake
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -10,20 +11,41 @@ import (
 
 // Identity is an in-memory sign-in provider for hub tests.
 type Identity struct {
-	mu    sync.Mutex
-	Users map[string]core.IdentityUser
+	mu          sync.Mutex
+	Users       map[string]core.IdentityUser
+	IDs         map[string]string
+	CanonicalID string
+	Fail        bool
 }
 
-func NewIdentity() *Identity { return &Identity{Users: map[string]core.IdentityUser{}} }
-func (i *Identity) Ensure(_ context.Context, p core.Person, groups []string) error {
+func NewIdentity() *Identity {
+	return &Identity{Users: map[string]core.IdentityUser{}, IDs: map[string]string{}}
+}
+func (i *Identity) Ensure(_ context.Context, p core.Person, groups []string) (string, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	i.Users[p.ID] = core.IdentityUser{ID: p.ID, Email: p.Email, Name: p.Name, Groups: append([]string(nil), groups...)}
-	return nil
+	if i.Fail {
+		return "", errors.New("identity provider is unavailable")
+	}
+	id := p.IdentityID
+	if id == "" {
+		id = i.IDs[p.ID]
+		if id == "" {
+			id = i.CanonicalID
+		}
+		if id == "" {
+			id = p.ID
+		}
+	}
+	i.Users[id] = core.IdentityUser{ID: id, Email: p.Email, Name: p.Name, Groups: append([]string(nil), groups...)}
+	return id, nil
 }
 func (i *Identity) Disable(_ context.Context, id string) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	if i.Fail {
+		return errors.New("identity provider is unavailable")
+	}
 	u, ok := i.Users[id]
 	if ok {
 		u.Disabled = true
@@ -32,11 +54,19 @@ func (i *Identity) Disable(_ context.Context, id string) error {
 	return nil
 }
 func (i *Identity) LoginLink(_ context.Context, id string, _ time.Duration) (string, error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.Fail {
+		return "", errors.New("identity provider is unavailable")
+	}
 	return "http://localhost:1411/login/" + id, nil
 }
 func (i *Identity) Observe(context.Context) ([]core.IdentityUser, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	if i.Fail {
+		return nil, errors.New("identity provider is unavailable")
+	}
 	out := make([]core.IdentityUser, 0, len(i.Users))
 	for _, u := range i.Users {
 		u.Groups = append([]string(nil), u.Groups...)

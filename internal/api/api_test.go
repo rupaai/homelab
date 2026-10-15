@@ -126,6 +126,45 @@ func TestBootstrapCreatesOwnerAndOneTimeRecoveryCode(t *testing.T) {
 	}
 }
 
+func TestConcurrentSetupCannotCreateTwoOwners(t *testing.T) {
+	r := newRig(t)
+	if err := r.store.DeletePerson(context.Background(), "owner"); err != nil {
+		t.Fatal(err)
+	}
+	h := r.handler()
+	start := make(chan struct{})
+	codes := make(chan int, 2)
+	for _, body := range []string{`{"name":"Owner One","email":"one@example.test"}`, `{"name":"Owner Two","email":"two@example.test"}`} {
+		go func(body string) {
+			<-start
+			codes <- post(h, "/api/setup", body, nil).Code
+		}(body)
+	}
+	close(start)
+	created := 0
+	for range 2 {
+		if <-codes == http.StatusCreated {
+			created++
+		}
+	}
+	if created != 1 {
+		t.Fatalf("concurrent setup created %d owners", created)
+	}
+	people, err := r.store.People(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	owners := 0
+	for _, person := range people {
+		if hasRole(person, "owner") {
+			owners++
+		}
+	}
+	if owners != 1 {
+		t.Fatalf("stored %d owners", owners)
+	}
+}
+
 func TestRecoveryCodeIsLoopbackOnlyRateLimitedAndSingleUse(t *testing.T) {
 	r := newRig(t)
 	code, err := newRecoveryCode()
@@ -177,6 +216,45 @@ func TestRecoveryCodeIsLoopbackOnlyRateLimitedAndSingleUse(t *testing.T) {
 	h.ServeHTTP(got, req)
 	if got.Code != http.StatusForbidden {
 		t.Fatalf("remote recovery: %d %s", got.Code, got.Body)
+	}
+}
+
+func TestHealthAndRecoveryStayAvailableWhenIdentityProviderFails(t *testing.T) {
+	r := newRig(t)
+	r.idp.Fail = true
+	code, err := newRecoveryCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(code), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.SetRecovery(context.Background(), "owner", string(hash)); err != nil {
+		t.Fatal(err)
+	}
+	h := r.handler()
+	if got := do(h, http.MethodGet, "/healthz", "", nil); got.Code != http.StatusOK {
+		t.Fatalf("health with unavailable identity provider: %d %s", got.Code, got.Body)
+	}
+	body, _ := json.Marshal(map[string]string{"code": code})
+	if got := post(h, "/api/recover", string(body), nil); got.Code != http.StatusNoContent {
+		t.Fatalf("recovery with unavailable identity provider: %d %s", got.Code, got.Body)
+	}
+	token, err := randomURLToken(32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte(token))
+	if err := r.store.PutOneTimeCode(context.Background(), digest[:], "owner", "recovery-link", time.Now().Add(15*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/recover/"+token, nil)
+	req.Host = "localhost:7080"
+	link := httptest.NewRecorder()
+	h.ServeHTTP(link, req)
+	if link.Code != http.StatusSeeOther {
+		t.Fatalf("recovery link with unavailable identity provider: %d %s", link.Code, link.Body)
 	}
 }
 

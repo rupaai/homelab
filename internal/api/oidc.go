@@ -22,6 +22,7 @@ import (
 
 	"golang.org/x/oauth2"
 
+	"github.com/rupaai/homelab/internal/core"
 	"github.com/rupaai/homelab/internal/state"
 )
 
@@ -44,11 +45,12 @@ func (s *server) authStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Open Homelab at http://localhost:7080 on this computer.", http.StatusForbidden)
 		return
 	}
-	if s.oidcClientID == "" || s.oidcClientSecret == "" || s.oidcIssuer == "" {
+	issuer, clientID, clientSecret := s.oidc.values()
+	if clientID == "" || clientSecret == "" || issuer == "" {
 		http.Error(w, "Homelab sign-in is still starting. Try again in a moment.", http.StatusServiceUnavailable)
 		return
 	}
-	provider, err := s.discover(r.Context())
+	provider, err := s.discover(r.Context(), issuer)
 	if err != nil {
 		s.log.Error("Pocket ID discovery failed", "err", err)
 		http.Error(w, "Homelab couldn't reach its sign-in service.", http.StatusBadGateway)
@@ -75,7 +77,7 @@ func (s *server) authStart(w http.ResponseWriter, r *http.Request) {
 	}
 	challenge := sha256.Sum256([]byte(verifier))
 	q := url.Values{
-		"response_type": {"code"}, "client_id": {s.oidcClientID},
+		"response_type": {"code"}, "client_id": {clientID},
 		"redirect_uri": {s.oidcRedirectURL(r)}, "scope": {"openid profile email"},
 		"state": {state}, "nonce": {nonce}, "code_challenge": {base64.RawURLEncoding.EncodeToString(challenge[:])}, "code_challenge_method": {"S256"},
 	}
@@ -98,13 +100,18 @@ func (s *server) authCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "That sign-in link expired. Start again from Homelab.", http.StatusBadRequest)
 		return
 	}
-	provider, err := s.discover(r.Context())
+	issuer, clientID, clientSecret := s.oidc.values()
+	if clientID == "" || clientSecret == "" || issuer == "" {
+		http.Error(w, "Homelab sign-in is still starting. Try again in a moment.", http.StatusServiceUnavailable)
+		return
+	}
+	provider, err := s.discover(r.Context(), issuer)
 	if err != nil {
 		s.log.Error("Pocket ID discovery failed", "err", err)
 		http.Error(w, "Homelab couldn't reach its sign-in service.", http.StatusBadGateway)
 		return
 	}
-	conf := oauth2.Config{ClientID: s.oidcClientID, ClientSecret: s.oidcClientSecret, RedirectURL: s.oidcRedirectURL(r), Scopes: []string{"openid", "profile", "email"}, Endpoint: oauth2.Endpoint{AuthURL: provider.AuthorizationEndpoint, TokenURL: provider.TokenEndpoint}}
+	conf := oauth2.Config{ClientID: clientID, ClientSecret: clientSecret, RedirectURL: s.oidcRedirectURL(r), Scopes: []string{"openid", "profile", "email"}, Endpoint: oauth2.Endpoint{AuthURL: provider.AuthorizationEndpoint, TokenURL: provider.TokenEndpoint}}
 	ctx := r.Context()
 	if s.httpClient != nil {
 		ctx = context.WithValue(ctx, oauth2.HTTPClient, s.httpClient)
@@ -116,15 +123,22 @@ func (s *server) authCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idToken, _ := token.Extra("id_token").(string)
-	subject, email, err := verifyIDTokenWithClient(r.Context(), provider, idToken, s.oidcClientID, nonce, s.httpClient)
+	subject, _, err := verifyIDTokenWithClient(r.Context(), provider, idToken, clientID, nonce, s.httpClient)
 	if err != nil {
 		s.log.Warn("OIDC token rejected", "err", err)
 		http.Error(w, "Homelab couldn't verify that sign-in. Please try again.", http.StatusUnauthorized)
 		return
 	}
-	p, err := s.store.Person(r.Context(), subject)
-	if err != nil && email != "" {
-		p, err = s.store.PersonByEmail(r.Context(), email)
+	p, err := s.store.PersonByIdentityID(r.Context(), subject)
+	if errors.Is(err, core.ErrNotFound) {
+		p, err = s.store.Person(r.Context(), subject)
+		if err == nil && p.IdentityID != "" && p.IdentityID != subject {
+			err = core.ErrNotFound
+		}
+	}
+	if err != nil && !errors.Is(err, core.ErrNotFound) {
+		s.fail(w, r, err)
+		return
 	}
 	if err != nil || p.Status == "removed" {
 		http.Error(w, "This account hasn't been invited to this Homelab.", http.StatusForbidden)
@@ -145,8 +159,8 @@ func (s *server) authCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, returnTo, http.StatusSeeOther)
 }
 
-func (s *server) discover(ctx context.Context) (oidcDiscovery, error) {
-	base := strings.TrimRight(s.oidcIssuer, "/")
+func (s *server) discover(ctx context.Context, issuer string) (oidcDiscovery, error) {
+	base := strings.TrimRight(issuer, "/")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/.well-known/openid-configuration", nil)
 	if err != nil {
 		return oidcDiscovery{}, err

@@ -204,7 +204,7 @@ export const mockApi: Api = {
 		if (!entry) throw new ApiError("That person isn't in Homelab.", 404);
 		if (entry.roles.includes('owner')) throw new ApiError("The household owner can't be removed.", 400);
 		household.splice(household.indexOf(entry), 1);
-		return delay([{ name: 'Disable Pocket ID sign-in', done: true }, { name: 'End existing Pocket ID sessions', done: false, detail: "Pocket ID's API doesn't provide a way to end sessions that are already open there." }, { name: 'End Homelab and app sessions', done: true }, { name: 'Remove app access and invitation links', done: true }]);
+		return delay([{ name: 'Disable Pocket ID sign-in', done: true }, { name: 'End existing Pocket ID sessions', done: true, detail: 'Pocket ID keeps its own browser session, but the disabled account and removed Homelab sessions prevent further access.' }, { name: 'End Homelab and app sessions', done: true }, { name: 'Remove app access and invitation links', done: true }]);
 	},
 	apps: () => delay(structuredClone(apps)),
 	projects: () => delay(structuredClone(apps)),

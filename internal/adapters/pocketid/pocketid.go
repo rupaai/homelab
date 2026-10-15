@@ -165,33 +165,50 @@ func (c *Client) groupID(ctx context.Context, name string) (string, error) {
 }
 
 // Ensure creates or updates a Pocket ID user and replaces their group memberships.
-func (c *Client) Ensure(ctx context.Context, p core.Person, groups []string) error {
+func (c *Client) Ensure(ctx context.Context, p core.Person, groups []string) (string, error) {
 	if len(p.Name) == 0 || len([]rune(p.Name)) > 100 {
-		return fmt.Errorf("Pocket ID display name must be between 1 and 100 characters")
+		return "", fmt.Errorf("Pocket ID display name must be between 1 and 100 characters")
 	}
 	groupIDs := make([]string, 0, len(groups))
 	for _, name := range groups {
 		id, err := c.groupID(ctx, name)
 		if err != nil {
-			return err
+			return "", err
 		}
 		groupIDs = append(groupIDs, id)
 	}
 	sort.Strings(groupIDs)
-	username := "homelab-" + p.ID
+	localID := p.ID
+	providerUserID := p.IdentityID
+	if providerUserID == "" {
+		providerUserID = localID
+	}
+	username := "homelab-" + localID
 	if len(username) > 50 {
 		username = username[:50]
 	}
-	body := map[string]any{"id": p.ID, "username": username, "displayName": p.Name, "email": p.Email, "disabled": false, "isAdmin": false, "userGroupIds": groupIDs}
+	body := map[string]any{"id": providerUserID, "username": username, "displayName": p.Name, "email": p.Email, "disabled": false, "isAdmin": false, "userGroupIds": groupIDs}
 	var existing userDTO
-	err := c.request(ctx, http.MethodGet, "/api/users/"+url.PathEscape(p.ID), nil, &existing)
+	err := c.request(ctx, http.MethodGet, "/api/users/"+url.PathEscape(providerUserID), nil, &existing)
 	if err == nil {
-		return c.request(ctx, http.MethodPut, "/api/users/"+url.PathEscape(p.ID), body, &existing)
+		if err := c.request(ctx, http.MethodPut, "/api/users/"+url.PathEscape(providerUserID), body, &existing); err != nil {
+			return "", err
+		}
+		if existing.ID == "" {
+			existing.ID = providerUserID
+		}
+		return existing.ID, nil
 	}
 	if !strings.Contains(err.Error(), "404") {
-		return err
+		return "", err
 	}
-	return c.request(ctx, http.MethodPost, "/api/users", body, &existing)
+	if err := c.request(ctx, http.MethodPost, "/api/users", body, &existing); err != nil {
+		return "", err
+	}
+	if existing.ID == "" {
+		return "", fmt.Errorf("Pocket ID didn't return the created account id")
+	}
+	return existing.ID, nil
 }
 
 // Disable prevents further Pocket ID sign-ins for this user.

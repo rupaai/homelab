@@ -300,6 +300,13 @@ func TestIdentityHeaders(t *testing.T) {
 	}
 }
 
+func TestForwardedCookiesPreservesRawAppCookiesAndStripsHomelabValues(t *testing.T) {
+	got := forwardedCookies([]string{`homelab_session=secret; keep="a;b"; homelab_app_movies_prod=token`, `next=one`})
+	if got != `keep="a;b"; next=one` {
+		t.Fatalf("forwarded cookies=%q", got)
+	}
+}
+
 func TestAppProxyChecksUseBuildAndGrant(t *testing.T) {
 	r := newRig(t)
 	if _, err := r.store.AddApp(context.Background(), state.App{ID: "movies", Name: "Movies", Repo: "a/b", Manifest: []byte("id: movies"), Promotion: "manual"}); err != nil {

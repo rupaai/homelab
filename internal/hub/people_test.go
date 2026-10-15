@@ -12,6 +12,25 @@ import (
 	"github.com/rupaai/homelab/internal/state"
 )
 
+func TestSetupOwnerStoresCanonicalIdentityID(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	ownerID := "provider-generated-owner-id"
+	// The fake returns a provider id different from Homelab's generated id.
+	r.identity.CanonicalID = ownerID
+	link, err := r.hub.SetupOwner(ctx, core.Person{Name: "Owner", Email: "owner@example.test"}, "recovery-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	person, err := r.store.PersonByEmail(ctx, "owner@example.test")
+	if err != nil || person.IdentityID != ownerID {
+		t.Fatalf("person identity id=%q err=%v", person.IdentityID, err)
+	}
+	if !strings.HasSuffix(link, "/login/"+ownerID) {
+		t.Fatalf("login link=%q", link)
+	}
+}
+
 func TestInviteIsSingleUseAndHashed(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
@@ -90,7 +109,7 @@ func TestRemovePersonEndsSessionsAndProtectsOwner(t *testing.T) {
 	if err := r.store.SavePerson(ctx, core.Person{ID: "member", Name: "Sam", Status: "signed_in", Roles: []string{"member"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.identity.Ensure(ctx, core.Person{ID: "member", Name: "Sam"}, nil); err != nil {
+	if _, err := r.identity.Ensure(ctx, core.Person{ID: "member", Name: "Sam"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	sessionHash := make([]byte, 32)
@@ -104,11 +123,11 @@ func TestRemovePersonEndsSessionsAndProtectsOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(steps) != 4 || !steps[0].Done || steps[1].Done || !steps[2].Done || !steps[3].Done {
+	if len(steps) != 4 || !steps[0].Done || !steps[1].Done || !steps[2].Done || !steps[3].Done {
 		t.Fatalf("removal checklist=%+v", steps)
 	}
-	if !strings.Contains(steps[1].Detail, "doesn't provide a way") {
-		t.Fatalf("missing Pocket ID limitation: %+v", steps[1])
+	if !strings.Contains(steps[1].Detail, "disabled account") {
+		t.Fatalf("missing Pocket ID session note: %+v", steps[1])
 	}
 	if _, err := r.store.SessionPerson(ctx, sessionHash, time.Now(), time.Hour); err == nil {
 		t.Fatal("removed person's session remained active")

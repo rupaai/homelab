@@ -148,7 +148,7 @@ type Clock interface{ Now() time.Time }
 
 // Identity mirrors Homelab people to the sign-in provider.
 type Identity interface {
-	Ensure(ctx context.Context, person Person, groups []string) error
+	Ensure(ctx context.Context, person Person, groups []string) (string, error)
 	Disable(ctx context.Context, personID string) error
 	LoginLink(ctx context.Context, personID string, ttl time.Duration) (string, error)
 	Observe(ctx context.Context) ([]IdentityUser, error)

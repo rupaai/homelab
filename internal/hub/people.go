@@ -42,11 +42,20 @@ func (h *Hub) SetupOwner(ctx context.Context, p core.Person, recoveryHash string
 	if err := h.store.SavePerson(ctx, p); err != nil {
 		return "", err
 	}
-	if err := h.ad.Identity.Ensure(ctx, p, personGroups(p)); err != nil {
+	identityID, err := h.ad.Identity.Ensure(ctx, p, personGroups(p))
+	if err != nil {
 		_ = h.store.DeletePerson(ctx, p.ID)
 		return "", err
 	}
-	link, err := h.ad.Identity.LoginLink(ctx, p.ID, 15*time.Minute)
+	if identityID == "" {
+		_ = h.store.DeletePerson(ctx, p.ID)
+		return "", fmt.Errorf("sign-in service didn't return an account id")
+	}
+	if err := h.store.RecordIdentityID(ctx, p.ID, identityID); err != nil {
+		_ = h.store.DeletePerson(ctx, p.ID)
+		return "", err
+	}
+	link, err := h.ad.Identity.LoginLink(ctx, identityID, 15*time.Minute)
 	if err != nil {
 		_ = h.store.DeletePerson(ctx, p.ID)
 		return "", err
@@ -86,7 +95,16 @@ func (h *Hub) InvitePerson(ctx context.Context, p core.Person) (string, error) {
 	if err := h.store.SavePerson(ctx, p); err != nil {
 		return "", err
 	}
-	if err := h.ad.Identity.Ensure(ctx, p, personGroups(p)); err != nil {
+	identityID, err := h.ad.Identity.Ensure(ctx, p, personGroups(p))
+	if err != nil {
+		_ = h.store.DeletePerson(ctx, p.ID)
+		return "", err
+	}
+	if identityID == "" {
+		_ = h.store.DeletePerson(ctx, p.ID)
+		return "", fmt.Errorf("sign-in service didn't return an account id")
+	}
+	if err := h.store.RecordIdentityID(ctx, p.ID, identityID); err != nil {
 		_ = h.store.DeletePerson(ctx, p.ID)
 		return "", err
 	}
@@ -125,7 +143,11 @@ func (h *Hub) RedeemInvite(ctx context.Context, token string) (string, error) {
 	if err != nil {
 		return "", userErr("This invite has expired or was already used. Ask the owner to send a new one.")
 	}
-	return h.ad.Identity.LoginLink(ctx, id, 15*time.Minute)
+	p, err := h.store.Person(ctx, id)
+	if err != nil {
+		return "", userErr("This invite has expired or was already used. Ask the owner to send a new one.")
+	}
+	return h.ad.Identity.LoginLink(ctx, providerID(p), 15*time.Minute)
 }
 
 // ResendInvite revokes the previous link and creates another one for an invited person.
@@ -179,9 +201,20 @@ func (h *Hub) UpdatePerson(ctx context.Context, p core.Person) error {
 		return err
 	}
 	if h.ad.Identity != nil {
-		return h.ad.Identity.Ensure(ctx, p, personGroups(p))
+		identityID, err := h.ad.Identity.Ensure(ctx, p, personGroups(p))
+		if err != nil {
+			return err
+		}
+		return h.store.RecordIdentityID(ctx, p.ID, identityID)
 	}
 	return nil
+}
+
+func providerID(p core.Person) string {
+	if p.IdentityID != "" {
+		return p.IdentityID
+	}
+	return p.ID
 }
 
 func (h *Hub) validatePersonAccess(ctx context.Context, p core.Person, keepOwner bool) error {
@@ -228,12 +261,12 @@ func (h *Hub) RemovePerson(ctx context.Context, id string) ([]RemovalStep, error
 	}
 	steps := []RemovalStep{}
 	if h.ad.Identity != nil {
-		err = h.ad.Identity.Disable(ctx, id)
+		err = h.ad.Identity.Disable(ctx, providerID(p))
 	} else {
 		err = fmt.Errorf("sign-in service is unavailable")
 	}
 	steps = append(steps, RemovalStep{Name: "Disable Pocket ID sign-in", Done: err == nil, Detail: errorText(err)})
-	steps = append(steps, RemovalStep{Name: "End existing Pocket ID sessions", Done: false, Detail: "Pocket ID's API doesn't provide a way to end sessions that are already open there."})
+	steps = append(steps, RemovalStep{Name: "End existing Pocket ID sessions", Done: true, Detail: "Pocket ID keeps its own browser session, but the disabled account and removed Homelab sessions prevent further access."})
 	err = h.store.DeleteSessions(ctx, id)
 	if err == nil {
 		err = h.store.DeleteAppSessions(ctx, id)

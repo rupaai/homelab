@@ -136,23 +136,9 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("docker: %w", err)
 	}
-	if err := deployer.EnsureSupportingService(ctx, docker.SupportingService{
-		Name: "pocketid", Image: pocketIDImage, HostPort: 7081, ContainerPort: 1411,
-		DataDir:     filepath.Join(home, "services", "pocketid", "data"),
-		Environment: map[string]string{"APP_URL": pocketIDURL, "ENCRYPTION_KEY": encryptionKey, "STATIC_API_KEY": apiKey, "ANALYTICS_DISABLED": "true", "VERSION_CHECK_DISABLED": "true"},
-	}); err != nil {
-		return fmt.Errorf("start Pocket ID: %w", err)
-	}
-	if err := waitForPocketID(ctx); err != nil {
-		return fmt.Errorf("wait for Pocket ID: %w", err)
-	}
 	idp, err := pocketid.New(pocketid.Options{BaseURL: pocketIDURL, APIKey: apiKey})
 	if err != nil {
 		return err
-	}
-	oidcClientID, err := idp.EnsureOIDCClient(ctx, "http://localhost:7080/auth/callback", oidcSecret)
-	if err != nil {
-		return fmt.Errorf("configure Homelab sign-in in Pocket ID: %w", err)
 	}
 	token := func() string { t, _ := secrets.Platform("GITHUB_TOKEN"); return t }
 	if token() == "" {
@@ -170,8 +156,9 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 		Smoke: deployer, Mirror: mirror, Identity: idp, Email: noop.Email{},
 	})
 
+	oidcConfig := api.NewOIDCConfig("", "", "")
 	apiHandler := api.New(h, api.Options{Owners: cfg.Owners, Version: version, Static: companion.Site(), Logger: log, Store: store,
-		OIDCIssuer: pocketIDURL, OIDCClientID: oidcClientID, OIDCClientSecret: oidcSecret})
+		OIDCConfig: oidcConfig})
 
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
@@ -186,6 +173,7 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	go func() { serveErr <- srv.Serve(ln) }()
 	_, listenPort, _ := net.SplitHostPort(ln.Addr().String())
 	fmt.Printf("Companion: http://localhost:%s\n", listenPort)
+	go configurePocketID(ctx, deployer, idp, apiKey, encryptionKey, oidcSecret, oidcConfig, log, home)
 
 	if cfg.Addresses == "tailscale" {
 		if err := h.ServeCompanion(ctx, apiHandler); err != nil {
@@ -211,6 +199,52 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	_ = srv.Shutdown(stopCtx)
 	<-hubDone
 	return result
+}
+
+func configurePocketID(ctx context.Context, deployer *docker.Deployer, idp *pocketid.Client, apiKey, encryptionKey, oidcSecret string, oidcConfig *api.OIDCConfig, log *slog.Logger, home string) {
+	delay := time.Second
+	for attempt := 1; ; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		err := deployer.EnsureSupportingService(attemptCtx, docker.SupportingService{
+			Name: "pocketid", Image: pocketIDImage, HostPort: 7081, ContainerPort: 1411,
+			DataDir: filepath.Join(home, "services", "pocketid", "data"),
+			Environment: map[string]string{
+				"APP_URL": pocketIDURL, "ENCRYPTION_KEY": encryptionKey, "STATIC_API_KEY": apiKey,
+				"ANALYTICS_DISABLED": "true", "VERSION_CHECK_DISABLED": "true",
+				"ALLOW_OWN_ACCOUNT_EDIT": "false", "UI_CONFIG_DISABLED": "true",
+			},
+		})
+		if err == nil {
+			err = waitForPocketID(attemptCtx)
+		}
+		var clientID string
+		if err == nil {
+			clientID, err = idp.EnsureOIDCClient(attemptCtx, "http://localhost:7080/auth/callback", oidcSecret)
+		}
+		cancel()
+		if err == nil {
+			oidcConfig.Set(pocketIDURL, clientID, oidcSecret)
+			log.Info("Pocket ID is ready for Homelab sign-in")
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		log.Warn("Pocket ID is not ready; Homelab will keep serving and retry", "attempt", attempt, "retry_in", delay, "err", err)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		if delay < 30*time.Second {
+			delay *= 2
+			if delay > 30*time.Second {
+				delay = 30 * time.Second
+			}
+		}
+	}
 }
 
 func ensurePlatformSecret(secrets core.Secrets, name string) (string, error) {

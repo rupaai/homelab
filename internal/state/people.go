@@ -111,9 +111,28 @@ func (s *Store) PersonByEmail(ctx context.Context, email string) (core.Person, e
 	return s.Person(ctx, id)
 }
 
+// PersonByIdentityID finds the person bound to a provider subject.
+func (s *Store) PersonByIdentityID(ctx context.Context, identityID string) (core.Person, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM people WHERE identity_id=? AND identity_id<>''`, identityID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return core.Person{}, core.ErrNotFound
+	}
+	if err != nil {
+		return core.Person{}, err
+	}
+	return s.Person(ctx, id)
+}
+
 // RecordSignIn stores the provider subject and first successful sign-in time.
 func (s *Store) RecordSignIn(ctx context.Context, id, identityID string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE people SET identity_id=?,status='signed_in',last_sign_in=? WHERE id=?`, identityID, s.now().UnixMilli(), id)
+	return err
+}
+
+// RecordIdentityID stores the provider's canonical user id without marking the person signed in.
+func (s *Store) RecordIdentityID(ctx context.Context, id, identityID string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE people SET identity_id=? WHERE id=?`, identityID, id)
 	return err
 }
 

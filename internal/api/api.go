@@ -34,7 +34,38 @@ type Options struct {
 	OIDCIssuer       string
 	OIDCClientID     string
 	OIDCClientSecret string
+	OIDCConfig       *OIDCConfig
 	HTTPClient       *http.Client
+}
+
+// OIDCConfig lets startup publish sign-in settings after Pocket ID is ready.
+type OIDCConfig struct {
+	mu     sync.RWMutex
+	issuer string
+	client string
+	secret string
+}
+
+// NewOIDCConfig creates settings that can be populated while the companion is serving.
+func NewOIDCConfig(issuer, client, secret string) *OIDCConfig {
+	c := &OIDCConfig{}
+	c.Set(issuer, client, secret)
+	return c
+}
+
+// Set publishes the current Pocket ID sign-in settings.
+func (c *OIDCConfig) Set(issuer, client, secret string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.issuer = strings.TrimRight(issuer, "/")
+	c.client = client
+	c.secret = secret
+}
+
+func (c *OIDCConfig) values() (string, string, string) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.issuer, c.client, c.secret
 }
 
 const (
@@ -53,9 +84,7 @@ type server struct {
 	log              *slog.Logger
 	static           *static
 	store            *state.Store
-	oidcIssuer       string
-	oidcClientID     string
-	oidcClientSecret string
+	oidc             *OIDCConfig
 	httpClient       *http.Client
 	authMu           sync.Mutex
 	recoveryAttempts map[string]recoveryWindow
@@ -68,8 +97,12 @@ type recoveryWindow struct {
 
 // New returns the handler for everything Homelab serves: /api, /healthz and the companion.
 func New(h *hub.Hub, opts Options) http.Handler {
+	oidc := opts.OIDCConfig
+	if oidc == nil {
+		oidc = NewOIDCConfig(opts.OIDCIssuer, opts.OIDCClientID, opts.OIDCClientSecret)
+	}
 	s := &server{hub: h, owners: map[string]bool{}, ver: opts.Version, log: opts.Logger, store: opts.Store,
-		oidcIssuer: strings.TrimRight(opts.OIDCIssuer, "/"), oidcClientID: opts.OIDCClientID, oidcClientSecret: opts.OIDCClientSecret, httpClient: opts.HTTPClient}
+		oidc: oidc, httpClient: opts.HTTPClient}
 	s.recoveryAttempts = map[string]recoveryWindow{}
 	if s.log == nil {
 		s.log = slog.Default()

@@ -24,7 +24,8 @@ func (s *server) bootstrapStatus(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"needsSetup": !exists, "signInReady": s.oidcClientID != "" && s.oidcClientSecret != ""})
+	_, client, secret := s.oidc.values()
+	writeJSON(w, http.StatusOK, map[string]bool{"needsSetup": !exists, "signInReady": client != "" && secret != ""})
 }
 
 func (s *server) setupOwner(w http.ResponseWriter, r *http.Request) {

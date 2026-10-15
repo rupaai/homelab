@@ -4,6 +4,8 @@ Milestone 3 adds household accounts, passkey sign-in, app-specific access, invit
 recovery and person management. Existing app state and the encrypted secrets database remain
 in place. On upgrade, opening the companion prompts the Mac user to create the first owner.
 Loopback now identifies a local request for Host checks; it no longer grants owner access.
+Installs configured for Tailscale addresses cannot sign in through this milestone's localhost-only
+flow; use local mode until milestone 4 adds HTTPS sign-in for Tailscale hosts.
 
 ## New packages and contracts
 
@@ -50,6 +52,8 @@ App access is independent of role: a `build` grant also permits production. The 
 every request; the companion only hides controls. A member receives production-only app
 views. Builders receive full app/project views only for apps they can build. Apps receive
 signed identity groups such as `role:member` and `app:movies`.
+Builders can deploy and promote their granted apps, but setting or deleting app secrets remains
+admin-only in this milestone.
 
 ## API additions
 
@@ -90,16 +94,19 @@ Pocket ID is pinned to `ghcr.io/pocket-id/pocket-id:v2.18.0`. Homelab starts a h
 project, publishes it only on `127.0.0.1:7081`, stores data under
 `~/.homelab/services/pocketid`, and generates its API key, encryption key and OIDC client
 secret into the encrypted platform secret store. Compose receives those values only in the
-child process environment; they are not written to a service `.env` file.
+child process environment; they are not written to a service `.env` file. Pocket ID account
+editing is disabled so Homelab remains the source of truth for names and email addresses.
 
 The adapter uses the documented user create/update, user-group list/create, user-group
 membership, user one-time access token, OIDC client create/update, client secret list/create,
 and health endpoints. API calls use `X-API-KEY`. Pocket ID does not document a way to set the
 one-time access-token lifetime in the token request, so Homelab invite expiry is enforced by
 its own seven-day hashed invite. The API also does not document a way to terminate existing
-Pocket ID browser sessions. Removal disables provider sign-in, immediately deletes Homelab
-and app sessions, and reports the open Pocket ID sessions as a checklist item requiring
-attention. The companion still refuses subsequent sign-ins for the removed account.
+Pocket ID browser sessions. Removal disables provider sign-in and immediately deletes Homelab
+and app sessions. The checklist notes that Pocket ID may retain its own browser session; the
+disabled account cannot start another sign-in and the removed Homelab account has no app access.
+The API returns the canonical user id on creation, which Homelab stores and uses for later
+Pocket ID operations.
 
 References checked against Pocket ID 2.18.0 on 15 October 2026: [API endpoints](https://pocket-id.org/docs/api/endpoints), [environment variables](https://pocket-id.org/docs/configuration/environment-variables), [installation](https://pocket-id.org/docs/setup/installation).
 
@@ -109,6 +116,9 @@ Open the companion at `http://localhost:7080`. Pocket ID uses `http://localhost:
 local app addresses use `localhost` as well. WebAuthn accepts localhost as a relying-party
 host; it does not accept `127.0.0.1`. This milestone supports sign-in on the Mac only. Other
 devices need the Tailscale HTTPS addresses planned for milestone 4.
+The companion starts before Pocket ID is ready. It creates and configures Pocket ID in the
+background with retries; `/healthz` and the local recovery flows remain available while the
+sign-in service is unavailable. The sign-in page explains when setup is still starting.
 
 ## Try it on your Mac
 

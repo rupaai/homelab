@@ -315,12 +315,19 @@ func (h *Hub) reconcilePeople(ctx context.Context) {
 	}
 	for _, person := range people {
 		want := personGroups(person)
-		user, found := byID[person.ID]
+		user, found := byID[providerID(person)]
 		if !found || !identityMatches(user, person, want) {
 			h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, Action: "person.identity_changed", Detail: "Restored sign-in account settings for " + person.Name})
 		}
-		if err := h.ad.Identity.Ensure(ctx, person, want); err != nil {
+		identityID, err := h.ad.Identity.Ensure(ctx, person, want)
+		if err != nil {
 			h.log.Warn("people reconcile: update sign-in account", "person", person.ID, "err", err)
+			continue
+		}
+		if identityID != "" && identityID != person.IdentityID {
+			if err := h.store.RecordIdentityID(ctx, person.ID, identityID); err != nil {
+				h.log.Warn("people reconcile: save sign-in account id", "person", person.ID, "err", err)
+			}
 		}
 	}
 }
@@ -558,19 +565,52 @@ func (h *Hub) appProxy(port int, app, appName, env string) http.Handler {
 				r.Header.Del(name)
 			}
 		}
-		var kept []string
-		for _, c := range r.Cookies() {
-			if !strings.HasPrefix(strings.ToLower(c.Name), "homelab_") {
-				kept = append(kept, c.Name+"="+c.Value)
-			}
-		}
+		kept := forwardedCookies(r.Header.Values("Cookie"))
 		r.Header.Del("Cookie")
-		if len(kept) > 0 {
-			r.Header.Set("Cookie", strings.Join(kept, "; "))
+		if kept != "" {
+			r.Header.Set("Cookie", kept)
 		}
 		r = r.WithContext(core.WithViewer(r.Context(), core.Viewer{PersonID: person.ID, Login: person.Email, Name: person.Name}))
 		serve(w, r)
 	})
+}
+
+func forwardedCookies(headers []string) string {
+	var kept []string
+	for _, header := range headers {
+		start, quoted, escaped := 0, false, false
+		for i := 0; i <= len(header); i++ {
+			if i < len(header) {
+				c := header[i]
+				if escaped {
+					escaped = false
+					continue
+				}
+				if quoted && c == '\\' {
+					escaped = true
+					continue
+				}
+				if c == '"' {
+					quoted = !quoted
+					continue
+				}
+				if c != ';' || quoted {
+					continue
+				}
+			}
+			part := strings.TrimSpace(header[start:i])
+			start = i + 1
+			if part == "" {
+				continue
+			}
+			name, _, hasValue := strings.Cut(part, "=")
+			if hasValue && strings.HasPrefix(strings.ToLower(strings.TrimSpace(name)), "homelab_") {
+				continue
+			}
+			kept = append(kept, part)
+		}
+	}
+	return strings.Join(kept, "; ")
 }
 
 func (h *Hub) proxyForbidden(w http.ResponseWriter) {

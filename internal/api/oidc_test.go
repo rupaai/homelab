@@ -77,9 +77,9 @@ func TestOIDCFlowUsesPKCEAndCreatesServerSideSession(t *testing.T) {
 	}
 	clientSecret := base64.RawURLEncoding.EncodeToString(secretBytes[:])
 	keySet, _ := json.Marshal(jwks{Keys: []jwk{{Kty: "RSA", Kid: "active", Alg: "RS256", N: base64.RawURLEncoding.EncodeToString(key.N.Bytes()), E: base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes())}}})
-	makeIDToken := func(nonce string) string {
+	makeIDToken := func(subject, email, nonce string) string {
 		header, _ := json.Marshal(jwtHeader{Alg: "RS256", Kid: "active"})
-		claims, _ := json.Marshal(jwtClaims{Issuer: issuer, Subject: "owner", Email: "owner@example.test", Nonce: nonce, Audience: clientID, Exp: time.Now().Add(time.Minute).Unix()})
+		claims, _ := json.Marshal(jwtClaims{Issuer: issuer, Subject: subject, Email: email, Nonce: nonce, Audience: clientID, Exp: time.Now().Add(time.Minute).Unix()})
 		input := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(claims)
 		digest := sha256.Sum256([]byte(input))
 		sig, _ := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
@@ -132,7 +132,7 @@ func TestOIDCFlowUsesPKCEAndCreatesServerSideSession(t *testing.T) {
 	if values[oidcStateCookie] == "" || values[oidcNonceCookie] == "" || values[oidcVerifierCookie] == "" {
 		t.Fatalf("missing OIDC cookies: %v", values)
 	}
-	idToken = makeIDToken(values[oidcNonceCookie])
+	idToken = makeIDToken("owner", "owner@example.test", values[oidcNonceCookie])
 	callback := httptest.NewRequest("GET", "/auth/callback?state="+url.QueryEscape(values[oidcStateCookie])+"&code="+url.QueryEscape(authorizationCode), nil)
 	callback.Host = "localhost:7080"
 	for _, cookie := range cookies {
@@ -159,6 +159,25 @@ func TestOIDCFlowUsesPKCEAndCreatesServerSideSession(t *testing.T) {
 	h.ServeHTTP(result, me)
 	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), "owner@example.test") {
 		t.Fatalf("me=%d %s", result.Code, result.Body)
+	}
+	started = httptest.NewRecorder()
+	start = httptest.NewRequest("GET", "/auth/start", nil)
+	start.Host = "localhost:7080"
+	h.ServeHTTP(started, start)
+	values = map[string]string{}
+	for _, cookie := range started.Result().Cookies() {
+		values[cookie.Name] = cookie.Value
+	}
+	idToken = makeIDToken("unrecognized-provider-user", "owner@example.test", values[oidcNonceCookie])
+	callback = httptest.NewRequest("GET", "/auth/callback?state="+url.QueryEscape(values[oidcStateCookie])+"&code="+url.QueryEscape(authorizationCode), nil)
+	callback.Host = "localhost:7080"
+	for _, cookie := range started.Result().Cookies() {
+		callback.AddCookie(cookie)
+	}
+	denied := httptest.NewRecorder()
+	h.ServeHTTP(denied, callback)
+	if denied.Code != http.StatusForbidden {
+		t.Fatalf("unknown provider subject with owner's email: status=%d body=%s", denied.Code, denied.Body)
 	}
 }
 
