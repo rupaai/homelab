@@ -1,6 +1,6 @@
 // Fake data for developing the UI without the Go server (see api.ts for how it's switched on).
 import { ApiError } from './errors';
-import type { ActivityEvent, Api, AppView, EnvName, EnvView, ReleaseView, SecretView, SettingView } from './types';
+import type { ActivityEvent, Api, AppView, EnvName, EnvView, PersonInput, PersonView, ReleaseView, SecretView, SettingView } from './types';
 
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 const delay = <T>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
@@ -142,6 +142,10 @@ const settingStore: SettingView[] = [
 	{ name: 'GITHUB_TOKEN', description: 'Lets Homelab read your repos and builds on GitHub. Make one at github.com/settings/tokens.', set: true, updatedAt: ago(60 * 24 * 12), updatedBy: 'rupaai', appliesAfterRestart: false },
 	{ name: 'TS_AUTHKEY', description: 'Lets Homelab join your Tailscale network and give each app an address. Make one in the Tailscale admin page.', set: false, appliesAfterRestart: true }
 ];
+const household: PersonView[] = [
+	{ id: 'owner', name: 'Rupa', email: 'rupa@example.test', status: 'signed_in', roles: ['owner', 'admin'], grants: {} },
+	{ id: 'sam', name: 'Sam', email: 'sam@example.test', status: 'signed_in', roles: ['member'], grants: { 'movie-night': 'use' }, lastSignIn: ago(15) }
+];
 
 const find = (id: string) => {
 	const a = apps.find((x) => x.id === id);
@@ -174,7 +178,36 @@ function work(a: AppView, e: EnvName, busy: string, kind: 'deploy' | 'promote' |
 }
 
 export const mockApi: Api = {
+	bootstrap: () => delay({ needsSetup: false, signInReady: true }),
+	me: () => delay({ personId: 'owner', login: 'rupa@example.test', name: 'Rupa', local: true, roles: ['owner', 'admin'] }),
+	setupOwner: async () => delay({ loginUrl: 'http://localhost:7081', recoveryCode: '' }),
+	recover: async () => delay(undefined),
+	signOut: async () => delay(undefined),
+	people: () => delay(structuredClone(household)),
+	async invitePerson(person: PersonInput) {
+		const entry: PersonView = { id: `person-${household.length + 1}`, ...structuredClone(person), status: 'invited' };
+		household.push(entry);
+		return delay({ url: 'http://localhost:7080/mock-invite' });
+	},
+	async resendInvite(id: string) {
+		if (!household.some((p) => p.id === id && p.status === 'invited')) throw new ApiError('That invite is no longer available.', 400);
+		return delay({ url: 'http://localhost:7080/mock-invite' });
+	},
+	async updatePerson(id: string, person: PersonInput) {
+		const entry = household.find((p) => p.id === id);
+		if (!entry) throw new ApiError("That person isn't in Homelab.", 404);
+		Object.assign(entry, structuredClone(person));
+		return delay(structuredClone(entry));
+	},
+	async removePerson(id: string) {
+		const entry = household.find((p) => p.id === id);
+		if (!entry) throw new ApiError("That person isn't in Homelab.", 404);
+		if (entry.roles.includes('owner')) throw new ApiError("The household owner can't be removed.", 400);
+		household.splice(household.indexOf(entry), 1);
+		return delay([{ name: 'Disable Pocket ID sign-in', done: true }, { name: 'End existing Pocket ID sessions', done: false, detail: "Pocket ID's API doesn't provide a way to end sessions that are already open there." }, { name: 'End Homelab and app sessions', done: true }, { name: 'Remove app access and invitation links', done: true }]);
+	},
 	apps: () => delay(structuredClone(apps)),
+	projects: () => delay(structuredClone(apps)),
 	async addApp(repo) {
 		if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new ApiError('Use the repo as owner/name, for example rupaai/smart-recommender-player.', 400);
 		throw new ApiError(`${repo} has no homelab.yaml on its main branch yet.`, 400);

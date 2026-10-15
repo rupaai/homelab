@@ -1,6 +1,6 @@
 import { ApiError, NETWORK_MESSAGE, errorMessage } from './errors';
 import { mockApi } from './mock';
-import type { Api, AppView, EnvSecrets, PromotePreview, RollbackPreview, SettingView } from './types';
+import type { Api, AppView, BootstrapView, EnvSecrets, MeView, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult } from './types';
 
 /** Mock mode: `?mock` in the URL or VITE_MOCK=1 gives fake data, no server needed. */
 export const useMock: boolean =
@@ -41,7 +41,18 @@ function fixApp(a: AppView): AppView {
 }
 
 const realApi: Api = {
+	bootstrap: () => request<BootstrapView>('GET', '/api/bootstrap'),
+	me: () => request<MeView>('GET', '/api/me'),
+	setupOwner: (name, email) => request<SetupResult>('POST', '/api/setup', { name, email }),
+	recover: async (code) => { await request<void>('POST', '/api/recover', { code }); },
+	signOut: async () => { await request<void>('POST', '/api/logout'); },
+	people: async () => list(await request<PersonView[]>('GET', '/api/people')),
+	invitePerson: (person) => request<{ url: string }>('POST', '/api/people', person),
+	resendInvite: (id) => request<{ url: string }>('POST', `/api/people/${enc(id)}/invite`),
+	updatePerson: (id, person) => request<PersonView>('PUT', `/api/people/${enc(id)}`, person),
+	removePerson: (id) => request<RemovalStep[]>('DELETE', `/api/people/${enc(id)}`),
 	apps: async () => list(await request<AppView[]>('GET', '/api/apps')).map(fixApp),
+	projects: async () => list(await request<AppView[]>('GET', '/api/projects')).map(fixApp),
 	addApp: async (repo, branch) => fixApp(await request<AppView>('POST', '/api/apps', { repo, branch })),
 	deploy: (id, commit) => request('POST', `/api/apps/${enc(id)}/deploy`, commit ? { commit } : {}),
 	promotePreview: async (id) => {

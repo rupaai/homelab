@@ -1,15 +1,74 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import { api } from '#lib/api.ts';
 	import { appsStore } from '#lib/apps.svelte.ts';
+	import { ApiError, messageOf } from '#lib/errors.ts';
+	import type { MeView, SetupResult } from '#lib/types.ts';
 	import '../app.css';
 
 	let { children } = $props();
+	let authState = $state<'loading'|'setup'|'setupDone'|'signedOut'|'ready'|'error'>('loading');
+	let me = $state<MeView | null>(null);
+	let setupName = $state('');
+	let setupEmail = $state('');
+	let setupResult = $state<SetupResult | null>(null);
+	let recoveryCode = $state('');
+	let authError = $state('');
+	let busy = $state(false);
+	let recoverySaved = $state(false);
+	let copied = $state(false);
+	const admin = $derived(!!me?.roles.some((r) => r === 'owner' || r === 'admin'));
+	const builder = $derived(admin || !!me?.roles.includes('builder'));
+	const tabs = $derived.by(() => {
+		const items: { href:string; label:string; match:(p:string)=>boolean; icon:string }[] = [
+			{ href: '/home', label: 'Apps', match: (p: string) => p === '/home', icon: 'M3 5h7v6H3zM14 5h7v6h-7zM3 15h7v6H3zM14 15h7v6h-7z' }
+		];
+		if (builder) items.push({ href: '/', label: 'Projects', match: (p: string) => p === '/' || p.startsWith('/apps/'), icon: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' });
+		if (admin) items.push({ href: '/activity', label: 'Activity', match: (p: string) => p.startsWith('/activity'), icon: 'M4 12h4l3-8 4 16 3-8h2' });
+		if (admin) items.push({ href: '/people', label: 'People', match: (p: string) => p.startsWith('/people'), icon: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M20 8v6M23 11h-6' });
+		if (admin) items.push({ href: '/settings', label: 'Settings', match: (p: string) => p.startsWith('/settings'), icon: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l-.1-.1a1.7 1.7 0 0 1 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z' });
+		items.push({ href: '/me', label: 'Me', match: (p: string) => p.startsWith('/me'), icon: 'M20 21a8 8 0 0 0-16 0M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8' });
+		return items;
+	});
 
-	const tabs = [
-		{ href: '/', label: 'Projects', match: (p: string) => p === '/' || p.startsWith('/apps'), icon: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' },
-		{ href: '/activity', label: 'Activity', match: (p: string) => p.startsWith('/activity'), icon: 'M4 12h4l3-8 4 16 3-8h2' },
-		{ href: '/settings', label: 'Settings', match: (p: string) => p.startsWith('/settings'), icon: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z' }
-	];
+	onMount(async () => {
+		try {
+			const status = await api.bootstrap();
+			if (status.needsSetup) { authState = 'setup'; return; }
+			try {
+				me = await api.me(); authState = 'ready';
+				if (!me.roles.some((r) => ['owner', 'admin', 'builder'].includes(r)) && page.url.pathname === '/') await goto('/home', { replaceState: true });
+			} catch (e) { authState = e instanceof ApiError && e.status === 403 ? 'signedOut' : 'error'; }
+		} catch { authState = 'error'; }
+	});
+
+	async function setup(e: SubmitEvent) {
+		e.preventDefault(); busy = true; authError = '';
+		try { setupResult = await api.setupOwner(setupName.trim(), setupEmail.trim()); authState = 'setupDone'; }
+		catch (e) { authError = messageOf(e); }
+		finally { busy = false; }
+	}
+	async function recover(e: SubmitEvent) {
+		e.preventDefault(); busy = true; authError = '';
+		try { await api.recover(recoveryCode.trim()); me = await api.me(); authState = 'ready'; await goto('/'); }
+		catch (e) { authError = messageOf(e); }
+		finally { busy = false; }
+	}
+	async function signOut() {
+		try { await api.signOut(); } catch (e) { authError = messageOf(e); return; }
+		me = null; authState = 'signedOut'; await goto('/');
+	}
+	async function copyRecovery() {
+		if (!setupResult) return;
+		try { await navigator.clipboard.writeText(setupResult.recoveryCode); copied = true; } catch { authError = 'Your browser could not copy the code. Select and copy it instead.'; }
+	}
+	function downloadRecovery() {
+		if (!setupResult) return;
+		const blob = new Blob([`Homelab recovery code\n\n${setupResult.recoveryCode}\n\nKeep this code private. It can sign in to Homelab once.\n`], { type: 'text/plain' });
+		const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'homelab-recovery-code.txt'; a.click(); URL.revokeObjectURL(url);
+	}
 </script>
 
 <div class="shell">
@@ -26,10 +85,22 @@
 	</header>
 
 	<main>
+		{#if authState === 'loading'}
+			<div class="page"><p class="muted">Loading Homelab…</p></div>
+		{:else if authState === 'error'}
+			<div class="auth-card"><h1>Homelab is unavailable</h1><p>Check that Homelab is running, then try again.</p><button class="btn primary" type="button" onclick={() => location.reload()}>Try again</button></div>
+		{:else if authState === 'setup'}
+			<div class="auth-card"><h1>Set up Homelab</h1><p>Start by creating the household owner. You’ll register a passkey with Pocket ID next.</p><form onsubmit={setup}><label for="owner-name">Your name</label><input id="owner-name" bind:value={setupName} autocomplete="name" required /><label for="owner-email">Email</label><input id="owner-email" type="email" bind:value={setupEmail} autocomplete="email" required />{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}<button class="btn primary" type="submit" disabled={busy}>{busy ? 'Setting up…' : 'Create owner account'}</button></form></div>
+		{:else if authState === 'setupDone' && setupResult}
+			<div class="auth-card"><h1>Save your recovery code</h1><p><strong>Save this now. It won’t be shown again.</strong> Keep it somewhere private.</p><p class="recovery-code"><code>{setupResult.recoveryCode}</code></p><div class="actions"><button class="btn" type="button" onclick={copyRecovery}>{copied ? 'Copied' : 'Copy code'}</button><button class="btn" type="button" onclick={downloadRecovery}>Download</button></div><p>Now add your passkey in Pocket ID. When you’re done, return here and sign in.</p><div class="actions"><a class="btn primary" href={setupResult.loginUrl} target="_blank" rel="noopener">Register passkey</a><a class="btn" href="/auth/start" data-sveltekit-reload>Continue to sign in</a></div>{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}</div>
+		{:else if authState === 'signedOut'}
+			<div class="auth-card"><h1>Sign in to Homelab</h1><p>Use the passkey you set up with Pocket ID.</p>{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}<a class="btn primary" href="/auth/start" data-sveltekit-reload>Sign in with passkey</a><details><summary>Use your recovery code</summary><form onsubmit={recover}><label for="recovery-code">Recovery code</label><input id="recovery-code" bind:value={recoveryCode} autocomplete="off" required />{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}<button class="btn" type="submit" disabled={busy}>{busy ? 'Checking…' : 'Sign in once'}</button></form></details></div>
+		{:else}
 		{#if appsStore.error && appsStore.loaded}
 			<p class="notice bad offline" role="alert">{appsStore.error}</p>
 		{/if}
 		{@render children()}
+		{/if}
 	</main>
 
 	<nav class="tabbar" aria-label="Main">
@@ -93,11 +164,20 @@
 	}
 	.tabbar {
 		display: grid;
-		grid-template-columns: repeat(3, 1fr);
+		grid-template-columns: repeat(auto-fit, minmax(3.25rem, 1fr));
 		border-top: 1px solid var(--border);
 		background: var(--surface);
 		padding-bottom: env(safe-area-inset-bottom);
 	}
+	.auth-card { max-width: 29rem; margin: 2.5rem auto; padding: 1.4rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+	.auth-card h1 { margin: 0 0 .5rem; }
+	.auth-card form { display: grid; gap: .55rem; margin-top: 1rem; }
+	.auth-card input { width: 100%; }
+	.auth-card .btn { width: fit-content; }
+	.auth-card details { margin-top: 1.5rem; }
+	.auth-card summary { cursor: pointer; font-weight: 600; }
+	.recovery-code { border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-wrap: anywhere; }
+	.actions { display: flex; flex-wrap: wrap; gap: .5rem; margin: .8rem 0; }
 	.tabbar a {
 		display: flex;
 		flex-direction: column;

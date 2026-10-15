@@ -150,9 +150,43 @@ export interface ActivityQuery {
 	limit?: number;
 }
 
+export type HouseholdRole = 'owner' | 'admin' | 'builder' | 'member' | string;
+export type PersonStatus = 'invited' | 'signed_in' | 'connected' | 'removed' | string;
+export interface PersonView {
+	id: string;
+	name: string;
+	email: string;
+	identityId?: string;
+	status: PersonStatus;
+	roles: HouseholdRole[];
+	grants: Record<string, 'use' | 'build'>;
+	lastSignIn?: string;
+}
+export interface PersonInput {
+	name: string;
+	email: string;
+	roles: HouseholdRole[];
+	grants: Record<string, 'use' | 'build'>;
+}
+export interface MeView { personId: string; login: string; name: string; local: boolean; roles: HouseholdRole[]; }
+export interface BootstrapView { needsSetup: boolean; signInReady: boolean; }
+export interface SetupResult { loginUrl: string; recoveryCode: string; }
+export interface RemovalStep { name: string; done: boolean; detail?: string; }
+
 /** Everything the screens need from the server. The mock implements the same shape. */
 export interface Api {
+	bootstrap(): Promise<BootstrapView>;
+	me(): Promise<MeView>;
+	setupOwner(name: string, email: string): Promise<SetupResult>;
+	recover(code: string): Promise<void>;
+	signOut(): Promise<void>;
+	people(): Promise<PersonView[]>;
+	invitePerson(person: PersonInput): Promise<{ url: string }>;
+	resendInvite(id: string): Promise<{ url: string }>;
+	updatePerson(id: string, person: PersonInput): Promise<PersonView>;
+	removePerson(id: string): Promise<RemovalStep[]>;
 	apps(): Promise<AppView[]>;
+	projects(): Promise<AppView[]>;
 	addApp(repo: string, branch: string): Promise<AppView>;
 	deploy(appId: string, commit?: string): Promise<void>;
 	promotePreview(appId: string): Promise<PromotePreview>;
