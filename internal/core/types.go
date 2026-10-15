@@ -203,3 +203,47 @@ func ViewerFrom(ctx context.Context) (Viewer, bool) {
 
 // Actor for things Homelab does by itself.
 const ActorHomelab = "homelab"
+
+// RemoteInvite is a pending invitation to join the tailnet.
+type RemoteInvite struct {
+	ID  string `json:"id"`
+	URL string `json:"url"`
+}
+
+// AccessPolicy is the tailnet's rules, in Homelab's terms. Groups map a group name (without
+// the "group:" prefix) to logins; Grants say which groups reach which tags.
+type AccessPolicy struct {
+	Groups    map[string][]string `json:"groups"`
+	TagOwners []string            `json:"tagOwners"` // every tag Homelab uses
+	Grants    []AccessGrant       `json:"grants"`
+}
+
+// AccessGrant lets the members of Groups reach every node carrying one of Tags.
+type AccessGrant struct {
+	Groups []string `json:"groups"`
+	Tags   []string `json:"tags"`
+}
+
+// RemoteState is what the tailnet looks like now.
+type RemoteState struct {
+	Users   []RemoteUser   `json:"users"`
+	Devices []RemoteDevice `json:"devices"`
+	Invites []RemoteInvite `json:"invites"`
+}
+
+// RemoteUser is a person on the tailnet.
+type RemoteUser struct {
+	ID    string `json:"id"`
+	Login string `json:"login"`
+	Name  string `json:"name"`
+}
+
+// RemoteDevice is one device on the tailnet.
+type RemoteDevice struct {
+	ID       string     `json:"id"`
+	Name     string     `json:"name"`
+	Login    string     `json:"login"` // owner; empty for tagged devices
+	Tags     []string   `json:"tags"`
+	LastSeen *time.Time `json:"lastSeen,omitempty"`
+	Online   bool       `json:"online"`
+}

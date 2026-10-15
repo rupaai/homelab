@@ -158,3 +158,22 @@ type Identity interface {
 type Email interface {
 	Send(ctx context.Context, to, subject, body string) error
 }
+
+// RemoteAccess manages who can reach Homelab from anywhere (R1-R3): people on the tailnet,
+// their devices, the access rules, and keys for Homelab's own addresses.
+type RemoteAccess interface {
+	// Invite returns a link that lets the person join the tailnet.
+	Invite(ctx context.Context, email string) (RemoteInvite, error)
+	// CancelInvite withdraws an invite that hasn't been accepted.
+	CancelInvite(ctx context.Context, inviteID string) error
+	// SetPolicy replaces the tailnet's access rules.
+	SetPolicy(ctx context.Context, p AccessPolicy) error
+	// AuthKey mints a single-use key for one of Homelab's own addresses, with these tags.
+	AuthKey(ctx context.Context, tags []string) (string, error)
+	// Observe lists the tailnet's people and devices.
+	Observe(ctx context.Context) (RemoteState, error)
+	// RemoveDevices deletes every device that belongs to login.
+	RemoveDevices(ctx context.Context, login string) (int, error)
+	// RemoveUser takes login off the tailnet.
+	RemoveUser(ctx context.Context, login string) error
+}
