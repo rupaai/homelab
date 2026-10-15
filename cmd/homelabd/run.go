@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -46,7 +47,11 @@ const (
 	pocketIDEncryptionKeyName = "POCKET_ID_ENCRYPTION_KEY"
 	homelabOIDCSecretName     = "HOMELAB_OIDC_CLIENT_SECRET"
 	pocketIDURL               = "http://localhost:7081"
-	pocketIDImage             = "ghcr.io/pocket-id/pocket-id:v2.18.0"
+	pocketIDListen            = "127.0.0.1:7081"
+	// The container listens here; Homelab serves pocketIDURL in front of it.
+	pocketIDContainerURL  = "http://127.0.0.1:7082"
+	pocketIDContainerPort = 7082
+	pocketIDImage         = "ghcr.io/pocket-id/pocket-id:v2.18.0"
 )
 
 func cmdRun(args []string) error {
@@ -203,10 +208,11 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 
 func configurePocketID(ctx context.Context, deployer *docker.Deployer, idp *pocketid.Client, apiKey, encryptionKey, oidcSecret string, oidcConfig *api.OIDCConfig, log *slog.Logger, home string) {
 	delay := time.Second
+	proxying := false
 	for attempt := 1; ; attempt++ {
 		attemptCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		err := deployer.EnsureSupportingService(attemptCtx, docker.SupportingService{
-			Name: "pocketid", Image: pocketIDImage, HostPort: 7081, ContainerPort: 1411,
+			Name: "pocketid", Image: pocketIDImage, HostPort: pocketIDContainerPort, ContainerPort: 1411,
 			DataDir: filepath.Join(home, "services", "pocketid", "data"),
 			Environment: map[string]string{
 				"APP_URL": pocketIDURL, "ENCRYPTION_KEY": encryptionKey, "STATIC_API_KEY": apiKey,
@@ -216,6 +222,12 @@ func configurePocketID(ctx context.Context, deployer *docker.Deployer, idp *pock
 		})
 		if err == nil {
 			err = waitForPocketID(attemptCtx)
+		}
+		// Listen only after the container has moved off pocketIDListen; older
+		// Homelab versions published Pocket ID there directly.
+		if err == nil && !proxying {
+			err = servePocketIDProxy(ctx, log)
+			proxying = err == nil
 		}
 		var clientID string
 		if err == nil {
@@ -262,6 +274,35 @@ func ensurePlatformSecret(secrets core.Secrets, name string) (string, error) {
 	return value, nil
 }
 
+// servePocketIDProxy serves Pocket ID at pocketIDURL until ctx ends.
+func servePocketIDProxy(ctx context.Context, log *slog.Logger) error {
+	target, err := url.Parse(pocketIDContainerURL)
+	if err != nil {
+		return err
+	}
+	ln, err := net.Listen("tcp", pocketIDListen)
+	if err != nil {
+		return fmt.Errorf("serve Pocket ID on %s: %w", pocketIDListen, err)
+	}
+	srv := &http.Server{
+		Handler:           pocketid.Proxy(target),
+		ReadHeaderTimeout: 10 * time.Second,
+		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
+	}
+	go func() {
+		<-ctx.Done()
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(stopCtx)
+	}()
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("Pocket ID proxy stopped", "err", err)
+		}
+	}()
+	return nil
+}
+
 func waitForPocketID(ctx context.Context) error {
 	client := &http.Client{Timeout: 2 * time.Second}
 	deadline := time.NewTimer(30 * time.Second)
@@ -269,7 +310,7 @@ func waitForPocketID(ctx context.Context) error {
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:7081/healthz", nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, pocketIDContainerURL+"/healthz", nil)
 		if err == nil {
 			res, e := client.Do(req)
 			if e == nil {

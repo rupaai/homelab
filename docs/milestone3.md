@@ -31,7 +31,7 @@ Both are appended to the migration list. Earlier migrations are unchanged.
 | `people` | Name, optional email, provider id, status and last sign-in time |
 | `person_roles` | Extensible role set; a unique index enforces one owner |
 | `person_grants` | One `use` or `build` grant per person and app |
-| `invites` | Hashed, single-use invitation values with seven-day expiry |
+| `invites` | Hashed invitation values with seven-day expiry; can issue fresh Pocket ID links until the first successful Homelab sign-in |
 | `sessions` | Hashed companion session ids, seven-day idle and 30-day absolute expiry |
 | `recovery` | Bcrypt recovery-code hash and used time |
 | `one_time_codes` | Hashed, single-use recovery links and expiry |
@@ -57,7 +57,7 @@ admin-only in this milestone.
 
 ## API additions
 
-All `/api` routes except bootstrap, setup, recovery and logout need a stored signed-in session.
+All `/api` routes except bootstrap, setup, recovery, logout and invite redemption need a stored signed-in session.
 Changes need `X-Homelab-Request: 1` and JSON. Host checks remain in place. People/settings
 routes require owner or admin; app routes are checked against the requested app and action.
 
@@ -65,6 +65,7 @@ routes require owner or admin; app routes are checked against the requested app 
 |---|---|---|---|
 | `GET /api/bootstrap` | — | Whether first setup is needed | Local computer |
 | `POST /api/setup` | `{name,email}` | Pocket ID passkey link and one-time recovery code | Local computer, before an owner exists |
+| `POST /api/setup/passkey-link` | `{}` | Fresh initial-owner setup link until first sign-in | Local computer, while the owner is still invited |
 | `GET /auth/start` | Optional safe relative `return` | Redirect to Pocket ID authorization with PKCE, state and nonce | Local computer |
 | `GET /auth/callback` | OIDC callback query | Creates a server-side session and redirects back | Local computer |
 | `GET /api/me` | — | Name, email and roles | Signed-in person |
@@ -77,7 +78,8 @@ routes require owner or admin; app routes are checked against the requested app 
 | `PUT /api/people/{id}` | Updated name, roles and grants | Updated person | Owner or admin |
 | `POST /api/people/{id}/invite` | — | Replacement invite URL; revokes the old link | Owner or admin |
 | `DELETE /api/people/{id}` | — | Removal checklist | Owner or admin; owner cannot be removed |
-| `GET /invite/{token}` | — | Consumes invite and redirects to Pocket ID | Invite holder, local computer |
+| `GET /invite/{token}` | — | Homelab passkey-registration screen | Invite holder, local computer |
+| `POST /api/invites/{token}/redeem` | `{}` | Returns a fresh Pocket ID one-time link while the invite is valid | Invite holder, local computer |
 | `GET /auth/app` | `app`, `env`, absolute `return` | Redirect to app callback with a 60-second code | Signed-in person with the app grant |
 | `GET /api/apps` | — | Role-filtered app list | Signed-in person |
 | `GET /api/projects` | — | Apps with build access | Owner/admin or builder |
@@ -92,7 +94,8 @@ the original relative path. The proxy never forwards any `homelab_*` cookie or c
 ## Pocket ID API checked
 
 Pocket ID is pinned to `ghcr.io/pocket-id/pocket-id:v2.18.0`. Homelab starts a hidden Compose
-project, publishes it only on `127.0.0.1:7081`, stores data under
+project, publishes it only on `127.0.0.1:7082`, serves it at `http://localhost:7081` through a
+small proxy in `homelabd`, stores data under
 `~/.homelab/services/pocketid`, and generates its API key, encryption key and OIDC client
 secret into the encrypted platform secret store. Compose receives those values only in the
 child process environment; they are not written to a service `.env` file. Pocket ID account
@@ -107,7 +110,10 @@ Pocket ID browser sessions. Removal disables provider sign-in and immediately de
 and app sessions. The checklist notes that Pocket ID may retain its own browser session; the
 disabled account cannot start another sign-in and the removed Homelab account has no app access.
 The API returns the canonical user id on creation, which Homelab stores and uses for later
-Pocket ID operations.
+Pocket ID operations. Removing a person disables their Pocket ID account but leaves it in
+Pocket ID. If that exact email is invited again, Homelab deletes the disabled Homelab-managed
+account and creates a fresh one, freeing the email and clearing the old passkeys. It never
+adopts or deletes a Pocket ID account that Homelab did not create.
 
 References checked against Pocket ID 2.18.0 on 15 October 2026: [API endpoints](https://pocket-id.org/docs/api/endpoints), [environment variables](https://pocket-id.org/docs/configuration/environment-variables), [installation](https://pocket-id.org/docs/setup/installation).
 
@@ -117,6 +123,11 @@ Open the companion at `http://localhost:7080`. Pocket ID uses `http://localhost:
 local app addresses use `localhost` as well. WebAuthn accepts localhost as a relying-party
 host; it does not accept `127.0.0.1`. This milestone supports sign-in on the Mac only. Other
 devices need the Tailscale HTTPS addresses planned for milestone 4.
+Pocket ID marks its session cookies `Secure` even when `APP_URL` is `http://`. Chrome keeps
+Secure cookies on localhost; Safari drops them, so a one-time link succeeded and the next page
+returned to `/login?redirect=%2Fsettings`. The proxy removes `Secure` only from responses to
+plain-HTTP requests, matching Homelab's own cookies. Milestone 4's HTTPS addresses make it
+unnecessary.
 The companion starts before Pocket ID is ready. It creates and configures Pocket ID in the
 background with retries; `/healthz` and the local recovery flows remain available while the
 sign-in service is unavailable. The sign-in page explains when setup is still starting.
