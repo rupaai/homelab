@@ -61,10 +61,10 @@ func TestEnsureSwapRemovePersist(t *testing.T) {
 		t.Fatal(err)
 	}
 	obs := a.Observe()
-	if m := obs["movies"]; !m.Ready || m.URL != "http://127.0.0.1:"+strconv.Itoa(testBase) {
+	if m := obs["movies"]; !m.Ready || m.URL != "http://localhost:"+strconv.Itoa(testBase) {
 		t.Fatalf("movies: %+v", m)
 	}
-	if h := obs["homelab"]; !h.Ready || h.URL != "http://127.0.0.1:"+strconv.Itoa(testCompanion) {
+	if h := obs["homelab"]; !h.Ready || h.URL != "http://localhost:"+strconv.Itoa(testCompanion) {
 		t.Fatalf("homelab: %+v", h)
 	}
 	if got := get(t, obs["movies"].URL); got != "one:true" {
@@ -84,7 +84,7 @@ func TestEnsureSwapRemovePersist(t *testing.T) {
 		t.Fatal("still observed")
 	}
 	a.Ensure(ctx, "movies-dev", viewerHandler("dev"))
-	if u := a.Observe()["movies-dev"].URL; u != "http://127.0.0.1:"+strconv.Itoa(testBase+1) {
+	if u := a.Observe()["movies-dev"].URL; u != "http://localhost:"+strconv.Itoa(testBase+1) {
 		t.Fatal(u)
 	}
 	a.Close()
@@ -97,10 +97,10 @@ func TestEnsureSwapRemovePersist(t *testing.T) {
 	defer b.Close()
 	b.Ensure(ctx, "movies-dev", viewerHandler("dev"))
 	b.Ensure(ctx, "movies", viewerHandler("again"))
-	if u := b.Observe()["movies"].URL; u != "http://127.0.0.1:"+strconv.Itoa(testBase) {
+	if u := b.Observe()["movies"].URL; u != "http://localhost:"+strconv.Itoa(testBase) {
 		t.Fatal(u)
 	}
-	if u := b.Observe()["movies-dev"].URL; u != "http://127.0.0.1:"+strconv.Itoa(testBase+1) {
+	if u := b.Observe()["movies-dev"].URL; u != "http://localhost:"+strconv.Itoa(testBase+1) {
 		t.Fatal(u)
 	}
 }

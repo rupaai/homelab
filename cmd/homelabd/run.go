@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -22,6 +24,8 @@ import (
 	"github.com/rupaai/homelab/internal/adapters/gitmirror"
 	"github.com/rupaai/homelab/internal/adapters/httphealth"
 	"github.com/rupaai/homelab/internal/adapters/local"
+	"github.com/rupaai/homelab/internal/adapters/noop"
+	"github.com/rupaai/homelab/internal/adapters/pocketid"
 	"github.com/rupaai/homelab/internal/adapters/secretstore"
 	"github.com/rupaai/homelab/internal/adapters/tailscale"
 	"github.com/rupaai/homelab/internal/api"
@@ -36,6 +40,14 @@ import (
 // never asks for that name in local mode (the listen address serves the companion), so
 // this just keeps it out of the way of the real listen port.
 const localCompanionPort = 7079
+
+const (
+	pocketIDAPIKeyName        = "POCKET_ID_API_KEY"
+	pocketIDEncryptionKeyName = "POCKET_ID_ENCRYPTION_KEY"
+	homelabOIDCSecretName     = "HOMELAB_OIDC_CLIENT_SECRET"
+	pocketIDURL               = "http://localhost:7081"
+	pocketIDImage             = "ghcr.io/pocket-id/pocket-id:v2.18.0"
+)
 
 func cmdRun(args []string) error {
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
@@ -74,6 +86,18 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 		return fmt.Errorf("secrets: %w", err)
 	}
 	defer secrets.Close()
+	apiKey, err := ensurePlatformSecret(secrets, pocketIDAPIKeyName)
+	if err != nil {
+		return fmt.Errorf("Pocket ID API key: %w", err)
+	}
+	encryptionKey, err := ensurePlatformSecret(secrets, pocketIDEncryptionKeyName)
+	if err != nil {
+		return fmt.Errorf("Pocket ID encryption key: %w", err)
+	}
+	oidcSecret, err := ensurePlatformSecret(secrets, homelabOIDCSecretName)
+	if err != nil {
+		return fmt.Errorf("Homelab sign-in key: %w", err)
+	}
 	if err := importSecretFiles(secretsDir, secrets, os.Stdout); err != nil {
 		return fmt.Errorf("import secrets files: %w", err)
 	}
@@ -112,6 +136,24 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("docker: %w", err)
 	}
+	if err := deployer.EnsureSupportingService(ctx, docker.SupportingService{
+		Name: "pocketid", Image: pocketIDImage, HostPort: 7081, ContainerPort: 1411,
+		DataDir:     filepath.Join(home, "services", "pocketid", "data"),
+		Environment: map[string]string{"APP_URL": pocketIDURL, "ENCRYPTION_KEY": encryptionKey, "STATIC_API_KEY": apiKey, "ANALYTICS_DISABLED": "true", "VERSION_CHECK_DISABLED": "true"},
+	}); err != nil {
+		return fmt.Errorf("start Pocket ID: %w", err)
+	}
+	if err := waitForPocketID(ctx); err != nil {
+		return fmt.Errorf("wait for Pocket ID: %w", err)
+	}
+	idp, err := pocketid.New(pocketid.Options{BaseURL: pocketIDURL, APIKey: apiKey})
+	if err != nil {
+		return err
+	}
+	oidcClientID, err := idp.EnsureOIDCClient(ctx, "http://localhost:7080/auth/callback", oidcSecret)
+	if err != nil {
+		return fmt.Errorf("configure Homelab sign-in in Pocket ID: %w", err)
+	}
 	token := func() string { t, _ := secrets.Platform("GITHUB_TOKEN"); return t }
 	if token() == "" {
 		log.Warn("GITHUB_TOKEN is not set: private repos and ghcr.io images won't work. Set it in the companion under Settings")
@@ -125,10 +167,11 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	h := hub.New(hub.Config{DataDir: home, Logger: log, Owners: cfg.Owners, Identity: signer}, store, hub.Adapters{
 		Source: gh, Builder: gh, Registry: gh, Deployer: deployer,
 		Addresses: addrs, Health: httphealth.New(nil), Secrets: secrets,
-		Smoke: deployer, Mirror: mirror,
+		Smoke: deployer, Mirror: mirror, Identity: idp, Email: noop.Email{},
 	})
 
-	apiHandler := api.New(h, api.Options{Owners: cfg.Owners, Version: version, Static: companion.Site(), Logger: log})
+	apiHandler := api.New(h, api.Options{Owners: cfg.Owners, Version: version, Static: companion.Site(), Logger: log, Store: store,
+		OIDCIssuer: pocketIDURL, OIDCClientID: oidcClientID, OIDCClientSecret: oidcSecret})
 
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
@@ -141,7 +184,8 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
-	fmt.Printf("Companion: http://%s\n", ln.Addr())
+	_, listenPort, _ := net.SplitHostPort(ln.Addr().String())
+	fmt.Printf("Companion: http://localhost:%s\n", listenPort)
 
 	if cfg.Addresses == "tailscale" {
 		if err := h.ServeCompanion(ctx, apiHandler); err != nil {
@@ -169,8 +213,49 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	return result
 }
 
-// onThisComputer marks every request on the loopback listener as coming from the owner
-// at this computer. Only use it on a loopback listener (checkLoopback).
+func ensurePlatformSecret(secrets core.Secrets, name string) (string, error) {
+	if value, ok := secrets.Platform(name); ok && value != "" {
+		return value, nil
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	value := base64.RawURLEncoding.EncodeToString(raw)
+	if err := secrets.Set("", "", name, value, core.ActorHomelab); err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+func waitForPocketID(ctx context.Context) error {
+	client := &http.Client{Timeout: 2 * time.Second}
+	deadline := time.NewTimer(30 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:7081/healthz", nil)
+		if err == nil {
+			res, e := client.Do(req)
+			if e == nil {
+				res.Body.Close()
+				if res.StatusCode == http.StatusNoContent || res.StatusCode == http.StatusOK {
+					return nil
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("Pocket ID didn't become ready in 30 seconds")
+		case <-ticker.C:
+		}
+	}
+}
+
+// onThisComputer marks the request as local for Host checks. It does not grant a session.
 func onThisComputer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r.WithContext(core.WithViewer(r.Context(), core.Viewer{Local: true})))

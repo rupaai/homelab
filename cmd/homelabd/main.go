@@ -17,6 +17,7 @@ Usage:
   homelabd run [--home DIR] [--log-level L] run Homelab
   homelabd service install [--home DIR]    run Homelab at login (macOS)
   homelabd service uninstall               stop running Homelab at login (macOS)
+  homelabd recover [--home DIR]             print a 15-minute owner sign-in link
   homelabd version
 `
 
@@ -38,6 +39,8 @@ func dispatch(args []string) error {
 		return cmdInit(rest, os.Stdout)
 	case "run":
 		return cmdRun(rest)
+	case "recover":
+		return cmdRecover(rest, os.Stdout)
 	case "service":
 		return cmdService(rest, os.Stdout)
 	case "version", "--version", "-version":

@@ -305,7 +305,15 @@ func (d *Deployer) Logs(ctx context.Context, app, env string, lines int) (string
 // compose runs `docker compose -p <project> [-f compose.yaml] args...` in dir and returns
 // stdout and stderr together (the last ~1 MB). On failure the error holds the end of the output.
 func (d *Deployer) compose(ctx context.Context, dir, app, env string, args ...string) ([]byte, error) {
-	full := []string{"compose", "-p", project(app, env)}
+	return d.composeProject(ctx, dir, project(app, env), app+"/"+env, args...)
+}
+
+func (d *Deployer) composeProject(ctx context.Context, dir, projectName, label string, args ...string) ([]byte, error) {
+	return d.composeProjectWithEnv(ctx, dir, projectName, label, nil, args...)
+}
+
+func (d *Deployer) composeProjectWithEnv(ctx context.Context, dir, projectName, label string, extraEnv map[string]string, args ...string) ([]byte, error) {
+	full := []string{"compose", "-p", projectName}
 	if _, err := os.Stat(filepath.Join(dir, "compose.yaml")); err == nil {
 		full = append(full, "-f", "compose.yaml")
 	} else {
@@ -318,13 +326,24 @@ func (d *Deployer) compose(ctx context.Context, dir, app, env string, args ...st
 	cmd := exec.CommandContext(ctx, d.bin, full...)
 	cmd.Dir = dir
 	cmd.Env = d.env()
+	for k, v := range extraEnv {
+		prefix := k + "="
+		filtered := cmd.Env[:0]
+		for _, existing := range cmd.Env {
+			if !strings.HasPrefix(existing, prefix) {
+				filtered = append(filtered, existing)
+			}
+		}
+		cmd.Env = filtered
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
 	out := &tailBuffer{max: maxLogBytes}
 	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, fmt.Errorf("docker compose %s failed for %s/%s: %w\n%s", args[0], app, env, err, lastLines(out.Bytes(), errTailLines))
+		return nil, fmt.Errorf("docker compose %s failed for %s: %w\n%s", args[0], label, err, lastLines(out.Bytes(), errTailLines))
 	}
 	return out.Bytes(), nil
 }

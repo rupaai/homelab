@@ -2,6 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -12,6 +15,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/fstest"
+	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/rupaai/homelab/internal/adapters/fake"
 	"github.com/rupaai/homelab/internal/core"
@@ -33,9 +39,11 @@ secrets: [TMDB_API_KEY]
 const indexHTML = `<!doctype html><html><body><script>window.boot=1</script></body></html>`
 
 type rig struct {
-	h    *hub.Hub
-	src  *fake.Source
-	fail *atomic.Bool
+	h     *hub.Hub
+	src   *fake.Source
+	fail  *atomic.Bool
+	store *state.Store
+	idp   *fake.Identity
 }
 
 // flakySource fails every read while fail is set.
@@ -59,17 +67,121 @@ func newRig(t *testing.T) *rig {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
+	if err := st.SavePerson(context.Background(), core.Person{ID: "owner", Name: "Owner", Email: "owner@example.test", Status: "signed_in", Roles: []string{"owner", "admin"}}); err != nil {
+		t.Fatal(err)
+	}
 	src := fake.NewSource()
 	fail := &atomic.Bool{}
+	idp := fake.NewIdentity()
 	h := hub.New(hub.Config{DataDir: dir}, st, hub.Adapters{
 		Source: flakySource{src, fail}, Builder: fake.NewBuilder(), Registry: fake.NewRegistry(), Deployer: fake.NewDeployer(),
-		Addresses: fake.NewAddresses(), Health: fake.NewHealth(), Secrets: fake.NewSecrets(),
+		Addresses: fake.NewAddresses(), Health: fake.NewHealth(), Secrets: fake.NewSecrets(), Identity: idp, Email: fake.Email{},
 	})
-	return &rig{h: h, src: src, fail: fail}
+	return &rig{h: h, src: src, fail: fail, store: st, idp: idp}
+}
+
+func TestBootstrapCreatesOwnerAndOneTimeRecoveryCode(t *testing.T) {
+	r := newRig(t)
+	if err := r.store.DeletePerson(context.Background(), "owner"); err != nil {
+		t.Fatal(err)
+	}
+	h := r.handler()
+	if rec := do(h, "GET", "/api/bootstrap", "", nil); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"needsSetup":true`) {
+		t.Fatalf("bootstrap: %d %s", rec.Code, rec.Body)
+	}
+	rec := post(h, "/api/setup", `{"name":"Labiba","email":"owner@example.test"}`, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("setup: %d %s", rec.Code, rec.Body)
+	}
+	var got struct {
+		LoginURL     string `json:"loginUrl"`
+		RecoveryCode string `json:"recoveryCode"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.LoginURL == "" || got.RecoveryCode == "" {
+		t.Fatalf("setup response omitted credentials: %+v", got)
+	}
+	exists, err := r.store.OwnerExists(context.Background())
+	if err != nil || !exists {
+		t.Fatalf("owner exists=%v err=%v", exists, err)
+	}
+	p, err := r.store.PersonByEmail(context.Background(), "OWNER@example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Status != "invited" || !hasRole(p, "owner") || !hasRole(p, "admin") {
+		t.Fatalf("owner=%+v", p)
+	}
+	if u := r.idp.Users[p.ID]; u.ID != p.ID {
+		t.Fatalf("Pocket ID user=%+v", u)
+	}
+	hash, used, err := r.store.RecoveryHash(context.Background(), p.ID)
+	if err != nil || used || hash == got.RecoveryCode {
+		t.Fatalf("recovery hash=%q used=%v err=%v", hash, used, err)
+	}
+	if rec = post(h, "/api/setup", `{"name":"Other","email":"other@example.test"}`, nil); rec.Code != http.StatusBadRequest {
+		t.Fatalf("second setup: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestRecoveryCodeIsLoopbackOnlyRateLimitedAndSingleUse(t *testing.T) {
+	r := newRig(t)
+	code, err := newRecoveryCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(code), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.SetRecovery(context.Background(), "owner", string(hash)); err != nil {
+		t.Fatal(err)
+	}
+	h := r.handler()
+	body, _ := json.Marshal(map[string]string{"code": code})
+	rec := post(h, "/api/recover", string(body), nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("recover: %d %s", rec.Code, rec.Body)
+	}
+	var cookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "homelab_session" {
+			cookie = c
+		}
+	}
+	if cookie == nil {
+		t.Fatal("recovery didn't create a session")
+	}
+	req := httptest.NewRequest("GET", "/api/me", nil)
+	req.Host = "localhost:7080"
+	req.AddCookie(cookie)
+	got := httptest.NewRecorder()
+	h.ServeHTTP(got, req)
+	if got.Code != http.StatusOK {
+		t.Fatalf("recovered session: %d %s", got.Code, got.Body)
+	}
+	if rec = post(h, "/api/recover", string(body), nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("reuse: %d %s", rec.Code, rec.Body)
+	}
+	invalidCode, err := randomURLToken(20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidBody, _ := json.Marshal(map[string]string{"code": invalidCode})
+	req = httptest.NewRequest("POST", "/api/recover", strings.NewReader(string(invalidBody)))
+	req.Host = "example.com"
+	req.Header.Set("Content-Type", "application/json")
+	got = httptest.NewRecorder()
+	h.ServeHTTP(got, req)
+	if got.Code != http.StatusForbidden {
+		t.Fatalf("remote recovery: %d %s", got.Code, got.Body)
+	}
 }
 
 func (r *rig) handler(owners ...string) http.Handler {
-	return New(r.h, Options{Owners: owners, Version: "test", Static: testSite(), Logger: nil})
+	return New(r.h, Options{Owners: owners, Version: "test", Static: testSite(), Logger: nil, Store: r.store})
 }
 
 func testSite() fstest.MapFS {
@@ -80,7 +192,7 @@ func testSite() fstest.MapFS {
 	}
 }
 
-var local = core.Viewer{Local: true}
+var local = core.Viewer{Local: true, PersonID: "owner"}
 
 func do(h http.Handler, method, path, body string, v *core.Viewer, hdr ...string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -102,7 +214,7 @@ func post(h http.Handler, path, body string, v *core.Viewer) *httptest.ResponseR
 
 func TestAuth(t *testing.T) {
 	r := newRig(t)
-	owner := &core.Viewer{Login: "Labiba@Example.com"}
+	owner := &core.Viewer{Login: "Labiba@Example.com", PersonID: "owner"}
 	stranger := &core.Viewer{Login: "eve@example.com"}
 	tagged := &core.Viewer{Login: "tagged-devices", Tagged: true}
 	anon := &core.Viewer{}
@@ -113,11 +225,12 @@ func TestAuth(t *testing.T) {
 		want   int
 	}{
 		{"local", []string{"labiba@example.com"}, &local, 200},
-		{"owner case-insensitive", []string{"labiba@example.com"}, owner, 200},
+		{"loopback alone", []string{"labiba@example.com"}, &core.Viewer{Local: true}, 403},
+		{"owner session", []string{"labiba@example.com"}, owner, 200},
 		{"stranger", []string{"labiba@example.com"}, stranger, 403},
 		{"tagged node", []string{"labiba@example.com"}, tagged, 403},
 		{"no viewer", []string{"labiba@example.com"}, nil, 403},
-		{"empty owners, signed-in person", nil, stranger, 200},
+		{"empty owners, signed-in person", nil, &core.Viewer{PersonID: "owner"}, 200},
 		{"empty owners, tagged", nil, tagged, 403},
 		{"empty owners, anonymous", nil, anon, 403},
 	}
@@ -126,7 +239,7 @@ func TestAuth(t *testing.T) {
 		if rec.Code != c.want {
 			t.Errorf("%s: %d, want %d (%s)", c.name, rec.Code, c.want, rec.Body)
 		}
-		if c.want == 403 && !strings.Contains(rec.Body.String(), "only lets its owner in") {
+		if c.want == 403 && !strings.Contains(rec.Body.String(), "Sign in") && !strings.Contains(rec.Body.String(), "don't have access") {
 			t.Errorf("%s: message %s", c.name, rec.Body)
 		}
 	}
@@ -140,12 +253,104 @@ func TestAuth(t *testing.T) {
 	}
 }
 
+func TestMemberAPIIsScoped(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if _, err := r.store.AddApp(ctx, state.App{ID: "movies", Name: "Movies", Repo: "a/b", Manifest: []byte("id: movies"), Promotion: "manual"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.SavePerson(ctx, core.Person{ID: "sam", Name: "Sam", Status: "signed_in", Roles: []string{"member"}, Grants: map[string]string{"movies": "use"}}); err != nil {
+		t.Fatal(err)
+	}
+	v := &core.Viewer{PersonID: "sam"}
+	h := r.handler()
+	rec := do(h, "GET", "/api/apps", "", v)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"env":"prod"`) || strings.Contains(rec.Body.String(), `"env":"dev"`) {
+		t.Fatalf("member app list: %d %s", rec.Code, rec.Body)
+	}
+	if rec = do(h, "GET", "/api/apps/movies/envs/dev/logs", "", v); rec.Code != 403 {
+		t.Fatalf("member logs status=%d body=%s", rec.Code, rec.Body)
+	}
+	if rec = do(h, "GET", "/api/apps/movies", "", v); rec.Code != 200 || strings.Contains(rec.Body.String(), `"env":"dev"`) {
+		t.Fatalf("member app detail leaked dev: %d %s", rec.Code, rec.Body)
+	}
+	if rec = do(h, "GET", "/api/projects", "", v); rec.Code != 403 {
+		t.Fatalf("member projects status=%d body=%s", rec.Code, rec.Body)
+	}
+	for _, path := range []string{"/api/people", "/api/settings/secrets", "/api/activity", "/api/apps/movies/envs/dev/secrets/TMDB_API_KEY"} {
+		if rec = do(h, "GET", path, "", v); rec.Code != 403 {
+			t.Errorf("member %s status=%d body=%s", path, rec.Code, rec.Body)
+		}
+	}
+	if rec = do(h, "GET", "/api/settings/secrets", "", v); rec.Code != 403 {
+		t.Fatalf("member settings status=%d body=%s", rec.Code, rec.Body)
+	}
+}
+
+func TestBuilderProjectsIncludeOnlyBuildGrants(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if _, err := r.store.AddApp(ctx, state.App{ID: "movies", Name: "Movies", Repo: "a/b", Manifest: []byte("id: movies"), Promotion: "manual"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.store.AddApp(ctx, state.App{ID: "recipes", Name: "Recipes", Repo: "a/c", Manifest: []byte("id: recipes"), Promotion: "manual"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.SavePerson(ctx, core.Person{ID: "builder", Name: "Builder", Status: "signed_in", Roles: []string{"builder"}, Grants: map[string]string{"movies": "build", "recipes": "use"}}); err != nil {
+		t.Fatal(err)
+	}
+	rec := do(r.handler(), "GET", "/api/projects", "", &core.Viewer{PersonID: "builder"})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"id":"movies"`) || strings.Contains(rec.Body.String(), `"id":"recipes"`) {
+		t.Fatalf("builder projects: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestRecoveryLinkCreatesOneOwnerSession(t *testing.T) {
+	r := newRig(t)
+	rawToken := make([]byte, 32)
+	if _, err := rand.Read(rawToken); err != nil {
+		t.Fatal(err)
+	}
+	token := base64.RawURLEncoding.EncodeToString(rawToken)
+	digest := sha256.Sum256([]byte(token))
+	if err := r.store.PutOneTimeCode(context.Background(), digest[:], "owner", "recovery-link", time.Now().Add(15*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	h := r.handler()
+	req := httptest.NewRequest("GET", "/recover/"+token, nil)
+	req.Host = "localhost:7080"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("recovery status=%d body=%s", rec.Code, rec.Body)
+	}
+	cookie := rec.Result().Cookies()
+	if len(cookie) == 0 || cookie[0].Name != "homelab_session" || !cookie[0].HttpOnly {
+		t.Fatalf("session cookie=%v", cookie)
+	}
+	req = httptest.NewRequest("GET", "/api/me", nil)
+	req.Host = "localhost:7080"
+	req.AddCookie(cookie[0])
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("recovered API status=%d body=%s", rec.Code, rec.Body)
+	}
+	req = httptest.NewRequest("GET", "/recover/"+token, nil)
+	req.Host = "localhost:7080"
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusGone {
+		t.Fatalf("reused recovery link status=%d", rec.Code)
+	}
+}
+
 func TestMe(t *testing.T) {
 	r := newRig(t)
-	rec := do(r.handler(), "GET", "/api/me", "", &core.Viewer{Login: "a@b.c", Name: "A"})
+	rec := do(r.handler(), "GET", "/api/me", "", &core.Viewer{PersonID: "owner", Login: "a@b.c", Name: "A"})
 	var got map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &got)
-	if got["login"] != "a@b.c" || got["name"] != "A" || got["local"] != false {
+	if got["login"] != "owner@example.test" || got["name"] != "Owner" || got["local"] != false {
 		t.Fatalf("%v", got)
 	}
 }
