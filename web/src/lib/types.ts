@@ -161,15 +161,22 @@ export interface PersonView {
 	roles: HouseholdRole[];
 	grants: Record<string, 'use' | 'build'>;
 	lastSignIn?: string;
+	/** The Tailscale login that signs this person in over the tailnet. */
+	tailscaleLogin?: string;
+	/** Their Tailscale invite, until one of their devices connects. */
+	remoteInviteUrl?: string;
+	connectedAt?: string;
 }
 export interface PersonInput {
 	name: string;
 	email: string;
 	roles: HouseholdRole[];
 	grants: Record<string, 'use' | 'build'>;
+	tailscaleLogin?: string;
 }
-export interface MeView { personId: string; login: string; name: string; local: boolean; roles: HouseholdRole[]; }
-export interface BootstrapView { needsSetup: boolean; signInReady: boolean; ownerNeedsPasskey?: boolean; }
+export interface Invitation { id: string; url: string; tailscaleUrl?: string; tailscaleError?: string; }
+export interface MeView { personId: string; login: string; name: string; local: boolean; roles: HouseholdRole[]; tailscale?: boolean; }
+export interface BootstrapView { needsSetup: boolean; signInReady: boolean; ownerNeedsPasskey?: boolean; remote?: boolean; login?: string; known?: boolean; }
 export interface SetupResult { loginUrl: string; recoveryCode: string; }
 export interface PasskeyLink { url: string; }
 export interface RemovalStep { name: string; done: boolean; detail?: string; }
@@ -184,7 +191,7 @@ export interface Api {
 	recover(code: string): Promise<void>;
 	signOut(): Promise<void>;
 	people(): Promise<PersonView[]>;
-	invitePerson(person: PersonInput): Promise<{ url: string }>;
+	invitePerson(person: PersonInput): Promise<Invitation>;
 	redeemInvite(token: string): Promise<PasskeyLink>;
 	resendInvite(id: string): Promise<{ url: string }>;
 	updatePerson(id: string, person: PersonInput): Promise<PersonView>;

@@ -1,6 +1,6 @@
 import { ApiError, NETWORK_MESSAGE, errorMessage } from './errors';
 import { mockApi } from './mock';
-import type { Api, AppView, BootstrapView, EnvSecrets, MeView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult } from './types';
+import type { Api, AppView, BootstrapView, EnvSecrets, Invitation, MeView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult } from './types';
 
 /** Mock mode: `?mock` in the URL or VITE_MOCK=1 gives fake data, no server needed. */
 export const useMock: boolean =
@@ -49,7 +49,7 @@ const realApi: Api = {
 	recover: async (code) => { await request<void>('POST', '/api/recover', { code }); },
 	signOut: async () => { await request<void>('POST', '/api/logout'); },
 	people: async () => list(await request<PersonView[]>('GET', '/api/people')),
-	invitePerson: (person) => request<{ url: string }>('POST', '/api/people', person),
+	invitePerson: (person) => request<Invitation>('POST', '/api/people', person),
 	redeemInvite: (token) => request<PasskeyLink>('POST', `/api/invites/${enc(token)}/redeem`),
 	resendInvite: (id) => request<{ url: string }>('POST', `/api/people/${enc(id)}/invite`),
 	updatePerson: (id, person) => request<PersonView>('PUT', `/api/people/${enc(id)}`, person),
