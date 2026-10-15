@@ -8,7 +8,14 @@
 	let person = $state<MeView | null>(null);
 	let error = $state('');
 	let busy = $state(false);
+	let passkeyUrl = $state('');
 	onMount(async () => { try { person = await api.me(); } catch (e) { error = messageOf(e); } });
+	async function setUpPasskey() {
+		busy = true; error = ''; passkeyUrl = '';
+		try { passkeyUrl = (await api.passkeyLink()).url; }
+		catch (e) { error = messageOf(e); }
+		finally { busy = false; }
+	}
 	async function signOut() {
 		busy = true; error = '';
 		try { await api.signOut(); window.location.assign('/'); }
@@ -21,5 +28,5 @@
 <div class="page">
 	<h1>Me</h1>
 	{#if error}<p class="notice bad" role="alert">{error}</p>{/if}
-	{#if person}<section class="card"><h2>{person.name}</h2><p class="muted">{person.login}</p><p>Roles: {person.roles.join(', ')}</p><button class="btn danger" type="button" disabled={busy} onclick={signOut}>{busy ? 'Signing out…' : 'Sign out'}</button></section>{/if}
+	{#if person}<section class="card"><h2>{person.name}</h2><p class="muted">{person.login}</p><p>Roles: {person.roles.join(', ')}</p><button class="btn" type="button" disabled={busy} onclick={setUpPasskey}>{busy ? 'Preparing…' : 'Set up a passkey'}</button>{#if passkeyUrl}<p>On the Pocket ID page, click Add passkey.</p><a class="btn primary" href={passkeyUrl} target="_blank" rel="noopener">Register passkey</a>{/if}<button class="btn danger" type="button" disabled={busy} onclick={signOut}>{busy ? 'Signing out…' : 'Sign out'}</button></section>{/if}
 </div>

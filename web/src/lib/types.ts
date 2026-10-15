@@ -171,12 +171,14 @@ export interface PersonInput {
 export interface MeView { personId: string; login: string; name: string; local: boolean; roles: HouseholdRole[]; }
 export interface BootstrapView { needsSetup: boolean; signInReady: boolean; }
 export interface SetupResult { loginUrl: string; recoveryCode: string; }
+export interface PasskeyLink { url: string; }
 export interface RemovalStep { name: string; done: boolean; detail?: string; }
 
 /** Everything the screens need from the server. The mock implements the same shape. */
 export interface Api {
 	bootstrap(): Promise<BootstrapView>;
 	me(): Promise<MeView>;
+	passkeyLink(): Promise<PasskeyLink>;
 	setupOwner(name: string, email: string): Promise<SetupResult>;
 	recover(code: string): Promise<void>;
 	signOut(): Promise<void>;

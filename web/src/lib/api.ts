@@ -1,6 +1,6 @@
 import { ApiError, NETWORK_MESSAGE, errorMessage } from './errors';
 import { mockApi } from './mock';
-import type { Api, AppView, BootstrapView, EnvSecrets, MeView, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult } from './types';
+import type { Api, AppView, BootstrapView, EnvSecrets, MeView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult } from './types';
 
 /** Mock mode: `?mock` in the URL or VITE_MOCK=1 gives fake data, no server needed. */
 export const useMock: boolean =
@@ -43,6 +43,7 @@ function fixApp(a: AppView): AppView {
 const realApi: Api = {
 	bootstrap: () => request<BootstrapView>('GET', '/api/bootstrap'),
 	me: () => request<MeView>('GET', '/api/me'),
+	passkeyLink: () => request<PasskeyLink>('POST', '/api/me/passkey-link'),
 	setupOwner: (name, email) => request<SetupResult>('POST', '/api/setup', { name, email }),
 	recover: async (code) => { await request<void>('POST', '/api/recover', { code }); },
 	signOut: async () => { await request<void>('POST', '/api/logout'); },

@@ -219,6 +219,30 @@ func TestRecoveryCodeIsLoopbackOnlyRateLimitedAndSingleUse(t *testing.T) {
 	}
 }
 
+func TestSignedInPersonCanRequestFreshPasskeyLink(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if err := r.store.RecordIdentityID(ctx, "owner", "provider-owner-id"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.SavePerson(ctx, core.Person{ID: "roleless", Name: "Roleless", Email: "roleless@example.test", IdentityID: "provider-roleless-id", Status: "signed_in"}); err != nil {
+		t.Fatal(err)
+	}
+	h := r.handler()
+	got := post(h, "/api/me/passkey-link", `{}`, &core.Viewer{PersonID: "roleless"})
+	if got.Code != http.StatusCreated || !strings.Contains(got.Body.String(), `"url":"http://localhost:1411/login/provider-roleless-id"`) {
+		t.Fatalf("fresh passkey link: %d %s", got.Code, got.Body)
+	}
+
+	if got = post(h, "/api/me/passkey-link", `{}`, nil); got.Code != http.StatusForbidden {
+		t.Fatalf("anonymous passkey link: %d %s", got.Code, got.Body)
+	}
+	r.idp.Fail = true
+	if got = post(h, "/api/me/passkey-link", `{}`, &core.Viewer{PersonID: "owner"}); got.Code != http.StatusInternalServerError {
+		t.Fatalf("unavailable identity provider: %d %s", got.Code, got.Body)
+	}
+}
+
 func TestHealthAndRecoveryStayAvailableWhenIdentityProviderFails(t *testing.T) {
 	r := newRig(t)
 	r.idp.Fail = true

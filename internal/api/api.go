@@ -125,6 +125,7 @@ func New(h *hub.Hub, opts Options) http.Handler {
 	mux.HandleFunc("POST /api/setup", s.setupOwner)
 	mux.HandleFunc("POST /api/recover", s.recoverCode)
 	mux.HandleFunc("GET /api/me", s.me)
+	mux.HandleFunc("POST /api/me/passkey-link", s.passkeyLink)
 	mux.HandleFunc("POST /api/logout", s.logout)
 	mux.HandleFunc("GET /api/people", s.people)
 	mux.HandleFunc("POST /api/people", s.invitePerson)
@@ -285,8 +286,8 @@ func apiAction(r *http.Request) (string, string) {
 	if parts[1] == "people" && len(parts) == 3 && r.Method == http.MethodDelete {
 		return hub.ActionRemoveUser, parts[2]
 	}
-	if parts[1] == "me" && r.Method == http.MethodGet {
-		return hub.ActionApps, ""
+	if parts[1] == "me" {
+		return hub.ActionSelf, ""
 	}
 	if parts[1] == "logout" {
 		return hub.ActionApps, ""
@@ -369,6 +370,15 @@ func (s *server) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"login": p.Email, "name": p.Name, "local": v.Local, "roles": p.Roles})
+}
+
+func (s *server) passkeyLink(w http.ResponseWriter, r *http.Request) {
+	link, err := s.hub.PasskeyLink(r.Context(), viewer(r).PersonID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"url": link})
 }
 
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {

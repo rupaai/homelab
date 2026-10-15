@@ -180,6 +180,7 @@ function work(a: AppView, e: EnvName, busy: string, kind: 'deploy' | 'promote' |
 export const mockApi: Api = {
 	bootstrap: () => delay({ needsSetup: false, signInReady: true }),
 	me: () => delay({ personId: 'owner', login: 'rupa@example.test', name: 'Rupa', local: true, roles: ['owner', 'admin'] }),
+	passkeyLink: () => delay({ url: 'http://localhost:7081/mock-passkey-link' }),
 	setupOwner: async () => delay({ loginUrl: 'http://localhost:7081', recoveryCode: '' }),
 	recover: async () => delay(undefined),
 	signOut: async () => delay(undefined),

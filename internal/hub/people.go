@@ -71,6 +71,18 @@ func (h *Hub) SetupOwner(ctx context.Context, p core.Person, recoveryHash string
 // People lists household accounts.
 func (h *Hub) People(ctx context.Context) ([]core.Person, error) { return h.store.People(ctx) }
 
+// PasskeyLink creates a fresh Pocket ID link for a signed-in person to register a passkey.
+func (h *Hub) PasskeyLink(ctx context.Context, personID string) (string, error) {
+	if h.ad.Identity == nil {
+		return "", userErr("Homelab's sign-in service is still starting. Try again in a moment.")
+	}
+	p, err := h.store.Person(ctx, personID)
+	if err != nil || p.Status != "signed_in" {
+		return "", userErr("Sign in to set up a passkey.")
+	}
+	return h.ad.Identity.LoginLink(ctx, providerID(p), 15*time.Minute)
+}
+
 // InvitePerson creates a person and returns a one-time Homelab invitation URL.
 func (h *Hub) InvitePerson(ctx context.Context, p core.Person) (string, error) {
 	if h.ad.Identity == nil {

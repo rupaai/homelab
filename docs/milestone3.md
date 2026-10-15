@@ -68,6 +68,7 @@ routes require owner or admin; app routes are checked against the requested app 
 | `GET /auth/start` | Optional safe relative `return` | Redirect to Pocket ID authorization with PKCE, state and nonce | Local computer |
 | `GET /auth/callback` | OIDC callback query | Creates a server-side session and redirects back | Local computer |
 | `GET /api/me` | — | Name, email and roles | Signed-in person |
+| `POST /api/me/passkey-link` | `{}` | Fresh Pocket ID passkey link | Any signed-in person |
 | `POST /api/logout` | — | 204 and expires the companion cookie | Local computer; CSRF header |
 | `POST /api/recover` | `{code}` | 204 and one-time owner session | Local computer; rate-limited |
 | `GET /recover/{token}` | — | One-time owner session from a 15-minute link | Local computer |

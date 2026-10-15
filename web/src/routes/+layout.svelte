@@ -9,7 +9,7 @@
 	import '../app.css';
 
 	let { children } = $props();
-	let authState = $state<'loading'|'setup'|'setupDone'|'signedOut'|'ready'|'error'>('loading');
+	let authState = $state<'loading'|'setup'|'setupDone'|'recoveryDone'|'signedOut'|'ready'|'error'>('loading');
 	let me = $state<MeView | null>(null);
 	let setupName = $state('');
 	let setupEmail = $state('');
@@ -19,6 +19,13 @@
 	let busy = $state(false);
 	let recoverySaved = $state(false);
 	let copied = $state(false);
+	let setupPageLeft = $state(false);
+	let setupPageHidden = false;
+	let setupCanContinue = $state(false);
+	let recoveryPasskeyUrl = $state('');
+	let recoveryPageLeft = $state(false);
+	let recoveryPageHidden = false;
+	let recoveryCanContinue = $state(false);
 	const admin = $derived(!!me?.roles.some((r) => r === 'owner' || r === 'admin'));
 	const builder = $derived(admin || !!me?.roles.includes('builder'));
 	const tabs = $derived.by(() => {
@@ -33,7 +40,17 @@
 		return items;
 	});
 
+	function trackReturnFromPocketID() {
+		if (document.visibilityState === 'hidden') {
+			if (setupPageLeft) setupPageHidden = true;
+			if (recoveryPageLeft) recoveryPageHidden = true;
+			return;
+		}
+		if (setupPageHidden) setupCanContinue = true;
+		if (recoveryPageHidden) recoveryCanContinue = true;
+	}
 	onMount(async () => {
+		document.addEventListener('visibilitychange', trackReturnFromPocketID);
 		try {
 			const status = await api.bootstrap();
 			if (status.needsSetup) { authState = 'setup'; return; }
@@ -52,7 +69,18 @@
 	}
 	async function recover(e: SubmitEvent) {
 		e.preventDefault(); busy = true; authError = '';
-		try { await api.recover(recoveryCode.trim()); me = await api.me(); authState = 'ready'; await goto('/'); }
+		try {
+			await api.recover(recoveryCode.trim());
+			me = await api.me();
+			authState = 'recoveryDone';
+			recoveryPasskeyUrl = (await api.passkeyLink()).url;
+		}
+		catch (e) { authError = messageOf(e); }
+		finally { busy = false; }
+	}
+	async function refreshRecoveryPasskeyLink() {
+		busy = true; authError = ''; recoveryPasskeyUrl = '';
+		try { recoveryPasskeyUrl = (await api.passkeyLink()).url; }
 		catch (e) { authError = messageOf(e); }
 		finally { busy = false; }
 	}
@@ -92,7 +120,9 @@
 		{:else if authState === 'setup'}
 			<div class="auth-card"><h1>Set up Homelab</h1><p>Start by creating the household owner. You’ll register a passkey with Pocket ID next.</p><form onsubmit={setup}><label for="owner-name">Your name</label><input id="owner-name" bind:value={setupName} autocomplete="name" required /><label for="owner-email">Email</label><input id="owner-email" type="email" bind:value={setupEmail} autocomplete="email" required />{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}<button class="btn primary" type="submit" disabled={busy}>{busy ? 'Setting up…' : 'Create owner account'}</button></form></div>
 		{:else if authState === 'setupDone' && setupResult}
-			<div class="auth-card"><h1>Save your recovery code</h1><p><strong>Save this now. It won’t be shown again.</strong> Keep it somewhere private.</p><p class="recovery-code"><code>{setupResult.recoveryCode}</code></p><div class="actions"><button class="btn" type="button" onclick={copyRecovery}>{copied ? 'Copied' : 'Copy code'}</button><button class="btn" type="button" onclick={downloadRecovery}>Download</button></div><p>Now add your passkey in Pocket ID. When you’re done, return here and sign in.</p><div class="actions"><a class="btn primary" href={setupResult.loginUrl} target="_blank" rel="noopener">Register passkey</a><a class="btn" href="/auth/start" data-sveltekit-reload>Continue to sign in</a></div>{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}</div>
+			<div class="auth-card"><h1>Save your recovery code</h1><p><strong>Save this now. It won’t be shown again.</strong> Keep it somewhere private.</p><p class="recovery-code"><code>{setupResult.recoveryCode}</code></p><div class="actions"><button class="btn" type="button" onclick={copyRecovery}>{copied ? 'Copied' : 'Copy code'}</button><button class="btn" type="button" onclick={downloadRecovery}>Download</button></div><p>On the Pocket ID page, click Add passkey.</p><a class="btn primary" href={setupResult.loginUrl} target="_blank" rel="noopener" onclick={() => setupPageLeft = true}>Register passkey</a>{#if setupCanContinue}<p>Welcome back. You can now sign in with your passkey.</p><a class="btn" href="/auth/start" data-sveltekit-reload>Continue to sign in</a>{/if}{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}</div>
+		{:else if authState === 'recoveryDone'}
+			<div class="auth-card"><h1>Recovery complete</h1><p>{me?.name}, you’re signed in. Set up a passkey so you can sign in without your recovery code next time.</p><p>On the Pocket ID page, click Add passkey.</p>{#if recoveryPasskeyUrl}<a class="btn primary" href={recoveryPasskeyUrl} target="_blank" rel="noopener" onclick={() => recoveryPageLeft = true}>Register passkey</a>{:else}<button class="btn primary" type="button" onclick={refreshRecoveryPasskeyLink} disabled={busy}>{busy ? 'Preparing…' : 'Set up a passkey'}</button>{/if}{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}{#if recoveryCanContinue}<p>Welcome back to Homelab.</p><a class="btn" href="/" data-sveltekit-reload>Continue to Homelab</a>{/if}</div>
 		{:else if authState === 'signedOut'}
 			<div class="auth-card"><h1>Sign in to Homelab</h1><p>Use the passkey you set up with Pocket ID.</p>{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}<a class="btn primary" href="/auth/start" data-sveltekit-reload>Sign in with passkey</a><details><summary>Use your recovery code</summary><form onsubmit={recover}><label for="recovery-code">Recovery code</label><input id="recovery-code" bind:value={recoveryCode} autocomplete="off" required />{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}<button class="btn" type="submit" disabled={busy}>{busy ? 'Checking…' : 'Sign in once'}</button></form></details></div>
 		{:else}

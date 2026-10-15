@@ -8,7 +8,7 @@ import (
 
 func TestCanRoleActionMatrix(t *testing.T) {
 	roles := []string{"owner", "admin", "builder", "member"}
-	actions := []string{ActionApps, ActionProjects, ActionLogs, ActionSecrets, ActionPeople, ActionSettings, ActionManage, ActionRemoveUser}
+	actions := []string{ActionSelf, ActionApps, ActionProjects, ActionLogs, ActionSecrets, ActionPeople, ActionSettings, ActionManage, ActionRemoveUser}
 	for _, role := range roles {
 		admin := role == "owner" || role == "admin"
 		for _, action := range actions {
@@ -20,6 +20,8 @@ func TestCanRoleActionMatrix(t *testing.T) {
 					}
 					want := false
 					switch action {
+					case ActionSelf:
+						want = true
 					case ActionManage, ActionSecrets, ActionPeople, ActionSettings:
 						want = admin
 					case ActionApps:

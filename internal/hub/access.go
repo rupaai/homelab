@@ -11,6 +11,7 @@ const (
 	ActionSettings   = "settings"
 	ActionRemoveUser = "remove-person"
 	ActionManage     = "manage"
+	ActionSelf       = "self"
 )
 
 // Can is the API access policy shared by every request and proxy check.
@@ -27,6 +28,8 @@ func Can(p core.Person, action, app string) bool {
 	build := grant == "build"
 	use := grant == "use" || build
 	switch action {
+	case ActionSelf:
+		return true
 	case ActionManage:
 		return admin
 	case ActionApps:
