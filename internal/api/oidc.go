@@ -149,6 +149,9 @@ func (s *server) authCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msgInternal, http.StatusInternalServerError)
 		return
 	}
+	if err := s.store.RevokeInvites(r.Context(), p.ID); err != nil {
+		s.log.Error("revoke accepted invites failed", "err", err)
+	}
 	if err := s.issueSession(w, r, p.ID); err != nil {
 		s.log.Error("create session failed", "err", err)
 		http.Error(w, msgInternal, http.StatusInternalServerError)

@@ -28,5 +28,5 @@
 <div class="page">
 	<h1>Me</h1>
 	{#if error}<p class="notice bad" role="alert">{error}</p>{/if}
-	{#if person}<section class="card"><h2>{person.name}</h2><p class="muted">{person.login}</p><p>Roles: {person.roles.join(', ')}</p><button class="btn" type="button" disabled={busy} onclick={setUpPasskey}>{busy ? 'Preparing…' : 'Set up a passkey'}</button>{#if passkeyUrl}<p>On the Pocket ID page, click Add passkey.</p><a class="btn primary" href={passkeyUrl} target="_blank" rel="noopener">Register passkey</a>{/if}<button class="btn danger" type="button" disabled={busy} onclick={signOut}>{busy ? 'Signing out…' : 'Sign out'}</button></section>{/if}
+	{#if person}<section class="card"><h2>{person.name}</h2><p class="muted">{person.login}</p><p>Roles: {person.roles.join(', ')}</p><button class="btn" type="button" disabled={busy} onclick={setUpPasskey}>{busy ? 'Preparing…' : 'Set up a passkey'}</button>{#if passkeyUrl}<p>Pocket ID will open its passkey setup page. On that page, click Add passkey to register this device.</p><a class="btn primary" href={passkeyUrl} target="_blank" rel="noopener">Register passkey</a>{/if}<button class="btn danger" type="button" disabled={busy} onclick={signOut}>{busy ? 'Signing out…' : 'Sign out'}</button></section>{/if}
 </div>

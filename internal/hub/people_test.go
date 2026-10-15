@@ -29,9 +29,27 @@ func TestSetupOwnerStoresCanonicalIdentityID(t *testing.T) {
 	if !strings.HasSuffix(link, "/login/"+ownerID) {
 		t.Fatalf("login link=%q", link)
 	}
+	if r.identity.LoginLinkTTL != time.Hour {
+		t.Fatalf("setup login link TTL = %s, want %s for Pocket ID's long code", r.identity.LoginLinkTTL, time.Hour)
+	}
 }
 
-func TestInviteIsSingleUseAndHashed(t *testing.T) {
+func TestPasskeyLinkRequestsLongPocketIDCode(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	p := core.Person{ID: "owner", IdentityID: "provider-owner", Name: "Owner", Email: "owner@example.test", Status: "signed_in"}
+	if err := r.store.SavePerson(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.hub.PasskeyLink(ctx, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if r.identity.LoginLinkTTL != time.Hour {
+		t.Fatalf("passkey login link TTL = %s, want %s for Pocket ID's long code", r.identity.LoginLinkTTL, time.Hour)
+	}
+}
+
+func TestInviteCanIssueFreshLinksUntilSignInAndIsHashed(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
 	if _, err := r.store.AddApp(ctx, structApp()); err != nil {
@@ -52,8 +70,11 @@ func TestInviteIsSingleUseAndHashed(t *testing.T) {
 	if _, err := r.hub.RedeemInvite(ctx, token); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.hub.RedeemInvite(ctx, token); err == nil {
-		t.Fatal("used invite was accepted again")
+	if r.identity.LoginLinkTTL != time.Hour {
+		t.Fatalf("invite login link TTL = %s, want %s for Pocket ID's long login code", r.identity.LoginLinkTTL, time.Hour)
+	}
+	if _, err := r.hub.RedeemInvite(ctx, token); err != nil {
+		t.Fatalf("invite could not issue a fresh link: %v", err)
 	}
 	people, err := r.hub.People(ctx)
 	if err != nil || len(people) != 1 || people[0].Status != "invited" {
@@ -61,6 +82,12 @@ func TestInviteIsSingleUseAndHashed(t *testing.T) {
 	}
 	if got := r.identity.Users[people[0].ID].Groups; len(got) != 2 || got[0] != "app:movies" || got[1] != "role:member" {
 		t.Fatalf("identity groups=%v", got)
+	}
+	if err := r.store.RecordSignIn(ctx, people[0].ID, "subject"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.hub.RedeemInvite(ctx, token); err == nil {
+		t.Fatal("invite was accepted after sign-in")
 	}
 }
 

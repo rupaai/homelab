@@ -169,7 +169,7 @@ export interface PersonInput {
 	grants: Record<string, 'use' | 'build'>;
 }
 export interface MeView { personId: string; login: string; name: string; local: boolean; roles: HouseholdRole[]; }
-export interface BootstrapView { needsSetup: boolean; signInReady: boolean; }
+export interface BootstrapView { needsSetup: boolean; signInReady: boolean; ownerNeedsPasskey?: boolean; }
 export interface SetupResult { loginUrl: string; recoveryCode: string; }
 export interface PasskeyLink { url: string; }
 export interface RemovalStep { name: string; done: boolean; detail?: string; }
@@ -177,6 +177,7 @@ export interface RemovalStep { name: string; done: boolean; detail?: string; }
 /** Everything the screens need from the server. The mock implements the same shape. */
 export interface Api {
 	bootstrap(): Promise<BootstrapView>;
+	initialOwnerPasskeyLink(): Promise<PasskeyLink>;
 	me(): Promise<MeView>;
 	passkeyLink(): Promise<PasskeyLink>;
 	setupOwner(name: string, email: string): Promise<SetupResult>;
@@ -184,6 +185,7 @@ export interface Api {
 	signOut(): Promise<void>;
 	people(): Promise<PersonView[]>;
 	invitePerson(person: PersonInput): Promise<{ url: string }>;
+	redeemInvite(token: string): Promise<PasskeyLink>;
 	resendInvite(id: string): Promise<{ url: string }>;
 	updatePerson(id: string, person: PersonInput): Promise<PersonView>;
 	removePerson(id: string): Promise<RemovalStep[]>;

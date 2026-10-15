@@ -180,37 +180,32 @@ func (s *Store) DeletePerson(ctx context.Context, id string) error {
 	return nil
 }
 
-// StoreInvite saves an already hashed, single-use invitation.
+// StoreInvite saves an already hashed invitation that can be redeemed until
+// its expiry or the invited person signs in.
 func (s *Store) StoreInvite(ctx context.Context, hash []byte, personID string, expires time.Time) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO invites(token_hash,person_id,expires_at,created_at) VALUES(?,?,?,?)`, hash, personID, expires.UnixMilli(), s.now().UnixMilli())
 	return err
 }
 
-// RevokeInvites removes every unused link for a person.
+// RevokeInvites removes every invite for a person.
 func (s *Store) RevokeInvites(ctx context.Context, personID string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM invites WHERE person_id=? AND used_at IS NULL`, personID)
+	_, err := s.db.ExecContext(ctx, `DELETE FROM invites WHERE person_id=?`, personID)
 	return err
 }
 
-// ConsumeInvite marks an unexpired invitation used exactly once.
+// ConsumeInvite returns the person for an unexpired invite. The invite remains
+// redeemable until sign-in so a fresh one-time identity-provider link can be
+// issued if the previous one expired or was opened in the wrong flow.
 func (s *Store) ConsumeInvite(ctx context.Context, hash []byte) (string, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback()
 	var id string
-	err = tx.QueryRowContext(ctx, `SELECT person_id FROM invites WHERE token_hash=? AND used_at IS NULL AND expires_at>?`, hash, s.now().UnixMilli()).Scan(&id)
+	err := s.db.QueryRowContext(ctx, `SELECT person_id FROM invites WHERE token_hash=? AND expires_at>?`, hash, s.now().UnixMilli()).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", core.ErrNotFound
 	}
 	if err != nil {
 		return "", err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE invites SET used_at=? WHERE token_hash=? AND used_at IS NULL`, s.now().UnixMilli(), hash); err != nil {
-		return "", err
-	}
-	return id, tx.Commit()
+	return id, nil
 }
 
 // PutSession stores a digest, never its browser token.

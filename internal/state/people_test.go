@@ -40,8 +40,14 @@ func TestPeopleMigrationAndSingleUseRecords(t *testing.T) {
 	if id, err := s.ConsumeInvite(ctx, inviteHash); err != nil || id != p.ID {
 		t.Fatalf("consume=%q err=%v", id, err)
 	}
+	if id, err := s.ConsumeInvite(ctx, inviteHash); err != nil || id != p.ID {
+		t.Fatalf("invite could not be redeemed again: id=%q err=%v", id, err)
+	}
+	if err = s.RevokeInvites(ctx, p.ID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = s.ConsumeInvite(ctx, inviteHash); !errors.Is(err, core.ErrNotFound) {
-		t.Fatalf("invite reused: %v", err)
+		t.Fatalf("revoked invite accepted: %v", err)
 	}
 	expiredHash := make([]byte, 32)
 	if _, err = rand.Read(expiredHash); err != nil {

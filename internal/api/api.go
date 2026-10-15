@@ -123,6 +123,7 @@ func New(h *hub.Hub, opts Options) http.Handler {
 	mux.HandleFunc("GET /auth/app", s.appAuth)
 	mux.HandleFunc("GET /api/bootstrap", s.bootstrapStatus)
 	mux.HandleFunc("POST /api/setup", s.setupOwner)
+	mux.HandleFunc("POST /api/setup/passkey-link", s.initialOwnerPasskeyLink)
 	mux.HandleFunc("POST /api/recover", s.recoverCode)
 	mux.HandleFunc("GET /api/me", s.me)
 	mux.HandleFunc("POST /api/me/passkey-link", s.passkeyLink)
@@ -132,7 +133,7 @@ func New(h *hub.Hub, opts Options) http.Handler {
 	mux.HandleFunc("PUT /api/people/{id}", s.updatePerson)
 	mux.HandleFunc("DELETE /api/people/{id}", s.removePerson)
 	mux.HandleFunc("POST /api/people/{id}/invite", s.resendInvite)
-	mux.HandleFunc("GET /invite/{token}", s.inviteLanding)
+	mux.HandleFunc("POST /api/invites/{token}/redeem", s.redeemInvite)
 	mux.HandleFunc("GET /recover/{token}", s.recoverLink)
 	mux.HandleFunc("GET /api/apps", s.listApps)
 	mux.HandleFunc("GET /api/projects", s.listProjects)
@@ -177,7 +178,7 @@ func New(h *hub.Hub, opts Options) http.Handler {
 		}
 		if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
 			hd.Set("Cache-Control", "no-store")
-			if r.URL.Path == "/api/bootstrap" || (r.URL.Path == "/api/setup" && r.Method == http.MethodPost) || (r.URL.Path == "/api/recover" && r.Method == http.MethodPost) || (r.URL.Path == "/api/logout" && r.Method == http.MethodPost) {
+			if r.URL.Path == "/api/bootstrap" || (r.URL.Path == "/api/setup" && r.Method == http.MethodPost) || (r.URL.Path == "/api/setup/passkey-link" && r.Method == http.MethodPost) || (r.URL.Path == "/api/recover" && r.Method == http.MethodPost) || (r.URL.Path == "/api/logout" && r.Method == http.MethodPost) || (strings.HasPrefix(r.URL.Path, "/api/invites/") && strings.HasSuffix(r.URL.Path, "/redeem") && r.Method == http.MethodPost) {
 				mux.ServeHTTP(w, r)
 				return
 			}
@@ -447,17 +448,29 @@ func (s *server) resendInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"url": link})
 }
-func (s *server) inviteLanding(w http.ResponseWriter, r *http.Request) {
+func (s *server) redeemInvite(w http.ResponseWriter, r *http.Request) {
 	if !loopbackHost(r.Host) {
-		http.Error(w, "Open this invite on the Homelab computer.", http.StatusForbidden)
+		writeErr(w, http.StatusForbidden, "Open this invite on the Homelab computer.")
+		return
+	}
+	if r.Header.Get(csrfHeader) != "1" {
+		writeErr(w, http.StatusForbidden, "That request didn't come from the Homelab companion.")
+		return
+	}
+	if ct := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]); !strings.EqualFold(ct, "application/json") {
+		writeErr(w, http.StatusUnsupportedMediaType, "Send JSON with Content-Type: application/json.")
+		return
+	}
+	var body struct{}
+	if !decode(w, r, &body, true) {
 		return
 	}
 	link, err := s.hub.RedeemInvite(r.Context(), r.PathValue("token"))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusGone)
+		writeErr(w, http.StatusGone, err.Error())
 		return
 	}
-	http.Redirect(w, r, link, http.StatusSeeOther)
+	writeJSON(w, http.StatusCreated, map[string]string{"url": link})
 }
 
 func (s *server) recoverLink(w http.ResponseWriter, r *http.Request) {

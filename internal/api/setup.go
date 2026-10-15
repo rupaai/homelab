@@ -25,7 +25,42 @@ func (s *server) bootstrapStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, client, secret := s.oidc.values()
-	writeJSON(w, http.StatusOK, map[string]bool{"needsSetup": !exists, "signInReady": client != "" && secret != ""})
+	ownerNeedsPasskey := false
+	if exists {
+		people, err := s.store.People(r.Context())
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		for _, person := range people {
+			if hasRole(person, "owner") && person.Status == "invited" {
+				ownerNeedsPasskey = true
+				break
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"needsSetup": !exists, "signInReady": client != "" && secret != "", "ownerNeedsPasskey": ownerNeedsPasskey})
+}
+
+func (s *server) initialOwnerPasskeyLink(w http.ResponseWriter, r *http.Request) {
+	if !loopbackHost(r.Host) {
+		writeErr(w, http.StatusForbidden, "Open Homelab at http://localhost:7080 on this computer.")
+		return
+	}
+	if r.Header.Get(csrfHeader) != "1" {
+		writeErr(w, http.StatusForbidden, "That request didn't come from the Homelab companion.")
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]), "application/json") {
+		writeErr(w, http.StatusUnsupportedMediaType, "Send JSON with Content-Type: application/json.")
+		return
+	}
+	link, err := s.hub.InitialOwnerPasskeyLink(r.Context())
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"url": link})
 }
 
 func (s *server) setupOwner(w http.ResponseWriter, r *http.Request) {

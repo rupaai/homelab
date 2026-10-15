@@ -42,6 +42,7 @@ function fixApp(a: AppView): AppView {
 
 const realApi: Api = {
 	bootstrap: () => request<BootstrapView>('GET', '/api/bootstrap'),
+	initialOwnerPasskeyLink: () => request<PasskeyLink>('POST', '/api/setup/passkey-link', {}),
 	me: () => request<MeView>('GET', '/api/me'),
 	passkeyLink: () => request<PasskeyLink>('POST', '/api/me/passkey-link'),
 	setupOwner: (name, email) => request<SetupResult>('POST', '/api/setup', { name, email }),
@@ -49,6 +50,7 @@ const realApi: Api = {
 	signOut: async () => { await request<void>('POST', '/api/logout'); },
 	people: async () => list(await request<PersonView[]>('GET', '/api/people')),
 	invitePerson: (person) => request<{ url: string }>('POST', '/api/people', person),
+	redeemInvite: (token) => request<PasskeyLink>('POST', `/api/invites/${enc(token)}/redeem`),
 	resendInvite: (id) => request<{ url: string }>('POST', `/api/people/${enc(id)}/invite`),
 	updatePerson: (id, person) => request<PersonView>('PUT', `/api/people/${enc(id)}`, person),
 	removePerson: (id) => request<RemovalStep[]>('DELETE', `/api/people/${enc(id)}`),

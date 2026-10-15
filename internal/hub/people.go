@@ -55,7 +55,7 @@ func (h *Hub) SetupOwner(ctx context.Context, p core.Person, recoveryHash string
 		_ = h.store.DeletePerson(ctx, p.ID)
 		return "", err
 	}
-	link, err := h.ad.Identity.LoginLink(ctx, identityID, 15*time.Minute)
+	link, err := h.ad.Identity.LoginLink(ctx, identityID, time.Hour)
 	if err != nil {
 		_ = h.store.DeletePerson(ctx, p.ID)
 		return "", err
@@ -80,7 +80,28 @@ func (h *Hub) PasskeyLink(ctx context.Context, personID string) (string, error) 
 	if err != nil || p.Status != "signed_in" {
 		return "", userErr("Sign in to set up a passkey.")
 	}
-	return h.ad.Identity.LoginLink(ctx, providerID(p), 15*time.Minute)
+	return h.ad.Identity.LoginLink(ctx, providerID(p), time.Hour)
+}
+
+// InitialOwnerPasskeyLink reissues the setup link while the initial owner has
+// not completed their first Pocket ID sign-in.
+func (h *Hub) InitialOwnerPasskeyLink(ctx context.Context) (string, error) {
+	people, err := h.store.People(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, p := range people {
+		if contains(p.Roles, "owner") {
+			if p.Status != "invited" || p.IdentityID == "" {
+				return "", userErr("The owner has already signed in. Use recovery to sign in and set up a passkey from Me.")
+			}
+			if h.ad.Identity == nil {
+				return "", userErr("Homelab's sign-in service is still starting. Try again in a moment.")
+			}
+			return h.ad.Identity.LoginLink(ctx, p.IdentityID, time.Hour)
+		}
+	}
+	return "", userErr("Homelab hasn't been set up yet.")
 }
 
 // InvitePerson creates a person and returns a one-time Homelab invitation URL.
@@ -148,7 +169,7 @@ func personGroups(p core.Person) []string {
 	return out
 }
 
-// RedeemInvite consumes an invite and asks the identity provider for the passkey setup link.
+// RedeemInvite issues a fresh identity-provider link for an unexpired invite.
 func (h *Hub) RedeemInvite(ctx context.Context, token string) (string, error) {
 	sum := sha256.Sum256([]byte(token))
 	id, err := h.store.ConsumeInvite(ctx, sum[:])
@@ -156,10 +177,10 @@ func (h *Hub) RedeemInvite(ctx context.Context, token string) (string, error) {
 		return "", userErr("This invite has expired or was already used. Ask the owner to send a new one.")
 	}
 	p, err := h.store.Person(ctx, id)
-	if err != nil {
+	if err != nil || p.Status != "invited" {
 		return "", userErr("This invite has expired or was already used. Ask the owner to send a new one.")
 	}
-	return h.ad.Identity.LoginLink(ctx, providerID(p), 15*time.Minute)
+	return h.ad.Identity.LoginLink(ctx, providerID(p), time.Hour)
 }
 
 // ResendInvite revokes the previous link and creates another one for an invited person.

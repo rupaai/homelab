@@ -126,6 +126,28 @@ func TestBootstrapCreatesOwnerAndOneTimeRecoveryCode(t *testing.T) {
 	}
 }
 
+func TestInitialOwnerCanRequestFreshPasskeyLinkUntilSignIn(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if err := r.store.SavePerson(ctx, core.Person{ID: "owner", Name: "Owner", Email: "owner@example.test", IdentityID: "pocket-owner", Status: "invited", Roles: []string{"owner", "admin"}}); err != nil {
+		t.Fatal(err)
+	}
+	h := r.handler()
+	path := "/api/setup/passkey-link"
+	if got := post(h, path, `{}`, nil); got.Code != http.StatusCreated || !strings.Contains(got.Body.String(), `"url":"http://localhost:1411/login/pocket-owner"`) {
+		t.Fatalf("fresh initial-owner link: %d %s", got.Code, got.Body)
+	}
+	if r.idp.LoginLinkTTL != time.Hour {
+		t.Fatalf("initial owner link TTL = %s, want %s", r.idp.LoginLinkTTL, time.Hour)
+	}
+	if err := r.store.RecordSignIn(ctx, "owner", "pocket-owner"); err != nil {
+		t.Fatal(err)
+	}
+	if got := post(h, path, `{}`, nil); got.Code != http.StatusBadRequest {
+		t.Fatalf("signed-in owner could request setup-only link: %d %s", got.Code, got.Body)
+	}
+}
+
 func TestConcurrentSetupCannotCreateTwoOwners(t *testing.T) {
 	r := newRig(t)
 	if err := r.store.DeletePerson(context.Background(), "owner"); err != nil {
@@ -571,6 +593,9 @@ func TestStatic(t *testing.T) {
 	if rec.Header().Get("Cache-Control") != "no-cache" {
 		t.Errorf("index cache: %q", rec.Header().Get("Cache-Control"))
 	}
+	if rec := do(h, "GET", "/invite/invite-token", "", nil); rec.Code != 200 || rec.Header().Get("Location") != "" {
+		t.Fatalf("invite should open the Homelab registration screen: %d location=%q", rec.Code, rec.Header().Get("Location"))
+	}
 	if rec := do(h, "GET", "/favicon.png", "", nil); rec.Body.String() != "png" {
 		t.Errorf("file: %q", rec.Body)
 	}
@@ -586,6 +611,67 @@ func TestStatic(t *testing.T) {
 	csp := hd.Get("Content-Security-Policy")
 	if !strings.Contains(csp, "script-src 'self' 'sha256-") || strings.Contains(strings.Split(csp, "style-src")[0], "unsafe-inline") {
 		t.Errorf("csp: %s", csp)
+	}
+}
+
+func TestInviteRedemptionReturnsPasskeyRegistrationLink(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	invite, err := r.h.InvitePerson(ctx, core.Person{Name: "New person", Email: "new@example.test", Roles: []string{"member"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := strings.TrimPrefix(invite, "http://localhost:7080/invite/")
+	h := r.handler()
+	path := "/api/invites/" + token + "/redeem"
+	got := post(h, path, `{}`, nil)
+	if got.Code != http.StatusCreated {
+		t.Fatalf("redeem invite: %d %s", got.Code, got.Body)
+	}
+	var response struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(got.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	const pocketIDLoginPrefix = "http://localhost:1411/login/"
+	if !strings.HasPrefix(response.URL, pocketIDLoginPrefix) || strings.TrimPrefix(response.URL, pocketIDLoginPrefix) == "" {
+		t.Fatalf("invite returned invalid Pocket ID passkey link: %q", response.URL)
+	}
+	if r.idp.LoginLinkTTL != time.Hour {
+		t.Fatalf("invite login link TTL = %s, want %s", r.idp.LoginLinkTTL, time.Hour)
+	}
+	if got = post(h, path, `{}`, nil); got.Code != http.StatusCreated {
+		t.Fatalf("redeem invite for a fresh Pocket ID link: %d %s", got.Code, got.Body)
+	}
+	people, err := r.h.People(ctx)
+	if err != nil || len(people) != 2 {
+		t.Fatalf("invited people=%+v err=%v", people, err)
+	}
+	var invited core.Person
+	for _, person := range people {
+		if person.Email == "new@example.test" {
+			invited = person
+		}
+	}
+	if invited.ID == "" {
+		t.Fatal("invited person not found")
+	}
+	if err := r.store.RecordSignIn(ctx, invited.ID, "pocket-id-subject"); err != nil {
+		t.Fatal(err)
+	}
+	if got = post(h, path, `{}`, nil); got.Code != http.StatusGone {
+		t.Fatalf("redeem accepted invite after sign-in: %d %s", got.Code, got.Body)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+	req.Host = "example.com"
+	req.Header.Set("X-Homelab-Request", "1")
+	req.Header.Set("Content-Type", "application/json")
+	blocked := httptest.NewRecorder()
+	h.ServeHTTP(blocked, req)
+	if blocked.Code != http.StatusForbidden {
+		t.Fatalf("redeem remote invite: %d %s", blocked.Code, blocked.Body)
 	}
 }
 
@@ -670,4 +756,45 @@ func TestMilestone2Endpoints(t *testing.T) {
 	if rec := do(h, "GET", "/api/apps/movies", "", &local); rec.Code != 404 {
 		t.Fatalf("after remove: %d", rec.Code)
 	}
+}
+
+// A Pocket ID one-time link works once. Someone without a passkey who leaves the
+// page, or whose link was used or expired, must get a newly issued link from the
+// same Homelab page instead of landing on Pocket ID's passkey sign-in page.
+func TestPasskeyLinksAreReissuedAfterAnEarlierLinkIsUsed(t *testing.T) {
+	t.Run("initial owner setup", func(t *testing.T) {
+		r := newRig(t)
+		ctx := context.Background()
+		if err := r.store.SavePerson(ctx, core.Person{ID: "owner", Name: "Owner", Email: "owner@example.test", IdentityID: "pocket-owner", Status: "invited", Roles: []string{"owner", "admin"}}); err != nil {
+			t.Fatal(err)
+		}
+		h := r.handler()
+		for attempt := 1; attempt <= 3; attempt++ {
+			if got := post(h, "/api/setup/passkey-link", `{}`, nil); got.Code != http.StatusCreated {
+				t.Fatalf("attempt %d: %d %s", attempt, got.Code, got.Body)
+			}
+			if r.idp.LoginLinkCalls != attempt {
+				t.Fatalf("attempt %d reused an earlier one-time link (provider calls = %d)", attempt, r.idp.LoginLinkCalls)
+			}
+		}
+	})
+	t.Run("invite", func(t *testing.T) {
+		r := newRig(t)
+		ctx := context.Background()
+		invite, err := r.h.InvitePerson(ctx, core.Person{Name: "New person", Email: "new@example.test", Roles: []string{"member"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		h := r.handler()
+		path := "/api/invites/" + strings.TrimPrefix(invite, "http://localhost:7080/invite/") + "/redeem"
+		before := r.idp.LoginLinkCalls
+		for attempt := 1; attempt <= 3; attempt++ {
+			if got := post(h, path, `{}`, nil); got.Code != http.StatusCreated {
+				t.Fatalf("attempt %d: %d %s", attempt, got.Code, got.Body)
+			}
+			if r.idp.LoginLinkCalls != before+attempt {
+				t.Fatalf("attempt %d reused an earlier one-time link (provider calls = %d)", attempt, r.idp.LoginLinkCalls-before)
+			}
+		}
+	})
 }

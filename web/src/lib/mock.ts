@@ -179,6 +179,7 @@ function work(a: AppView, e: EnvName, busy: string, kind: 'deploy' | 'promote' |
 
 export const mockApi: Api = {
 	bootstrap: () => delay({ needsSetup: false, signInReady: true }),
+	initialOwnerPasskeyLink: () => delay({ url: 'http://localhost:7081/lc/mock-token' }),
 	me: () => delay({ personId: 'owner', login: 'rupa@example.test', name: 'Rupa', local: true, roles: ['owner', 'admin'] }),
 	passkeyLink: () => delay({ url: 'http://localhost:7081/mock-passkey-link' }),
 	setupOwner: async () => delay({ loginUrl: 'http://localhost:7081', recoveryCode: '' }),
@@ -190,6 +191,7 @@ export const mockApi: Api = {
 		household.push(entry);
 		return delay({ url: 'http://localhost:7080/mock-invite' });
 	},
+	redeemInvite: async () => delay({ url: 'http://localhost:7081/mock-passkey-link' }),
 	async resendInvite(id: string) {
 		if (!household.some((p) => p.id === id && p.status === 'invited')) throw new ApiError('That invite is no longer available.', 400);
 		return delay({ url: 'http://localhost:7080/mock-invite' });
