@@ -196,6 +196,11 @@ export interface Api {
 	resendInvite(id: string): Promise<{ url: string }>;
 	updatePerson(id: string, person: PersonInput): Promise<PersonView>;
 	removePerson(id: string): Promise<RemovalStep[]>;
+	pushKey(): Promise<string>;
+	subscribePush(sub: PushSubscriptionInput): Promise<void>;
+	unsubscribePush(endpoint: string): Promise<void>;
+	testPush(): Promise<number>;
+	resources(): Promise<ResourcesView>;
 	apps(): Promise<AppView[]>;
 	projects(): Promise<AppView[]>;
 	addApp(repo: string, branch: string): Promise<AppView>;
@@ -215,3 +220,8 @@ export interface Api {
 	setSetting(name: string, value: string): Promise<void>;
 	deleteSetting(name: string): Promise<void>;
 }
+
+export interface PushSubscriptionInput { endpoint: string; p256dh: string; auth: string; device: string; }
+export interface DeviceUsage { cpuPercent: number; memUsed: number; memTotal: number; diskUsed: number; diskTotal: number; }
+export interface AppUsage { app: string; env: EnvName; name: string; cpuPercent: number; memUsed: number; }
+export interface ResourcesView { device?: DeviceUsage; apps: AppUsage[]; problems?: string[]; }

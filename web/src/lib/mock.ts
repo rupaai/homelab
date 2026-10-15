@@ -208,6 +208,17 @@ export const mockApi: Api = {
 		Object.assign(entry, JSON.parse(JSON.stringify(person)) as PersonInput);
 		return delay(structuredClone(entry));
 	},
+	pushKey: () => delay('BMockPublicKeyForTheCompanionInMockMode'),
+	subscribePush: () => delay(undefined),
+	unsubscribePush: () => delay(undefined),
+	testPush: () => delay(1),
+	resources: () => delay({
+		device: { cpuPercent: 12.4, memUsed: 5.1e9, memTotal: 16e9, diskUsed: 312e9, diskTotal: 494e9 },
+		apps: [
+			{ app: 'movie-night', env: 'prod', name: 'Movie Night', cpuPercent: 1.8, memUsed: 182e6 },
+			{ app: 'movie-night', env: 'dev', name: 'Movie Night', cpuPercent: 0.4, memUsed: 121e6 }
+		]
+	}),
 	async removePerson(id: string) {
 		const entry = household.find((p) => p.id === id);
 		if (!entry) throw new ApiError("That person isn't in Homelab.", 404);

@@ -44,6 +44,7 @@ type Config struct {
 	SmokeTimeout   time.Duration    // longest a smoke test may run; default 5m
 	Owners         []string         // Tailscale logins of the owners, from config.yaml
 	Identity       *identity.Signer // signs the identity headers apps get (A2); nil sends none
+	PushPublicKey  string           // VAPID public key browsers subscribe with (O4)
 	Now            func() time.Time
 	Logger         *slog.Logger
 }
@@ -62,6 +63,8 @@ type Adapters struct {
 	Identity  core.Identity
 	Email     core.Email
 	Remote    core.RemoteAccess // may be nil: local addresses, nobody joins from elsewhere
+	Notifier  core.Notifier     // may be nil: no push notifications
+	Resources core.Resources    // may be nil: no resource view or disk alert
 }
 
 // Hub is the core. Create it with New and run it with Run.
@@ -86,6 +89,7 @@ type Hub struct {
 	remotePolicy     string    // the tailnet rules last sent
 	remotePolicyAt   time.Time // when they were sent
 	remoteObservedAt time.Time // when the tailnet was last looked at
+	diskCheckedAt    time.Time // when the disk was last checked for the full-disk alert
 	kick             chan struct{}
 }
 
@@ -170,6 +174,7 @@ func (h *Hub) Run(ctx context.Context) {
 	go h.every(ctx, h.cfg.HealthEvery, func(ctx context.Context) {
 		h.CheckHealth(ctx)
 		h.AutoPromote(ctx)
+		h.checkAlerts(ctx)
 	})
 	if h.ad.Mirror != nil {
 		go h.every(ctx, h.cfg.MirrorEvery, h.SyncMirrors)

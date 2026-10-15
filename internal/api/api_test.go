@@ -76,6 +76,7 @@ func newRig(t *testing.T) *rig {
 	h := hub.New(hub.Config{DataDir: dir}, st, hub.Adapters{
 		Source: flakySource{src, fail}, Builder: fake.NewBuilder(), Registry: fake.NewRegistry(), Deployer: fake.NewDeployer(),
 		Addresses: fake.NewAddresses(), Health: fake.NewHealth(), Secrets: fake.NewSecrets(), Identity: idp, Email: fake.Email{},
+		Notifier: fake.NewNotifier(), Resources: &fake.Resources{Usage: core.DeviceUsage{DiskUsed: 1, DiskTotal: 2}},
 	})
 	return &rig{h: h, src: src, fail: fail, store: st, idp: idp}
 }
@@ -834,5 +835,36 @@ func TestTailnetLoginIsTheSignIn(t *testing.T) {
 	}
 	if rec := do(h, "POST", "/api/logout", "", sam); rec.Code == 200 {
 		t.Fatalf("logout without the companion header = %d", rec.Code)
+	}
+}
+
+func TestPushResourcesAndBuilderActivity(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if _, err := r.store.AddApp(ctx, state.App{ID: "movies", Name: "Movies", Repo: "a/b", Manifest: []byte("id: movies"), Promotion: "manual"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.SavePerson(ctx, core.Person{ID: "b", Name: "B", Status: "signed_in", Roles: []string{"builder"}, Grants: map[string]string{"movies": "build"}}); err != nil {
+		t.Fatal(err)
+	}
+	h := r.handler()
+	b := &core.Viewer{Local: true, PersonID: "b"}
+	sub := `{"endpoint":"https://fcm.googleapis.com/fcm/send/x","p256dh":"k","auth":"a","device":"Phone"}`
+	if rec := post(h, "/api/push/subscriptions", sub, b); rec.Code != 204 {
+		t.Fatalf("subscribe = %d %s", rec.Code, rec.Body)
+	}
+	if rec := post(h, "/api/push/test", "", b); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"sent":1`) {
+		t.Fatalf("test push = %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(h, "GET", "/api/activity?app=movies", "", b); rec.Code != 200 {
+		t.Fatalf("builder activity for their app = %d", rec.Code)
+	}
+	for _, path := range []string{"/api/activity", "/api/activity?app=other", "/api/resources"} {
+		if rec := do(h, "GET", path, "", b); rec.Code != 403 {
+			t.Errorf("builder %s = %d, want 403", path, rec.Code)
+		}
+	}
+	if rec := do(h, "GET", "/api/resources", "", &local); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"diskTotal":2`) {
+		t.Fatalf("resources = %d %s", rec.Code, rec.Body)
 	}
 }

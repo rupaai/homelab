@@ -154,6 +154,11 @@ func New(h *hub.Hub, opts Options) http.Handler {
 	mux.HandleFunc("GET /api/settings/secrets", s.settings)
 	mux.HandleFunc("PUT /api/settings/secrets/{name}", s.setSetting)
 	mux.HandleFunc("DELETE /api/settings/secrets/{name}", s.deleteSetting)
+	mux.HandleFunc("GET /api/push/key", s.pushKey)
+	mux.HandleFunc("POST /api/push/subscriptions", s.subscribePush)
+	mux.HandleFunc("DELETE /api/push/subscriptions", s.unsubscribePush)
+	mux.HandleFunc("POST /api/push/test", s.testPush)
+	mux.HandleFunc("GET /api/resources", s.resources)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "There's nothing at that address.")
 	})
@@ -294,8 +299,13 @@ func apiAction(r *http.Request) (string, string) {
 	if parts[1] == "people" && len(parts) == 3 && r.Method == http.MethodDelete {
 		return hub.ActionRemoveUser, parts[2]
 	}
-	if parts[1] == "me" {
+	if parts[1] == "me" || parts[1] == "push" {
 		return hub.ActionSelf, ""
+	}
+	if parts[1] == "activity" && r.Method == http.MethodGet {
+		if app := r.URL.Query().Get("app"); app != "" {
+			return hub.ActionLogs, app // builders see their own apps' activity (O3)
+		}
 	}
 	if parts[1] == "logout" {
 		return hub.ActionApps, ""
@@ -708,6 +718,60 @@ func (s *server) activity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, ev)
+}
+
+func (s *server) pushKey(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"publicKey": s.hub.PushPublicKey()})
+}
+
+type pushInput struct {
+	Endpoint string `json:"endpoint"`
+	P256dh   string `json:"p256dh"`
+	Auth     string `json:"auth"`
+	Device   string `json:"device"`
+}
+
+func (s *server) subscribePush(w http.ResponseWriter, r *http.Request) {
+	var in pushInput
+	if !decode(w, r, &in, true) {
+		return
+	}
+	sub := core.PushSubscription{Endpoint: in.Endpoint, P256dh: in.P256dh, Auth: in.Auth}
+	if err := s.hub.SubscribePush(r.Context(), viewer(r).PersonID, in.Device, sub); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	noContent(w)
+}
+
+func (s *server) unsubscribePush(w http.ResponseWriter, r *http.Request) {
+	var in pushInput
+	if !decode(w, r, &in, true) {
+		return
+	}
+	if err := s.hub.UnsubscribePush(r.Context(), viewer(r).PersonID, in.Endpoint); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	noContent(w)
+}
+
+func (s *server) testPush(w http.ResponseWriter, r *http.Request) {
+	n, err := s.hub.TestPush(r.Context(), viewer(r).PersonID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"sent": n})
+}
+
+func (s *server) resources(w http.ResponseWriter, r *http.Request) {
+	v, err := s.hub.Resources(r.Context())
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 func noContent(w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }

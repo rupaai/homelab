@@ -1,6 +1,6 @@
 import { ApiError, NETWORK_MESSAGE, errorMessage } from './errors';
 import { mockApi } from './mock';
-import type { Api, AppView, BootstrapView, EnvSecrets, Invitation, MeView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult } from './types';
+import type { Api, AppView, BootstrapView, EnvSecrets, Invitation, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult } from './types';
 
 /** Mock mode: `?mock` in the URL or VITE_MOCK=1 gives fake data, no server needed. */
 export const useMock: boolean =
@@ -10,11 +10,11 @@ async function request<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: strin
 	const headers: Record<string, string> = { Accept: 'application/json' };
 	if (method !== 'GET') {
 		headers['X-Homelab-Request'] = '1';
-		if (method !== 'DELETE') headers['Content-Type'] = 'application/json';
+		if (method !== 'DELETE' || body !== undefined) headers['Content-Type'] = 'application/json';
 	}
 	let res: Response;
 	try {
-		res = await fetch(path, { method, headers, body: method === 'POST' || method === 'PUT' ? JSON.stringify(body ?? {}) : undefined });
+		res = await fetch(path, { method, headers, body: method === 'POST' || method === 'PUT' || body !== undefined ? JSON.stringify(body ?? {}) : undefined });
 	} catch {
 		throw new ApiError(NETWORK_MESSAGE, 0);
 	}
@@ -69,6 +69,14 @@ const realApi: Api = {
 	},
 	rollback: (id, env) => request('POST', `/api/apps/${enc(id)}/envs/${env}/rollback`),
 	logs: async (id, env, lines) => (await request<{ lines: string }>('GET', `/api/apps/${enc(id)}/envs/${env}/logs?lines=${lines}`)).lines ?? '',
+	pushKey: async () => (await request<{ publicKey: string }>('GET', '/api/push/key')).publicKey ?? '',
+	subscribePush: (sub) => request('POST', '/api/push/subscriptions', sub),
+	unsubscribePush: (endpoint) => request('DELETE', '/api/push/subscriptions', { endpoint }),
+	testPush: async () => (await request<{ sent: number }>('POST', '/api/push/test')).sent,
+	resources: async () => {
+		const r = await request<ResourcesView>('GET', '/api/resources');
+		return { ...r, apps: list(r.apps), problems: list(r.problems) };
+	},
 	activity: async (q = {}) => {
 		const p = new URLSearchParams();
 		if (q.app) p.set('app', q.app);

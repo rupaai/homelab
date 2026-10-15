@@ -28,8 +28,10 @@ import (
 	"github.com/rupaai/homelab/internal/adapters/noop"
 	"github.com/rupaai/homelab/internal/adapters/pocketid"
 	"github.com/rupaai/homelab/internal/adapters/secretstore"
+	"github.com/rupaai/homelab/internal/adapters/sysres"
 	"github.com/rupaai/homelab/internal/adapters/tailscale"
 	"github.com/rupaai/homelab/internal/adapters/tsapi"
+	"github.com/rupaai/homelab/internal/adapters/webpush"
 	"github.com/rupaai/homelab/internal/api"
 	"github.com/rupaai/homelab/internal/companion"
 	"github.com/rupaai/homelab/internal/core"
@@ -164,10 +166,22 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 		return fmt.Errorf("mirrors: %w", err)
 	}
 
-	h := hub.New(hub.Config{DataDir: home, Logger: log, Owners: cfg.Owners, Identity: signer}, store, hub.Adapters{
+	var notifier core.Notifier
+	pushPrivate, pushPublic, err := pushKeys(secrets)
+	if err == nil {
+		notifier, err = webpush.New(webpush.Options{PublicKey: pushPublic, PrivateKey: pushPrivate})
+	}
+	if err != nil {
+		log.Warn("push notifications are off", "err", err)
+		notifier = nil
+	}
+	resources := sysres.New(sysres.Options{Logger: log})
+
+	h := hub.New(hub.Config{DataDir: home, Logger: log, Owners: cfg.Owners, Identity: signer, PushPublicKey: pushPublic}, store, hub.Adapters{
 		Source: gh, Builder: gh, Registry: gh, Deployer: deployer,
 		Addresses: addrs, Health: httphealth.New(nil), Secrets: secrets,
 		Smoke: deployer, Mirror: mirror, Identity: idp, Email: noop.Email{}, Remote: remote,
+		Notifier: notifier, Resources: resources,
 	})
 
 	oidcConfig := api.NewOIDCConfig("", "", "")
@@ -274,6 +288,30 @@ func tailscaleClient(secrets core.Secrets) (*tsapi.Client, error) {
 	secret, _ := secrets.Platform("TS_OAUTH_CLIENT_SECRET")
 	return tsapi.New(tsapi.Options{ClientID: id, ClientSecret: secret})
 }
+
+// pushKeys returns Homelab's web push keys, making them on first start (O4).
+func pushKeys(secrets core.Secrets) (private, public string, err error) {
+	private, _ = secrets.Platform(pushPrivateKeyName)
+	public, _ = secrets.Platform(pushPublicKeyName)
+	if private != "" && public != "" {
+		return private, public, nil
+	}
+	if private, public, err = webpush.GenerateKeys(); err != nil {
+		return "", "", err
+	}
+	if err := secrets.Set("", "", pushPrivateKeyName, private, core.ActorHomelab); err != nil {
+		return "", "", err
+	}
+	if err := secrets.Set("", "", pushPublicKeyName, public, core.ActorHomelab); err != nil {
+		return "", "", err
+	}
+	return private, public, nil
+}
+
+const (
+	pushPrivateKeyName = "HOMELAB_PUSH_PRIVATE_KEY"
+	pushPublicKeyName  = "HOMELAB_PUSH_PUBLIC_KEY"
+)
 
 func ensurePlatformSecret(secrets core.Secrets, name string) (string, error) {
 	if value, ok := secrets.Platform(name); ok && value != "" {

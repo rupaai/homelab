@@ -252,3 +252,38 @@ type RemoteDevice struct {
 	LastSeen *time.Time `json:"lastSeen,omitempty"`
 	Online   bool       `json:"online"`
 }
+
+// ErrGone means a push subscription no longer exists at the push service.
+var ErrGone = errors.New("push subscription is gone")
+
+// PushSubscription is one device's web push endpoint and keys, as the browser gave them.
+type PushSubscription struct {
+	Endpoint string `json:"endpoint"`
+	P256dh   string `json:"p256dh"`
+	Auth     string `json:"auth"`
+}
+
+// Notification is what a push shows. URL is the companion path it opens.
+type Notification struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
+	URL   string `json:"url"`
+	Tag   string `json:"tag,omitempty"` // a newer notification with the same tag replaces the older one
+}
+
+// DeviceUsage is the computer's current load.
+type DeviceUsage struct {
+	CPUPercent float64 `json:"cpuPercent"`
+	MemUsed    uint64  `json:"memUsed"`
+	MemTotal   uint64  `json:"memTotal"`
+	DiskUsed   uint64  `json:"diskUsed"`
+	DiskTotal  uint64  `json:"diskTotal"`
+}
+
+// AppUsage is one app environment's current load.
+type AppUsage struct {
+	App        string  `json:"app"`
+	Env        string  `json:"env"`
+	CPUPercent float64 `json:"cpuPercent"`
+	MemUsed    uint64  `json:"memUsed"`
+}
