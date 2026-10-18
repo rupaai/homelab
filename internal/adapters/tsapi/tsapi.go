@@ -260,22 +260,24 @@ func (c *Client) AuthKey(ctx context.Context, tags []string) (string, error) {
 	return out.Key, nil
 }
 
-// SetPolicy replaces the tailnet's access rules, unless they already match.
+// SetPolicy writes Homelab's part of the tailnet's access rules and keeps everything else
+// in the file as it is. It does nothing when Homelab's part is already up to date.
 func (c *Client) SetPolicy(ctx context.Context, p core.AccessPolicy) error {
-	want, err := PolicyJSON(p)
-	if err != nil {
-		return err
-	}
-	wantNorm, _ := normalizeJSON(want)
 	for attempt := 0; ; attempt++ {
-		hdr, cur, err := c.do(ctx, http.MethodGet, c.tn("/acl"), scopePolicy, nil, map[string]string{"Accept": "application/json"})
+		hdr, cur, err := c.do(ctx, http.MethodGet, c.tn("/acl"), scopePolicy, nil, map[string]string{"Accept": "application/hujson"})
 		if err != nil {
 			return err
 		}
-		if curNorm, ok := normalizeJSON(cur); ok && curNorm == wantNorm {
+		want, err := MergePolicy(cur, p)
+		if err != nil {
+			return err
+		}
+		curNorm, ok1 := normalizeJSON(cur)
+		wantNorm, ok2 := normalizeJSON(want)
+		if ok1 && ok2 && curNorm == wantNorm {
 			return nil
 		}
-		_, _, err = c.do(ctx, http.MethodPost, c.tn("/acl"), scopePolicy, want, map[string]string{"If-Match": hdr.Get("ETag")})
+		_, _, err = c.do(ctx, http.MethodPost, c.tn("/acl"), scopePolicy, want, map[string]string{"If-Match": hdr.Get("ETag"), "Content-Type": "application/hujson"})
 		if ae := (*apiError)(nil); errors.As(err, &ae) && ae.status == http.StatusPreconditionFailed && attempt == 0 {
 			continue
 		}
@@ -290,6 +292,7 @@ type userDTO struct {
 	ID          string `json:"id"`
 	LoginName   string `json:"loginName"`
 	DisplayName string `json:"displayName"`
+	Role        string `json:"role"`
 }
 
 type deviceDTO struct {
@@ -367,11 +370,18 @@ func (c *Client) Observe(ctx context.Context) (core.RemoteState, error) {
 	return st, nil
 }
 
-// RemoveDevices deletes every device that belongs to login. Tagged devices are Homelab's
-// own and are left alone.
+// RemoveDevices deletes every device that belongs to login. Tagged devices are left alone,
+// and so is anyone who isn't a plain member of the tailnet (the owner and admins).
 func (c *Client) RemoveDevices(ctx context.Context, login string) (int, error) {
 	if strings.TrimSpace(login) == "" {
 		return 0, nil
+	}
+	users, err := c.users(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if u, ok := findUser(users, login); ok && !removable(u) {
+		return 0, protectedErr(u)
 	}
 	devs, err := c.devices(ctx)
 	if err != nil {
@@ -393,15 +403,38 @@ func (c *Client) RemoveDevices(ctx context.Context, login string) (int, error) {
 }
 
 // RemoveUser takes login off the tailnet. Someone who is already gone is not an error.
+// The owner and admins are never removed.
 func (c *Client) RemoveUser(ctx context.Context, login string) error {
 	users, err := c.users(ctx)
 	if err != nil {
 		return err
 	}
+	u, ok := findUser(users, login)
+	if !ok {
+		return nil
+	}
+	if !removable(u) {
+		return protectedErr(u)
+	}
+	return c.call(ctx, http.MethodPost, "/users/"+url.PathEscape(u.ID)+"/delete", scopeUsers, nil, nil)
+}
+
+func findUser(users []userDTO, login string) (userDTO, bool) {
 	for _, u := range users {
 		if strings.EqualFold(u.LoginName, login) {
-			return c.call(ctx, http.MethodPost, "/users/"+url.PathEscape(u.ID)+"/delete", scopeUsers, nil, nil)
+			return u, true
 		}
 	}
-	return nil
+	return userDTO{}, false
+}
+
+// removable says whether Homelab may remove u: only plain members, the role Homelab invites people with.
+func removable(u userDTO) bool { return u.Role == "member" }
+
+func protectedErr(u userDTO) error {
+	role := u.Role
+	if role == "" {
+		role = "unknown"
+	}
+	return fmt.Errorf("%s has the %s role on the tailnet, so Homelab leaves them and their devices alone.", u.LoginName, role)
 }

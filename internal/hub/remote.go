@@ -14,8 +14,8 @@ import (
 
 // Remote access (milestone 4): a request that arrives over the tailnet carries the Tailscale
 // login of whoever sent it. Homelab matches that login to a household person, so being
-// signed in to Tailscale is being signed in to Homelab. Homelab also writes the tailnet's
-// access rules from its people and apps.
+// signed in to Tailscale is being signed in to Homelab. Homelab also writes its own hl-...
+// access rules from its people and apps, next to any rules already in the tailnet.
 
 // Group and tag names in the tailnet policy.
 const (
@@ -24,8 +24,8 @@ const (
 	companionTag  = "tag:hl-homelab"
 )
 
-// policyEvery is how often the policy is re-sent even when nothing changed here, which
-// undoes edits made by hand in the Tailscale admin console.
+// policyEvery is how often Homelab re-checks its part of the policy even when nothing
+// changed here, which undoes hand edits to its hl-... rules. Other rules are never touched.
 const policyEvery = 15 * time.Minute
 
 // AddressTag is the Tailscale tag of an address, e.g. tag:hl-movies-dev.

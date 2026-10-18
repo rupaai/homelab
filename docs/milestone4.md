@@ -9,23 +9,35 @@ itself (localhost), owner setup and recovery.
 It only applies with `addresses: tailscale` in `~/.homelab/config.yaml` and a Tailscale OAuth
 client in Settings. With local addresses nothing changes.
 
-## Use a tailnet of its own
+## Sharing a tailnet
 
-Homelab writes the tailnet's **whole access policy** from its people and apps. Run it on a
-tailnet made for Homelab, not on a personal one whose rules you want to keep. Edits made by
-hand in the admin console's Access controls page are undone within 15 minutes.
+Homelab can run on a tailnet that people already use. It writes only its **own part** of the
+policy file and keeps the rest, comments included:
+
+- Homelab's part is every group named `group:hl-*`, every tag named `tag:hl-*`, and every grant
+  whose sources are only `group:hl-*` or `autogroup:admin` and whose destinations are only
+  `tag:hl-*`. Keep the `hl-` names for Homelab; don't use them in your own rules.
+- `tag:homelab` (the OAuth client's tag) is added if it's missing and left alone if it's there.
+- Everything else (other groups, tags, grants, `acls`, `ssh`, `tests`, postures) is not touched.
+- Every 15 minutes Homelab checks its part again and fixes it if someone edited it by hand.
+  The file is only saved when Homelab's part actually changed.
+- Homelab invites people as plain **members**. Your own rules decide what members can reach
+  outside Homelab's apps, so check them: a rule like `"src": ["*"]` lets every invited person
+  reach every device.
+- Removing a person only removes Tailscale users with the member role, and their untagged
+  devices. The owner and admins are never removed.
 
 ## New packages and contracts
 
 | Package | Job |
 |---|---|
-| `internal/adapters/tsapi` | Tailscale REST API client for `core.RemoteAccess`: OAuth client credentials, user invites, users, devices, tagged auth keys and the policy file (with ETag, retried once on a concurrent change) |
+| `internal/adapters/tsapi` | Tailscale REST API client for `core.RemoteAccess`: OAuth client credentials, user invites, users, devices, tagged auth keys and Homelab's part of the policy file (with ETag, retried once on a concurrent change) |
 | `internal/adapters/fake` (`Remote`) | In-memory tailnet for hub tests |
 | `internal/hub/remote.go` | Tailnet sign-in, the access policy, invites, removal and device status |
 
 `core.RemoteAccess`: `Invite`, `CancelInvite`, `SetPolicy`, `AuthKey`, `Observe`,
-`RemoveDevices`, `RemoveUser`. The hub never sees the policy file format; `tsapi.PolicyJSON`
-renders it.
+`RemoveDevices`, `RemoveUser`. The hub never sees the policy file format; `tsapi.MergePolicy`
+merges Homelab's part into the tailnet's current file (read and written as HuJSON).
 
 ## Who reaches what
 
