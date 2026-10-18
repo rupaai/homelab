@@ -147,10 +147,33 @@ type HealthResult struct {
 
 // Viewer is the person (or device) behind a request, as the Addresses adapter saw it.
 type Viewer struct {
-	Login  string // e.g. labiba@example.com; empty when unknown
-	Name   string // display name
-	Local  bool   // connected from this machine (127.0.0.1)
-	Tagged bool   // a tagged Tailscale node (a server, not a person)
+	Login    string // e.g. labiba@example.com; empty when unknown
+	Name     string // display name
+	Local    bool   // connected from this machine (127.0.0.1)
+	Tagged   bool   // a tagged Tailscale node (a server, not a person)
+	PersonID string
+}
+
+// Person is one household account. Roles and app grants are independent sets.
+type Person struct {
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	Email      string            `json:"email,omitempty"`
+	IdentityID string            `json:"identityId,omitempty"`
+	Status     string            `json:"status"`
+	Roles      []string          `json:"roles"`
+	Grants     map[string]string `json:"grants"`
+	LastSignIn *time.Time        `json:"lastSignIn,omitempty"`
+}
+
+// IdentityUser is a person observed at the configured identity provider.
+type IdentityUser struct {
+	ID         string     `json:"id"`
+	Email      string     `json:"email"`
+	Name       string     `json:"name"`
+	Groups     []string   `json:"groups"`
+	Disabled   bool       `json:"disabled"`
+	LastSignIn *time.Time `json:"lastSignIn,omitempty"`
 }
 
 // Label is how the viewer appears in the activity log.

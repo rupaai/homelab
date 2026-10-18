@@ -1,4 +1,4 @@
-// Package local serves addresses on 127.0.0.1 ports, for trying Homelab out without
+// Package local serves addresses on localhost ports, for trying Homelab out without
 // Tailscale. Each name gets its own port, assigned once and remembered in ports.json.
 package local
 
@@ -210,7 +210,7 @@ func (a *Addresses) Observe() map[string]core.Address {
 	defer a.mu.Unlock()
 	out := map[string]core.Address{}
 	for n, e := range a.entries {
-		out[n] = core.Address{Name: n, URL: "http://127.0.0.1:" + strconv.Itoa(e.port), Ready: true}
+		out[n] = core.Address{Name: n, URL: "http://localhost:" + strconv.Itoa(e.port), Ready: true}
 	}
 	for n, msg := range a.errs {
 		out[n] = core.Address{Name: n, Error: msg}

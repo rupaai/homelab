@@ -2,15 +2,27 @@
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import { api } from '#lib/api.ts';
-	import { appsStore } from '#lib/apps.svelte.ts';
 	import { messageOf } from '#lib/errors.ts';
 	import { appInitial, envLabel } from '#lib/format.ts';
+	import type { AppView, MeView } from '#lib/types.ts';
 	import { startPolling } from '#lib/poll.ts';
 	import Sheet from '#lib/components/Sheet.svelte';
 	import Spinner from '#lib/components/Spinner.svelte';
 	import StatusDot from '#lib/components/StatusDot.svelte';
 
-	onMount(() => startPolling(appsStore.refresh, () => appsStore.pollMs));
+	let projects = $state<AppView[]>([]);
+	let projectsLoaded = $state(false);
+	let projectsError = $state('');
+	let me = $state<MeView | null>(null);
+	const canAddApps = $derived(!!me?.roles.some((role) => role === 'owner' || role === 'admin'));
+
+	async function refreshProjects() {
+		try { [projects, me] = await Promise.all([api.projects(), api.me()]); projectsError = ''; }
+		catch (error) { projectsError = messageOf(error); }
+		finally { projectsLoaded = true; }
+	}
+
+	onMount(() => startPolling(refreshProjects, () => 5000));
 
 	let adding = $state(false);
 	let repo = $state('');
@@ -24,7 +36,7 @@
 		addError = '';
 		try {
 			const app = await api.addApp(repo.trim(), branch.trim());
-			await appsStore.refresh();
+			await refreshProjects();
 			adding = false;
 			goto(`/apps/${encodeURIComponent(app.id)}`);
 		} catch (err) {
@@ -40,21 +52,21 @@
 <div class="page">
 	<div class="page-head">
 		<h1>Projects</h1>
-		<button class="btn primary small" type="button" onclick={() => ((adding = true), (addError = ''))}>Add app</button>
+		{#if canAddApps}<button class="btn primary small" type="button" onclick={() => ((adding = true), (addError = ''))}>Add app</button>{/if}
 	</div>
 
-	{#if !appsStore.loaded}
+	{#if !projectsLoaded}
 		<p class="muted loading"><Spinner /> Loading your apps…</p>
-	{:else if appsStore.error && appsStore.list.length === 0}
-		<p class="notice bad" role="alert">{appsStore.error}</p>
-	{:else if appsStore.list.length === 0}
+	{:else if projectsError && projects.length === 0}
+		<p class="notice bad" role="alert">{projectsError}</p>
+	{:else if projects.length === 0}
 		<div class="card empty">
 			<p><strong>No apps yet.</strong></p>
 			<p class="muted">Add an app from its GitHub repo and Homelab will show how dev and prod are doing.</p>
 		</div>
 	{/if}
 
-	{#each appsStore.list as app (app.id)}
+	{#each projects as app (app.id)}
 		{@const b = app.latestBuild}
 		<article class="card app">
 			<div class="head">

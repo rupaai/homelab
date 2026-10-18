@@ -2,6 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -12,6 +15,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/fstest"
+	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/rupaai/homelab/internal/adapters/fake"
 	"github.com/rupaai/homelab/internal/core"
@@ -33,9 +39,11 @@ secrets: [TMDB_API_KEY]
 const indexHTML = `<!doctype html><html><body><script>window.boot=1</script></body></html>`
 
 type rig struct {
-	h    *hub.Hub
-	src  *fake.Source
-	fail *atomic.Bool
+	h     *hub.Hub
+	src   *fake.Source
+	fail  *atomic.Bool
+	store *state.Store
+	idp   *fake.Identity
 }
 
 // flakySource fails every read while fail is set.
@@ -59,17 +67,245 @@ func newRig(t *testing.T) *rig {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
+	if err := st.SavePerson(context.Background(), core.Person{ID: "owner", Name: "Owner", Email: "owner@example.test", Status: "signed_in", Roles: []string{"owner", "admin"}}); err != nil {
+		t.Fatal(err)
+	}
 	src := fake.NewSource()
 	fail := &atomic.Bool{}
+	idp := fake.NewIdentity()
 	h := hub.New(hub.Config{DataDir: dir}, st, hub.Adapters{
 		Source: flakySource{src, fail}, Builder: fake.NewBuilder(), Registry: fake.NewRegistry(), Deployer: fake.NewDeployer(),
-		Addresses: fake.NewAddresses(), Health: fake.NewHealth(), Secrets: fake.NewSecrets(),
+		Addresses: fake.NewAddresses(), Health: fake.NewHealth(), Secrets: fake.NewSecrets(), Identity: idp, Email: fake.Email{},
 	})
-	return &rig{h: h, src: src, fail: fail}
+	return &rig{h: h, src: src, fail: fail, store: st, idp: idp}
+}
+
+func TestBootstrapCreatesOwnerAndOneTimeRecoveryCode(t *testing.T) {
+	r := newRig(t)
+	if err := r.store.DeletePerson(context.Background(), "owner"); err != nil {
+		t.Fatal(err)
+	}
+	h := r.handler()
+	if rec := do(h, "GET", "/api/bootstrap", "", nil); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"needsSetup":true`) {
+		t.Fatalf("bootstrap: %d %s", rec.Code, rec.Body)
+	}
+	rec := post(h, "/api/setup", `{"name":"Labiba","email":"owner@example.test"}`, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("setup: %d %s", rec.Code, rec.Body)
+	}
+	var got struct {
+		LoginURL     string `json:"loginUrl"`
+		RecoveryCode string `json:"recoveryCode"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.LoginURL == "" || got.RecoveryCode == "" {
+		t.Fatalf("setup response omitted credentials: %+v", got)
+	}
+	exists, err := r.store.OwnerExists(context.Background())
+	if err != nil || !exists {
+		t.Fatalf("owner exists=%v err=%v", exists, err)
+	}
+	p, err := r.store.PersonByEmail(context.Background(), "OWNER@example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Status != "invited" || !hasRole(p, "owner") || !hasRole(p, "admin") {
+		t.Fatalf("owner=%+v", p)
+	}
+	if u := r.idp.Users[p.ID]; u.ID != p.ID {
+		t.Fatalf("Pocket ID user=%+v", u)
+	}
+	hash, used, err := r.store.RecoveryHash(context.Background(), p.ID)
+	if err != nil || used || hash == got.RecoveryCode {
+		t.Fatalf("recovery hash=%q used=%v err=%v", hash, used, err)
+	}
+	if rec = post(h, "/api/setup", `{"name":"Other","email":"other@example.test"}`, nil); rec.Code != http.StatusBadRequest {
+		t.Fatalf("second setup: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestInitialOwnerCanRequestFreshPasskeyLinkUntilSignIn(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if err := r.store.SavePerson(ctx, core.Person{ID: "owner", Name: "Owner", Email: "owner@example.test", IdentityID: "pocket-owner", Status: "invited", Roles: []string{"owner", "admin"}}); err != nil {
+		t.Fatal(err)
+	}
+	h := r.handler()
+	path := "/api/setup/passkey-link"
+	if got := post(h, path, `{}`, nil); got.Code != http.StatusCreated || !strings.Contains(got.Body.String(), `"url":"http://localhost:1411/login/pocket-owner"`) {
+		t.Fatalf("fresh initial-owner link: %d %s", got.Code, got.Body)
+	}
+	if r.idp.LoginLinkTTL != time.Hour {
+		t.Fatalf("initial owner link TTL = %s, want %s", r.idp.LoginLinkTTL, time.Hour)
+	}
+	if err := r.store.RecordSignIn(ctx, "owner", "pocket-owner"); err != nil {
+		t.Fatal(err)
+	}
+	if got := post(h, path, `{}`, nil); got.Code != http.StatusBadRequest {
+		t.Fatalf("signed-in owner could request setup-only link: %d %s", got.Code, got.Body)
+	}
+}
+
+func TestConcurrentSetupCannotCreateTwoOwners(t *testing.T) {
+	r := newRig(t)
+	if err := r.store.DeletePerson(context.Background(), "owner"); err != nil {
+		t.Fatal(err)
+	}
+	h := r.handler()
+	start := make(chan struct{})
+	codes := make(chan int, 2)
+	for _, body := range []string{`{"name":"Owner One","email":"one@example.test"}`, `{"name":"Owner Two","email":"two@example.test"}`} {
+		go func(body string) {
+			<-start
+			codes <- post(h, "/api/setup", body, nil).Code
+		}(body)
+	}
+	close(start)
+	created := 0
+	for range 2 {
+		if <-codes == http.StatusCreated {
+			created++
+		}
+	}
+	if created != 1 {
+		t.Fatalf("concurrent setup created %d owners", created)
+	}
+	people, err := r.store.People(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	owners := 0
+	for _, person := range people {
+		if hasRole(person, "owner") {
+			owners++
+		}
+	}
+	if owners != 1 {
+		t.Fatalf("stored %d owners", owners)
+	}
+}
+
+func TestRecoveryCodeIsLoopbackOnlyRateLimitedAndSingleUse(t *testing.T) {
+	r := newRig(t)
+	code, err := newRecoveryCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(code), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.SetRecovery(context.Background(), "owner", string(hash)); err != nil {
+		t.Fatal(err)
+	}
+	h := r.handler()
+	body, _ := json.Marshal(map[string]string{"code": code})
+	rec := post(h, "/api/recover", string(body), nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("recover: %d %s", rec.Code, rec.Body)
+	}
+	var cookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "homelab_session" {
+			cookie = c
+		}
+	}
+	if cookie == nil {
+		t.Fatal("recovery didn't create a session")
+	}
+	req := httptest.NewRequest("GET", "/api/me", nil)
+	req.Host = "localhost:7080"
+	req.AddCookie(cookie)
+	got := httptest.NewRecorder()
+	h.ServeHTTP(got, req)
+	if got.Code != http.StatusOK {
+		t.Fatalf("recovered session: %d %s", got.Code, got.Body)
+	}
+	if rec = post(h, "/api/recover", string(body), nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("reuse: %d %s", rec.Code, rec.Body)
+	}
+	invalidCode, err := randomURLToken(20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidBody, _ := json.Marshal(map[string]string{"code": invalidCode})
+	req = httptest.NewRequest("POST", "/api/recover", strings.NewReader(string(invalidBody)))
+	req.Host = "example.com"
+	req.Header.Set("Content-Type", "application/json")
+	got = httptest.NewRecorder()
+	h.ServeHTTP(got, req)
+	if got.Code != http.StatusForbidden {
+		t.Fatalf("remote recovery: %d %s", got.Code, got.Body)
+	}
+}
+
+func TestSignedInPersonCanRequestFreshPasskeyLink(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if err := r.store.RecordIdentityID(ctx, "owner", "provider-owner-id"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.SavePerson(ctx, core.Person{ID: "roleless", Name: "Roleless", Email: "roleless@example.test", IdentityID: "provider-roleless-id", Status: "signed_in"}); err != nil {
+		t.Fatal(err)
+	}
+	h := r.handler()
+	got := post(h, "/api/me/passkey-link", `{}`, &core.Viewer{PersonID: "roleless"})
+	if got.Code != http.StatusCreated || !strings.Contains(got.Body.String(), `"url":"http://localhost:1411/login/provider-roleless-id"`) {
+		t.Fatalf("fresh passkey link: %d %s", got.Code, got.Body)
+	}
+
+	if got = post(h, "/api/me/passkey-link", `{}`, nil); got.Code != http.StatusForbidden {
+		t.Fatalf("anonymous passkey link: %d %s", got.Code, got.Body)
+	}
+	r.idp.Fail = true
+	if got = post(h, "/api/me/passkey-link", `{}`, &core.Viewer{PersonID: "owner"}); got.Code != http.StatusInternalServerError {
+		t.Fatalf("unavailable identity provider: %d %s", got.Code, got.Body)
+	}
+}
+
+func TestHealthAndRecoveryStayAvailableWhenIdentityProviderFails(t *testing.T) {
+	r := newRig(t)
+	r.idp.Fail = true
+	code, err := newRecoveryCode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(code), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.SetRecovery(context.Background(), "owner", string(hash)); err != nil {
+		t.Fatal(err)
+	}
+	h := r.handler()
+	if got := do(h, http.MethodGet, "/healthz", "", nil); got.Code != http.StatusOK {
+		t.Fatalf("health with unavailable identity provider: %d %s", got.Code, got.Body)
+	}
+	body, _ := json.Marshal(map[string]string{"code": code})
+	if got := post(h, "/api/recover", string(body), nil); got.Code != http.StatusNoContent {
+		t.Fatalf("recovery with unavailable identity provider: %d %s", got.Code, got.Body)
+	}
+	token, err := randomURLToken(32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte(token))
+	if err := r.store.PutOneTimeCode(context.Background(), digest[:], "owner", "recovery-link", time.Now().Add(15*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/recover/"+token, nil)
+	req.Host = "localhost:7080"
+	link := httptest.NewRecorder()
+	h.ServeHTTP(link, req)
+	if link.Code != http.StatusSeeOther {
+		t.Fatalf("recovery link with unavailable identity provider: %d %s", link.Code, link.Body)
+	}
 }
 
 func (r *rig) handler(owners ...string) http.Handler {
-	return New(r.h, Options{Owners: owners, Version: "test", Static: testSite(), Logger: nil})
+	return New(r.h, Options{Owners: owners, Version: "test", Static: testSite(), Logger: nil, Store: r.store})
 }
 
 func testSite() fstest.MapFS {
@@ -80,7 +316,7 @@ func testSite() fstest.MapFS {
 	}
 }
 
-var local = core.Viewer{Local: true}
+var local = core.Viewer{Local: true, PersonID: "owner"}
 
 func do(h http.Handler, method, path, body string, v *core.Viewer, hdr ...string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -102,7 +338,7 @@ func post(h http.Handler, path, body string, v *core.Viewer) *httptest.ResponseR
 
 func TestAuth(t *testing.T) {
 	r := newRig(t)
-	owner := &core.Viewer{Login: "Labiba@Example.com"}
+	owner := &core.Viewer{Login: "Labiba@Example.com", PersonID: "owner"}
 	stranger := &core.Viewer{Login: "eve@example.com"}
 	tagged := &core.Viewer{Login: "tagged-devices", Tagged: true}
 	anon := &core.Viewer{}
@@ -113,11 +349,12 @@ func TestAuth(t *testing.T) {
 		want   int
 	}{
 		{"local", []string{"labiba@example.com"}, &local, 200},
-		{"owner case-insensitive", []string{"labiba@example.com"}, owner, 200},
+		{"loopback alone", []string{"labiba@example.com"}, &core.Viewer{Local: true}, 403},
+		{"owner session", []string{"labiba@example.com"}, owner, 200},
 		{"stranger", []string{"labiba@example.com"}, stranger, 403},
 		{"tagged node", []string{"labiba@example.com"}, tagged, 403},
 		{"no viewer", []string{"labiba@example.com"}, nil, 403},
-		{"empty owners, signed-in person", nil, stranger, 200},
+		{"empty owners, signed-in person", nil, &core.Viewer{PersonID: "owner"}, 200},
 		{"empty owners, tagged", nil, tagged, 403},
 		{"empty owners, anonymous", nil, anon, 403},
 	}
@@ -126,7 +363,7 @@ func TestAuth(t *testing.T) {
 		if rec.Code != c.want {
 			t.Errorf("%s: %d, want %d (%s)", c.name, rec.Code, c.want, rec.Body)
 		}
-		if c.want == 403 && !strings.Contains(rec.Body.String(), "only lets its owner in") {
+		if c.want == 403 && !strings.Contains(rec.Body.String(), "Sign in") && !strings.Contains(rec.Body.String(), "don't have access") {
 			t.Errorf("%s: message %s", c.name, rec.Body)
 		}
 	}
@@ -140,12 +377,104 @@ func TestAuth(t *testing.T) {
 	}
 }
 
+func TestMemberAPIIsScoped(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if _, err := r.store.AddApp(ctx, state.App{ID: "movies", Name: "Movies", Repo: "a/b", Manifest: []byte("id: movies"), Promotion: "manual"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.SavePerson(ctx, core.Person{ID: "sam", Name: "Sam", Status: "signed_in", Roles: []string{"member"}, Grants: map[string]string{"movies": "use"}}); err != nil {
+		t.Fatal(err)
+	}
+	v := &core.Viewer{PersonID: "sam"}
+	h := r.handler()
+	rec := do(h, "GET", "/api/apps", "", v)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"env":"prod"`) || strings.Contains(rec.Body.String(), `"env":"dev"`) {
+		t.Fatalf("member app list: %d %s", rec.Code, rec.Body)
+	}
+	if rec = do(h, "GET", "/api/apps/movies/envs/dev/logs", "", v); rec.Code != 403 {
+		t.Fatalf("member logs status=%d body=%s", rec.Code, rec.Body)
+	}
+	if rec = do(h, "GET", "/api/apps/movies", "", v); rec.Code != 200 || strings.Contains(rec.Body.String(), `"env":"dev"`) {
+		t.Fatalf("member app detail leaked dev: %d %s", rec.Code, rec.Body)
+	}
+	if rec = do(h, "GET", "/api/projects", "", v); rec.Code != 403 {
+		t.Fatalf("member projects status=%d body=%s", rec.Code, rec.Body)
+	}
+	for _, path := range []string{"/api/people", "/api/settings/secrets", "/api/activity", "/api/apps/movies/envs/dev/secrets/TMDB_API_KEY"} {
+		if rec = do(h, "GET", path, "", v); rec.Code != 403 {
+			t.Errorf("member %s status=%d body=%s", path, rec.Code, rec.Body)
+		}
+	}
+	if rec = do(h, "GET", "/api/settings/secrets", "", v); rec.Code != 403 {
+		t.Fatalf("member settings status=%d body=%s", rec.Code, rec.Body)
+	}
+}
+
+func TestBuilderProjectsIncludeOnlyBuildGrants(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if _, err := r.store.AddApp(ctx, state.App{ID: "movies", Name: "Movies", Repo: "a/b", Manifest: []byte("id: movies"), Promotion: "manual"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.store.AddApp(ctx, state.App{ID: "recipes", Name: "Recipes", Repo: "a/c", Manifest: []byte("id: recipes"), Promotion: "manual"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.SavePerson(ctx, core.Person{ID: "builder", Name: "Builder", Status: "signed_in", Roles: []string{"builder"}, Grants: map[string]string{"movies": "build", "recipes": "use"}}); err != nil {
+		t.Fatal(err)
+	}
+	rec := do(r.handler(), "GET", "/api/projects", "", &core.Viewer{PersonID: "builder"})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"id":"movies"`) || strings.Contains(rec.Body.String(), `"id":"recipes"`) {
+		t.Fatalf("builder projects: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestRecoveryLinkCreatesOneOwnerSession(t *testing.T) {
+	r := newRig(t)
+	rawToken := make([]byte, 32)
+	if _, err := rand.Read(rawToken); err != nil {
+		t.Fatal(err)
+	}
+	token := base64.RawURLEncoding.EncodeToString(rawToken)
+	digest := sha256.Sum256([]byte(token))
+	if err := r.store.PutOneTimeCode(context.Background(), digest[:], "owner", "recovery-link", time.Now().Add(15*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	h := r.handler()
+	req := httptest.NewRequest("GET", "/recover/"+token, nil)
+	req.Host = "localhost:7080"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("recovery status=%d body=%s", rec.Code, rec.Body)
+	}
+	cookie := rec.Result().Cookies()
+	if len(cookie) == 0 || cookie[0].Name != "homelab_session" || !cookie[0].HttpOnly {
+		t.Fatalf("session cookie=%v", cookie)
+	}
+	req = httptest.NewRequest("GET", "/api/me", nil)
+	req.Host = "localhost:7080"
+	req.AddCookie(cookie[0])
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("recovered API status=%d body=%s", rec.Code, rec.Body)
+	}
+	req = httptest.NewRequest("GET", "/recover/"+token, nil)
+	req.Host = "localhost:7080"
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusGone {
+		t.Fatalf("reused recovery link status=%d", rec.Code)
+	}
+}
+
 func TestMe(t *testing.T) {
 	r := newRig(t)
-	rec := do(r.handler(), "GET", "/api/me", "", &core.Viewer{Login: "a@b.c", Name: "A"})
+	rec := do(r.handler(), "GET", "/api/me", "", &core.Viewer{PersonID: "owner", Login: "a@b.c", Name: "A"})
 	var got map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &got)
-	if got["login"] != "a@b.c" || got["name"] != "A" || got["local"] != false {
+	if got["login"] != "owner@example.test" || got["name"] != "Owner" || got["local"] != false {
 		t.Fatalf("%v", got)
 	}
 }
@@ -264,6 +593,9 @@ func TestStatic(t *testing.T) {
 	if rec.Header().Get("Cache-Control") != "no-cache" {
 		t.Errorf("index cache: %q", rec.Header().Get("Cache-Control"))
 	}
+	if rec := do(h, "GET", "/invite/invite-token", "", nil); rec.Code != 200 || rec.Header().Get("Location") != "" {
+		t.Fatalf("invite should open the Homelab registration screen: %d location=%q", rec.Code, rec.Header().Get("Location"))
+	}
 	if rec := do(h, "GET", "/favicon.png", "", nil); rec.Body.String() != "png" {
 		t.Errorf("file: %q", rec.Body)
 	}
@@ -279,6 +611,67 @@ func TestStatic(t *testing.T) {
 	csp := hd.Get("Content-Security-Policy")
 	if !strings.Contains(csp, "script-src 'self' 'sha256-") || strings.Contains(strings.Split(csp, "style-src")[0], "unsafe-inline") {
 		t.Errorf("csp: %s", csp)
+	}
+}
+
+func TestInviteRedemptionReturnsPasskeyRegistrationLink(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	invite, err := r.h.InvitePerson(ctx, core.Person{Name: "New person", Email: "new@example.test", Roles: []string{"member"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := strings.TrimPrefix(invite, "http://localhost:7080/invite/")
+	h := r.handler()
+	path := "/api/invites/" + token + "/redeem"
+	got := post(h, path, `{}`, nil)
+	if got.Code != http.StatusCreated {
+		t.Fatalf("redeem invite: %d %s", got.Code, got.Body)
+	}
+	var response struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(got.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	const pocketIDLoginPrefix = "http://localhost:1411/login/"
+	if !strings.HasPrefix(response.URL, pocketIDLoginPrefix) || strings.TrimPrefix(response.URL, pocketIDLoginPrefix) == "" {
+		t.Fatalf("invite returned invalid Pocket ID passkey link: %q", response.URL)
+	}
+	if r.idp.LoginLinkTTL != time.Hour {
+		t.Fatalf("invite login link TTL = %s, want %s", r.idp.LoginLinkTTL, time.Hour)
+	}
+	if got = post(h, path, `{}`, nil); got.Code != http.StatusCreated {
+		t.Fatalf("redeem invite for a fresh Pocket ID link: %d %s", got.Code, got.Body)
+	}
+	people, err := r.h.People(ctx)
+	if err != nil || len(people) != 2 {
+		t.Fatalf("invited people=%+v err=%v", people, err)
+	}
+	var invited core.Person
+	for _, person := range people {
+		if person.Email == "new@example.test" {
+			invited = person
+		}
+	}
+	if invited.ID == "" {
+		t.Fatal("invited person not found")
+	}
+	if err := r.store.RecordSignIn(ctx, invited.ID, "pocket-id-subject"); err != nil {
+		t.Fatal(err)
+	}
+	if got = post(h, path, `{}`, nil); got.Code != http.StatusGone {
+		t.Fatalf("redeem accepted invite after sign-in: %d %s", got.Code, got.Body)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+	req.Host = "example.com"
+	req.Header.Set("X-Homelab-Request", "1")
+	req.Header.Set("Content-Type", "application/json")
+	blocked := httptest.NewRecorder()
+	h.ServeHTTP(blocked, req)
+	if blocked.Code != http.StatusForbidden {
+		t.Fatalf("redeem remote invite: %d %s", blocked.Code, blocked.Body)
 	}
 }
 
@@ -363,4 +756,45 @@ func TestMilestone2Endpoints(t *testing.T) {
 	if rec := do(h, "GET", "/api/apps/movies", "", &local); rec.Code != 404 {
 		t.Fatalf("after remove: %d", rec.Code)
 	}
+}
+
+// A Pocket ID one-time link works once. Someone without a passkey who leaves the
+// page, or whose link was used or expired, must get a newly issued link from the
+// same Homelab page instead of landing on Pocket ID's passkey sign-in page.
+func TestPasskeyLinksAreReissuedAfterAnEarlierLinkIsUsed(t *testing.T) {
+	t.Run("initial owner setup", func(t *testing.T) {
+		r := newRig(t)
+		ctx := context.Background()
+		if err := r.store.SavePerson(ctx, core.Person{ID: "owner", Name: "Owner", Email: "owner@example.test", IdentityID: "pocket-owner", Status: "invited", Roles: []string{"owner", "admin"}}); err != nil {
+			t.Fatal(err)
+		}
+		h := r.handler()
+		for attempt := 1; attempt <= 3; attempt++ {
+			if got := post(h, "/api/setup/passkey-link", `{}`, nil); got.Code != http.StatusCreated {
+				t.Fatalf("attempt %d: %d %s", attempt, got.Code, got.Body)
+			}
+			if r.idp.LoginLinkCalls != attempt {
+				t.Fatalf("attempt %d reused an earlier one-time link (provider calls = %d)", attempt, r.idp.LoginLinkCalls)
+			}
+		}
+	})
+	t.Run("invite", func(t *testing.T) {
+		r := newRig(t)
+		ctx := context.Background()
+		invite, err := r.h.InvitePerson(ctx, core.Person{Name: "New person", Email: "new@example.test", Roles: []string{"member"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		h := r.handler()
+		path := "/api/invites/" + strings.TrimPrefix(invite, "http://localhost:7080/invite/") + "/redeem"
+		before := r.idp.LoginLinkCalls
+		for attempt := 1; attempt <= 3; attempt++ {
+			if got := post(h, path, `{}`, nil); got.Code != http.StatusCreated {
+				t.Fatalf("attempt %d: %d %s", attempt, got.Code, got.Body)
+			}
+			if r.idp.LoginLinkCalls != before+attempt {
+				t.Fatalf("attempt %d reused an earlier one-time link (provider calls = %d)", attempt, r.idp.LoginLinkCalls-before)
+			}
+		}
+	})
 }

@@ -5,6 +5,9 @@ package hub
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -56,6 +59,8 @@ type Adapters struct {
 	Secrets   core.Secrets
 	Smoke     core.SmokeTester // may be nil: auto promote then refuses apps with a smoke test
 	Mirror    core.Mirror      // may be nil: no mirrors
+	Identity  core.Identity
+	Email     core.Email
 }
 
 // Hub is the core. Create it with New and run it with Run.
@@ -249,6 +254,7 @@ func (h *Hub) dataDir(app, env string) string {
 
 // Reconcile makes every environment match its desired state, once.
 func (h *Hub) Reconcile(ctx context.Context) {
+	h.reconcilePeople(ctx)
 	apps, err := h.store.Apps(ctx)
 	if err != nil {
 		h.log.Error("reconcile: read state", "err", err)
@@ -287,6 +293,62 @@ func (h *Hub) Reconcile(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func (h *Hub) reconcilePeople(ctx context.Context) {
+	if h.ad.Identity == nil {
+		return
+	}
+	people, err := h.store.People(ctx)
+	if err != nil {
+		h.log.Error("people reconcile: read state", "err", err)
+		return
+	}
+	observed, err := h.ad.Identity.Observe(ctx)
+	if err != nil {
+		h.log.Warn("people reconcile: observe sign-in service", "err", err)
+		return
+	}
+	byID := make(map[string]core.IdentityUser, len(observed))
+	for _, user := range observed {
+		byID[user.ID] = user
+	}
+	for _, person := range people {
+		want := personGroups(person)
+		user, found := byID[providerID(person)]
+		if !found || !identityMatches(user, person, want) {
+			h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, Action: "person.identity_changed", Detail: "Restored sign-in account settings for " + person.Name})
+		}
+		identityID, err := h.ad.Identity.Ensure(ctx, person, want)
+		if err != nil {
+			h.log.Warn("people reconcile: update sign-in account", "person", person.ID, "err", err)
+			continue
+		}
+		if identityID != "" && identityID != person.IdentityID {
+			if err := h.store.RecordIdentityID(ctx, person.ID, identityID); err != nil {
+				h.log.Warn("people reconcile: save sign-in account id", "person", person.ID, "err", err)
+			}
+		}
+	}
+}
+
+func identityMatches(user core.IdentityUser, person core.Person, groups []string) bool {
+	if user.Email != person.Email || user.Name != person.Name || user.Disabled {
+		return false
+	}
+	if len(user.Groups) != len(groups) {
+		return false
+	}
+	have := map[string]bool{}
+	for _, group := range user.Groups {
+		have[group] = true
+	}
+	for _, group := range groups {
+		if !have[group] {
+			return false
+		}
+	}
+	return true
 }
 
 func (h *Hub) reconcileEnv(ctx context.Context, a state.App, env string, r *core.Running) {
@@ -436,6 +498,11 @@ func (h *Hub) appProxy(port int, app, appName, env string) http.Handler {
 	p := httputil.NewSingleHostReverseProxy(target)
 	base := p.Director
 	p.Director = func(r *http.Request) {
+		v, ok := core.ViewerFrom(r.Context())
+		person, err := h.store.Person(r.Context(), v.PersonID)
+		if !ok || err != nil || !Can(person, ActionApps, app) || (env == core.Dev && !Can(person, ActionProjects, app)) {
+			return
+		}
 		// Only Homelab may set its identity headers, so drop any a client sent.
 		for k := range r.Header {
 			if strings.HasPrefix(strings.ToLower(k), "x-homelab-") {
@@ -443,7 +510,11 @@ func (h *Hub) appProxy(port int, app, appName, env string) http.Handler {
 			}
 		}
 		base(r)
-		r.Header.Set("X-Forwarded-Proto", "https")
+		proto := "http"
+		if r.TLS != nil {
+			proto = "https"
+		}
+		r.Header.Set("X-Forwarded-Proto", proto)
 		if h.cfg.Identity != nil {
 			v, _ := core.ViewerFrom(r.Context())
 			if err := h.cfg.Identity.Apply(r, app, env, h.person(v), h.cfg.Now()); err != nil {
@@ -452,6 +523,7 @@ func (h *Hub) appProxy(port int, app, appName, env string) http.Handler {
 			}
 		}
 	}
+	serve := p.ServeHTTP
 	label := appName
 	if env != core.Prod {
 		label += " (" + env + ")"
@@ -464,28 +536,176 @@ func (h *Hub) appProxy(port int, app, appName, env string) http.Handler {
 			`<body style="font-family:system-ui;padding:2rem;max-width:30rem;margin:auto"><h1>%s isn't answering right now</h1>`+
 			`<p>It may be starting up. Try again in a moment, or check it in the Homelab companion.</p>`, htmlEscape(label))
 	}
-	return p
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/_homelab/callback" {
+			h.appCallback(w, r, app, env)
+			return
+		}
+		person, ok := h.appSessionPerson(r, app, env)
+		if !ok {
+			if companion, signed := h.personFromRequest(r); signed && (!Can(companion, ActionApps, app) || (env == core.Dev && !Can(companion, ActionProjects, app))) {
+				h.proxyForbidden(w)
+				return
+			}
+			returnURL := "http://" + r.Host + r.URL.RequestURI()
+			query := url.Values{"app": {app}, "env": {env}, "return": {returnURL}}
+			if _, signed := h.personFromRequest(r); signed {
+				http.Redirect(w, r, "http://localhost:7080/auth/app?"+query.Encode(), http.StatusSeeOther)
+			} else {
+				http.Redirect(w, r, "http://localhost:7080/auth/start?return="+url.QueryEscape("/auth/app?"+query.Encode()), http.StatusSeeOther)
+			}
+			return
+		}
+		if !Can(person, ActionApps, app) || (env == core.Dev && !Can(person, ActionProjects, app)) {
+			h.proxyForbidden(w)
+			return
+		}
+		for name := range r.Header {
+			if strings.HasPrefix(strings.ToLower(name), "x-homelab-") {
+				r.Header.Del(name)
+			}
+		}
+		kept := forwardedCookies(r.Header.Values("Cookie"))
+		r.Header.Del("Cookie")
+		if kept != "" {
+			r.Header.Set("Cookie", kept)
+		}
+		r = r.WithContext(core.WithViewer(r.Context(), core.Viewer{PersonID: person.ID, Login: person.Email, Name: person.Name}))
+		serve(w, r)
+	})
 }
 
-// person is who a viewer is to apps. Milestone 2 knows only the owners; everyone else is
-// anonymous (nil). Real people and roles arrive in milestone 3 on the same headers.
-func (h *Hub) person(v core.Viewer) *identity.Person {
-	switch {
-	case v.Tagged:
-		return nil
-	case v.Local:
-		return &identity.Person{User: "owner", Name: "Owner", Groups: []string{"role:owner"}}
-	case v.Login == "":
-		return nil
-	}
-	if len(h.cfg.Owners) == 0 { // as the companion: with no owners listed, every person on the tailnet is one
-		return &identity.Person{User: v.Login, Name: firstNonEmpty(v.Name, v.Login), Groups: []string{"role:owner"}}
-	}
-	for _, o := range h.cfg.Owners {
-		if strings.EqualFold(strings.TrimSpace(o), v.Login) {
-			return &identity.Person{User: v.Login, Name: firstNonEmpty(v.Name, v.Login), Groups: []string{"role:owner"}}
+func forwardedCookies(headers []string) string {
+	var kept []string
+	for _, header := range headers {
+		start, quoted, escaped := 0, false, false
+		for i := 0; i <= len(header); i++ {
+			if i < len(header) {
+				c := header[i]
+				if escaped {
+					escaped = false
+					continue
+				}
+				if quoted && c == '\\' {
+					escaped = true
+					continue
+				}
+				if c == '"' {
+					quoted = !quoted
+					continue
+				}
+				if c != ';' || quoted {
+					continue
+				}
+			}
+			part := strings.TrimSpace(header[start:i])
+			start = i + 1
+			if part == "" {
+				continue
+			}
+			name, _, hasValue := strings.Cut(part, "=")
+			if hasValue && strings.HasPrefix(strings.ToLower(strings.TrimSpace(name)), "homelab_") {
+				continue
+			}
+			kept = append(kept, part)
 		}
 	}
+	return strings.Join(kept, "; ")
+}
+
+func (h *Hub) proxyForbidden(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.Write([]byte(`<!doctype html><meta name="viewport" content="width=device-width"><title>Access denied</title><p>You don't have access to this app.</p>`))
+}
+
+func (h *Hub) appSessionPerson(r *http.Request, app, env string) (core.Person, bool) {
+	c, err := r.Cookie("homelab_app_" + app + "_" + env)
+	if err != nil {
+		return core.Person{}, false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(c.Value)
+	if err != nil || len(raw) != 32 {
+		return core.Person{}, false
+	}
+	hash := sha256.Sum256(raw)
+	p, err := h.store.AppSessionPerson(r.Context(), hash[:], app, env, h.cfg.Now(), 8*time.Hour)
+	return p, err == nil && Can(p, ActionApps, app) && (env != core.Dev || Can(p, ActionProjects, app))
+}
+
+func (h *Hub) appCallback(w http.ResponseWriter, r *http.Request, app, env string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "That app link isn't valid.", http.StatusMethodNotAllowed)
+		return
+	}
+	code, err := base64.RawURLEncoding.DecodeString(r.URL.Query().Get("code"))
+	if err != nil || len(code) != 32 {
+		http.Error(w, "That app link has expired. Open the app again from Homelab.", http.StatusBadRequest)
+		return
+	}
+	digest := sha256.Sum256(code)
+	grant, err := h.store.ConsumeAppCode(r.Context(), digest[:], h.cfg.Now())
+	if err != nil || grant.App != app || grant.Env != env {
+		http.Error(w, "That app link has expired. Open the app again from Homelab.", http.StatusBadRequest)
+		return
+	}
+	person, err := h.store.Person(r.Context(), grant.PersonID)
+	if err != nil || !Can(person, ActionApps, app) || (env == core.Dev && !Can(person, ActionProjects, app)) {
+		h.proxyForbidden(w)
+		return
+	}
+	path := grant.ReturnPath
+	if path == "" || !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || strings.ContainsAny(path, "\\\r\n") {
+		path = "/"
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		http.Error(w, "Homelab couldn't open that app. Try again.", http.StatusInternalServerError)
+		return
+	}
+	now := h.cfg.Now()
+	hash := sha256.Sum256(raw)
+	if err := h.store.PutAppSession(r.Context(), hash[:], person.ID, app, env, now, now.Add(24*time.Hour)); err != nil {
+		http.Error(w, "Homelab couldn't open that app. Try again.", http.StatusInternalServerError)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: "homelab_app_" + app + "_" + env, Value: base64.RawURLEncoding.EncodeToString(raw), Path: "/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode, MaxAge: 24 * 60 * 60})
+	http.Redirect(w, r, path, http.StatusSeeOther)
+}
+
+func (h *Hub) personFromRequest(r *http.Request) (core.Person, bool) {
+	c, err := r.Cookie("homelab_session")
+	if err != nil {
+		return core.Person{}, false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(c.Value)
+	if err != nil || len(raw) != 32 {
+		return core.Person{}, false
+	}
+	hash := sha256.Sum256(raw)
+	p, err := h.store.SessionPerson(r.Context(), hash[:], h.cfg.Now(), 7*24*time.Hour)
+	return p, err == nil && p.Status == "signed_in"
+}
+
+// person is the signed-in household member an app receives.
+func (h *Hub) person(v core.Viewer) *identity.Person {
+	if v.PersonID != "" {
+		p, err := h.store.Person(context.Background(), v.PersonID)
+		if err != nil || p.Status != "signed_in" {
+			return nil
+		}
+		groups := make([]string, 0, len(p.Roles)+len(p.Grants))
+		for _, role := range p.Roles {
+			groups = append(groups, "role:"+role)
+		}
+		for app := range p.Grants {
+			groups = append(groups, "app:"+app)
+		}
+		sort.Strings(groups)
+		return &identity.Person{User: firstNonEmpty(p.Email, p.ID), Name: p.Name, Groups: groups}
+	}
+	// A local connection, Tailscale login or owner allow-list entry isn't a household session.
+	// The API session and app-session cookies provide real identities in milestone 3.
 	return nil
 }
 

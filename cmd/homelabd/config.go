@@ -86,8 +86,7 @@ func loadConfig(home string) (Config, error) {
 	return parseConfig(b)
 }
 
-// checkLoopback refuses a listen address that other computers could reach: the local
-// listener treats everyone as the owner.
+// checkLoopback refuses a listen address that other computers could reach.
 func checkLoopback(listen string) error {
 	host, port, err := net.SplitHostPort(listen)
 	if err != nil {
@@ -102,5 +101,5 @@ func checkLoopback(listen string) error {
 	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
 		return nil
 	}
-	return fmt.Errorf("listen %q is not a loopback address. The companion on this computer is open to everyone who can reach it, so it must listen on 127.0.0.1 (or ::1); other devices reach Homelab through Tailscale", listen)
+	return fmt.Errorf("listen %q is not a loopback address. It must listen on 127.0.0.1 (or ::1); other devices reach Homelab through Tailscale", listen)
 }

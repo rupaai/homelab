@@ -2,6 +2,9 @@ package hub
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,6 +17,7 @@ import (
 
 	"github.com/rupaai/homelab/internal/core"
 	"github.com/rupaai/homelab/internal/identity"
+	"github.com/rupaai/homelab/internal/state"
 )
 
 const autoManifest = `
@@ -242,28 +246,146 @@ func TestIdentityHeaders(t *testing.T) {
 	u, _ := url.Parse(app.URL)
 	port, _ := strconv.Atoi(u.Port())
 	r.hub.cfg.Owners = []string{"labiba@example.com"}
+	if _, err := r.store.AddApp(context.Background(), state.App{ID: "movies", Name: "Movies", Repo: "a/b", Manifest: []byte("id: movies"), Promotion: "manual"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.SavePerson(context.Background(), core.Person{ID: "owner", Name: "Labiba", Email: "labiba@example.com", Status: "signed_in", Roles: []string{"owner"}, Grants: map[string]string{"movies": "build"}}); err != nil {
+		t.Fatal(err)
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(raw)
+	if err := r.store.PutSession(context.Background(), digest[:], "owner", time.Now(), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.PutAppSession(context.Background(), digest[:], "owner", "movies", core.Dev, time.Now(), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	cookie := &http.Cookie{Name: "homelab_app_movies_dev", Value: base64.RawURLEncoding.EncodeToString(raw)}
 	proxy := r.hub.appProxy(port, "movies", "Movie Night", core.Dev)
 	pub := r.hub.cfg.Identity.PublicKey()
+	companionToken := make([]byte, 32)
+	if _, err := rand.Read(companionToken); err != nil {
+		t.Fatal(err)
+	}
 
 	send := func(v core.Viewer) http.Header {
 		req := httptest.NewRequest("GET", "/", nil)
 		req.Header.Set("X-Homelab-User", "forged")
+		req.AddCookie(cookie)
+		req.AddCookie(&http.Cookie{Name: "homelab_session", Value: base64.RawURLEncoding.EncodeToString(companionToken)})
+		req.AddCookie(&http.Cookie{Name: "homelab_secret"})
+		req.AddCookie(&http.Cookie{Name: "keep", Value: "yes"})
 		req = req.WithContext(core.WithViewer(req.Context(), v))
 		proxy.ServeHTTP(httptest.NewRecorder(), req)
 		return <-got
 	}
-	h := send(core.Viewer{Local: true})
+	h := send(core.Viewer{PersonID: "owner", Login: "labiba@example.com", Name: "Labiba"})
 	p, err := identity.Verify(h, pub, "movies", core.Dev, time.Now())
-	if err != nil || p == nil || p.User != "owner" || p.Groups[0] != "role:owner" {
+	if err != nil || p == nil || p.User != "labiba@example.com" || len(p.Groups) != 2 || p.Groups[0] != "app:movies" || p.Groups[1] != "role:owner" || h.Get("Cookie") != "keep=yes" || h.Get("X-Homelab-User") == "forged" {
 		t.Fatalf("local = %+v %v", p, err)
 	}
-	h = send(core.Viewer{Login: "Labiba@example.com", Name: "Labiba"})
+	h = send(core.Viewer{PersonID: "owner", Login: "Labiba@example.com", Name: "Labiba"})
 	if p, err := identity.Verify(h, pub, "movies", core.Dev, time.Now()); err != nil || p == nil || p.Name != "Labiba" {
 		t.Fatalf("owner = %+v %v", p, err)
 	}
-	h = send(core.Viewer{Login: "guest@example.com"})
-	if h.Get("X-Homelab-User") != "" || h.Get("X-Homelab-Signature") != "" {
-		t.Fatalf("stranger got identity headers: %v", h)
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("X-Homelab-User", "forged")
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("stranger status=%d want sign-in redirect", rec.Code)
+	}
+}
+
+func TestForwardedCookiesPreservesRawAppCookiesAndStripsHomelabValues(t *testing.T) {
+	got := forwardedCookies([]string{`homelab_session=secret; keep="a;b"; homelab_app_movies_prod=token`, `next=one`})
+	if got != `keep="a;b"; next=one` {
+		t.Fatalf("forwarded cookies=%q", got)
+	}
+}
+
+func TestAppProxyChecksUseBuildAndGrant(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.store.AddApp(context.Background(), state.App{ID: "movies", Name: "Movies", Repo: "a/b", Manifest: []byte("id: movies"), Promotion: "manual"}); err != nil {
+		t.Fatal(err)
+	}
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	defer app.Close()
+	u, _ := url.Parse(app.URL)
+	port, _ := strconv.Atoi(u.Port())
+	for _, tc := range []struct {
+		id, level, env string
+		want           int
+	}{{"member", "use", core.Prod, 204}, {"member-dev", "use", core.Dev, 403}, {"builder", "build", core.Dev, 204}, {"none", "", core.Prod, 403}} {
+		p := core.Person{ID: tc.id, Name: tc.id, Email: tc.id + "@example.test", Status: "signed_in", Roles: []string{"member"}, Grants: map[string]string{}}
+		if tc.level != "" {
+			p.Grants["movies"] = tc.level
+		}
+		if err := r.store.SavePerson(context.Background(), p); err != nil {
+			t.Fatal(err)
+		}
+		raw := make([]byte, 32)
+		if _, err := rand.Read(raw); err != nil {
+			t.Fatal(err)
+		}
+		hash := sha256.Sum256(raw)
+		if err := r.store.PutSession(context.Background(), hash[:], tc.id, time.Now(), time.Now().Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		if tc.want == 204 {
+			if err := r.store.PutAppSession(context.Background(), hash[:], tc.id, "movies", tc.env, time.Now(), time.Now().Add(time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		req := httptest.NewRequest("GET", "/", nil)
+		req.AddCookie(&http.Cookie{Name: "homelab_session", Value: base64.RawURLEncoding.EncodeToString(raw)})
+		if tc.want == 204 {
+			req.AddCookie(&http.Cookie{Name: "homelab_app_movies_" + tc.env, Value: base64.RawURLEncoding.EncodeToString(raw)})
+		}
+		rec := httptest.NewRecorder()
+		r.hub.appProxy(port, "movies", "Movies", tc.env).ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Errorf("%s/%s status=%d want=%d", tc.id, tc.env, rec.Code, tc.want)
+		}
+	}
+}
+
+func TestAppCallbackExchangesSingleUseCodeForBoundCookie(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if _, err := r.store.AddApp(ctx, state.App{ID: "movies", Name: "Movies", Repo: "a/b", Manifest: []byte("id: movies"), Promotion: "manual"}); err != nil {
+		t.Fatal(err)
+	}
+	p := core.Person{ID: "sam", Name: "Sam", Email: "sam@example.test", Status: "signed_in", Roles: []string{"member"}, Grants: map[string]string{"movies": "use"}}
+	if err := r.store.SavePerson(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	code := make([]byte, 32)
+	if _, err := rand.Read(code); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(code)
+	if err := r.store.PutAppCode(ctx, digest[:], p.ID, "movies", core.Prod, "/watch?x=1", time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	proxy := r.hub.appProxy(17000, "movies", "Movies", core.Prod)
+	req := httptest.NewRequest("GET", "/_homelab/callback?code="+base64.RawURLEncoding.EncodeToString(code), nil)
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/watch?x=1" {
+		t.Fatalf("callback status=%d location=%q", rec.Code, rec.Header().Get("Location"))
+	}
+	cookie := rec.Result().Cookies()[0]
+	if cookie.Name != "homelab_app_movies_prod" || !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("app cookie=%+v", cookie)
+	}
+	replay := httptest.NewRecorder()
+	proxy.ServeHTTP(replay, req)
+	if replay.Code != http.StatusBadRequest {
+		t.Fatalf("code replay status=%d", replay.Code)
 	}
 }
 

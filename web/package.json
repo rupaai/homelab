@@ -15,6 +15,7 @@
     "@sveltejs/adapter-static": "^4.0.0",
     "@sveltejs/kit": "^3.0.1",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
+    "@types/qrcode": "^1.5.6",
     "playwright": "^1.64.1",
     "svelte": "^5.57.2",
     "svelte-check": "^4.7.6",
@@ -27,5 +28,8 @@
       "types": "./src/lib/*",
       "default": "./src/lib/*"
     }
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
   }
 }

@@ -30,19 +30,20 @@ secrets: [TMDB_API_KEY]
 `
 
 type rig struct {
-	t      *testing.T
-	dir    string
-	store  *state.Store
-	hub    *Hub
-	src    *fake.Source
-	build  *fake.Builder
-	reg    *fake.Registry
-	dep    *fake.Deployer
-	addr   *fake.Addresses
-	health *fake.Health
-	sec    *fake.Secrets
-	smoke  *fake.Smoke
-	mirror *fake.Mirror
+	t        *testing.T
+	dir      string
+	store    *state.Store
+	hub      *Hub
+	src      *fake.Source
+	build    *fake.Builder
+	reg      *fake.Registry
+	dep      *fake.Deployer
+	addr     *fake.Addresses
+	health   *fake.Health
+	sec      *fake.Secrets
+	smoke    *fake.Smoke
+	mirror   *fake.Mirror
+	identity *fake.Identity
 
 	clockMu sync.Mutex
 	clock   time.Time // zero means the real time
@@ -70,7 +71,7 @@ func (r *rig) advance(d time.Duration) {
 func newRig(t *testing.T) *rig {
 	r := &rig{t: t, dir: t.TempDir(), src: fake.NewSource(), build: fake.NewBuilder(), reg: fake.NewRegistry(),
 		dep: fake.NewDeployer(), addr: fake.NewAddresses(), health: fake.NewHealth(), sec: fake.NewSecrets(),
-		smoke: fake.NewSmoke(), mirror: fake.NewMirror()}
+		smoke: fake.NewSmoke(), mirror: fake.NewMirror(), identity: fake.NewIdentity()}
 	r.open()
 	return r
 }
@@ -89,7 +90,7 @@ func (r *rig) open() {
 	signer, _ := identity.NewSigner(key)
 	r.hub = New(Config{DataDir: r.dir, HealthyWait: 3 * time.Second, Now: r.now, Identity: signer}, s, Adapters{
 		Source: r.src, Builder: r.build, Registry: r.reg, Deployer: r.dep,
-		Addresses: r.addr, Health: r.health, Secrets: r.sec, Smoke: r.smoke, Mirror: r.mirror,
+		Addresses: r.addr, Health: r.health, Secrets: r.sec, Smoke: r.smoke, Mirror: r.mirror, Identity: r.identity,
 	})
 	r.t.Cleanup(func() { s.Close() })
 }

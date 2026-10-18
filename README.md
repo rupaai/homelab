@@ -7,7 +7,8 @@ in SQLite and a reconciler makes Docker, GitHub and Tailscale match it.
 Milestones so far: 1, the deploy loop on a Mac ([docs/milestone1.md](docs/milestone1.md)), and
 2, apps with no setup: encrypted secrets set in the companion, auto-promote with automatic
 rollback, signed identity headers and a mirror of every app's code
-([docs/milestone2.md](docs/milestone2.md)).
+([docs/milestone2.md](docs/milestone2.md)); and 3, people and sign-in
+([docs/milestone3.md](docs/milestone3.md)).
 
 ## Build
 
@@ -23,9 +24,13 @@ make test-docker    # end-to-end test of the Docker adapter (needs Docker runnin
 
 ```sh
 bin/homelabd init                 # creates ~/.homelab with config.yaml and secrets/
-bin/homelabd run                  # companion at http://127.0.0.1:7080
+bin/homelabd run                  # companion at http://localhost:7080
 bin/homelabd service install      # optional: start at login (prints one launchctl command)
 ```
+
+The companion starts at `http://localhost:7080`. On first run it asks you to create the
+owner and register a passkey. Keep the recovery code it shows once. If you lose access,
+`bin/homelabd recover` prints a one-time sign-in link that expires after 15 minutes.
 
 Secrets are set in the companion: platform credentials (the GitHub token) under
 **Settings**, and an app's secrets on its page under **Secrets**. They're kept encrypted in
