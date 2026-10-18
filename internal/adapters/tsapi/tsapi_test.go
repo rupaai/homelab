@@ -3,15 +3,19 @@ package tsapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/rupaai/homelab/internal/core"
+	"github.com/tailscale/hujson"
 )
 
 const testSecret = "tskey-client-SECRET-VALUE"
@@ -126,113 +130,181 @@ func TestAuthKeyBody(t *testing.T) {
 	}
 }
 
-func TestPolicyJSONGolden(t *testing.T) {
-	got, err := PolicyJSON(core.AccessPolicy{
-		Groups:    map[string][]string{"family": {"b@x.com", "a@x.com", "a@x.com"}, "guests": {}},
-		TagOwners: []string{"tag:photos", "tag:files"},
-		Grants:    []core.AccessGrant{{Groups: []string{"family"}, Tags: []string{"tag:photos"}}},
+func TestMergePolicyIntoEmptyFile(t *testing.T) {
+	got, err := MergePolicy(nil, core.AccessPolicy{
+		Groups:    map[string][]string{"hl-family": {"b@x.com", "a@x.com", "a@x.com"}, "hl-guests": {}},
+		TagOwners: []string{"tag:hl-photos", "tag:hl-files"},
+		Grants:    []core.AccessGrant{{Groups: []string{"hl-family"}, Tags: []string{"tag:hl-photos"}}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := `{
-  "groups": {
-    "group:family": [
-      "a@x.com",
-      "b@x.com"
-    ],
-    "group:guests": []
-  },
-  "tagOwners": {
-    "tag:files": [
-      "autogroup:admin",
-      "tag:homelab"
-    ],
-    "tag:homelab": [
-      "autogroup:admin"
-    ],
-    "tag:photos": [
-      "autogroup:admin",
-      "tag:homelab"
-    ]
-  },
-  "grants": [
-    {
-      "src": [
-        "autogroup:admin"
-      ],
-      "dst": [
-        "tag:files",
-        "tag:photos"
-      ],
-      "ip": [
-        "*"
-      ]
-    },
-    {
-      "src": [
-        "group:family"
-      ],
-      "dst": [
-        "tag:photos"
-      ],
-      "ip": [
-        "*"
-      ]
-    }
-  ],
-  "ssh": []
-}`
+	"groups": {"group:hl-family": ["a@x.com", "b@x.com"], "group:hl-guests": []},
+	"tagOwners": {
+		"tag:homelab":   ["autogroup:admin"],
+		"tag:hl-files":  ["autogroup:admin", "tag:homelab"],
+		"tag:hl-photos": ["autogroup:admin", "tag:homelab"]
+	},
+	"grants": [
+		{
+			"src": ["autogroup:admin"],
+			"dst": ["tag:hl-files", "tag:hl-photos"],
+			"ip":  ["*"]
+		},
+		{"src": ["group:hl-family"], "dst": ["tag:hl-photos"], "ip": ["*"]}
+	]
+}
+`
 	if string(got) != want {
 		t.Fatalf("got:\n%s", got)
 	}
 }
 
-func TestPolicyJSONRejectsBadNames(t *testing.T) {
+// The policy file of a tailnet someone else already uses: Homelab must keep every rule,
+// comment and ssh entry in it, and add only its own hl-... parts.
+func TestMergePolicyKeepsOtherRules(t *testing.T) {
+	cur, err := os.ReadFile("testdata/shared_tailnet.hujson")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := core.AccessPolicy{
+		Groups:    map[string][]string{"hl-everyone": {"f@x.com"}, "hl-app-movies": {"f@x.com"}},
+		TagOwners: []string{"tag:hl-homelab", "tag:hl-movies"},
+		Grants: []core.AccessGrant{
+			{Groups: []string{"hl-everyone"}, Tags: []string{"tag:hl-homelab"}},
+			{Groups: []string{"hl-app-movies"}, Tags: []string{"tag:hl-movies"}},
+		},
+	}
+	got, err := MergePolicy(cur, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotStr := string(got)
+	for _, line := range strings.Split(string(cur), "\n") {
+		if c := strings.TrimSpace(line); strings.HasPrefix(c, "//") && !strings.Contains(gotStr, c) {
+			t.Errorf("lost comment %q", c)
+		}
+	}
+	doc := parsePolicy(t, got)
+	before := parsePolicy(t, cur)
+	if !reflect.DeepEqual(doc["ssh"], before["ssh"]) {
+		t.Errorf("ssh changed: %v", doc["ssh"])
+	}
+	grants := doc["grants"].([]any)
+	if len(grants) != 5 || !reflect.DeepEqual(grants[:2], before["grants"].([]any)) {
+		t.Fatalf("grants: %v", grants)
+	}
+	if owners := doc["tagOwners"].(map[string]any); len(owners) != 3 {
+		t.Errorf("tagOwners: %v", owners)
+	}
+
+	// Saving again changes nothing, and a change to Homelab's people only touches its part.
+	again, err := MergePolicy(got, p)
+	if err != nil || string(again) != gotStr {
+		t.Fatalf("not stable: %v\n%s", err, again)
+	}
+	delete(p.Groups, "hl-app-movies")
+	p.Grants = p.Grants[:1]
+	p.TagOwners = []string{"tag:hl-homelab"}
+	next := parsePolicy(t, mustMerge(t, got, p))
+	if grants := next["grants"].([]any); len(grants) != 4 || !reflect.DeepEqual(grants[:2], before["grants"].([]any)) {
+		t.Fatalf("grants after change: %v", grants)
+	}
+	if _, ok := next["groups"].(map[string]any)["group:hl-app-movies"]; ok {
+		t.Error("old group kept")
+	}
+}
+
+func TestMergePolicyLeavesTagHomelabAlone(t *testing.T) {
+	cur := []byte(`{"tagOwners": {"tag:homelab": ["him@x.com"], "tag:server": ["him@x.com"]}}`)
+	doc := parsePolicy(t, mustMerge(t, cur, core.AccessPolicy{TagOwners: []string{"tag:hl-movies"}}))
+	owners := doc["tagOwners"].(map[string]any)
+	if fmt.Sprint(owners["tag:homelab"]) != "[him@x.com]" || fmt.Sprint(owners["tag:server"]) != "[him@x.com]" {
+		t.Fatalf("tagOwners: %v", owners)
+	}
+}
+
+func TestMergePolicyRejectsBadNames(t *testing.T) {
 	bad := []core.AccessPolicy{
 		{Groups: map[string][]string{"Family": nil}},
 		{Groups: map[string][]string{"a b": nil}},
+		{Groups: map[string][]string{"family": nil}},
 		{TagOwners: []string{"photos"}},
 		{TagOwners: []string{"tag:Photos"}},
-		{TagOwners: []string{"tag:"}},
-		{TagOwners: []string{"tag:a"}, Grants: []core.AccessGrant{{Groups: []string{"nope"}, Tags: []string{"tag:a"}}}},
-		{TagOwners: []string{"tag:a"}, Grants: []core.AccessGrant{{Groups: nil, Tags: []string{"tag:b"}}}},
+		{TagOwners: []string{"tag:hl-"}},
+		{TagOwners: []string{"tag:photos"}},
+		{TagOwners: []string{"tag:hl-a"}, Grants: []core.AccessGrant{{Groups: []string{"hl-nope"}, Tags: []string{"tag:hl-a"}}}},
+		{TagOwners: []string{"tag:hl-a"}, Grants: []core.AccessGrant{{Groups: nil, Tags: []string{"tag:hl-b"}}}},
 	}
 	for i, p := range bad {
-		if _, err := PolicyJSON(p); err == nil {
+		if _, err := MergePolicy(nil, p); err == nil {
 			t.Errorf("case %d: expected an error", i)
 		}
 	}
+	if _, err := MergePolicy([]byte(`[]`), core.AccessPolicy{}); err == nil {
+		t.Error("expected an error for a file that isn't an object")
+	}
+}
+
+func parsePolicy(t *testing.T, b []byte) map[string]any {
+	t.Helper()
+	std, err := hujson.Standardize(append([]byte{}, b...))
+	if err != nil {
+		t.Fatalf("not HuJSON: %v\n%s", err, b)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(std, &doc); err != nil {
+		t.Fatal(err)
+	}
+	return doc
+}
+
+func mustMerge(t *testing.T, cur []byte, p core.AccessPolicy) []byte {
+	t.Helper()
+	out, err := MergePolicy(cur, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 var testPolicy = core.AccessPolicy{
-	Groups:    map[string][]string{"family": {"a@x.com"}},
-	TagOwners: []string{"tag:photos"},
-	Grants:    []core.AccessGrant{{Groups: []string{"family"}, Tags: []string{"tag:photos"}}},
+	Groups:    map[string][]string{"hl-family": {"a@x.com"}},
+	TagOwners: []string{"tag:hl-photos"},
+	Grants:    []core.AccessGrant{{Groups: []string{"hl-family"}, Tags: []string{"tag:hl-photos"}}},
 }
+
+const otherRules = `{
+	// his rule
+	"grants": [{"src": ["autogroup:admin"], "dst": ["*"], "ip": ["*"]}],
+}`
 
 func TestSetPolicySendsIfMatchAndRetries(t *testing.T) {
 	gets, posts := 0, 0
-	want, _ := PolicyJSON(testPolicy)
+	want := mustMerge(t, []byte(otherRules), testPolicy)
 	_, c, _ := newFake(t, func(w http.ResponseWriter, r *http.Request, body []byte) {
 		switch r.Method {
 		case http.MethodGet:
 			gets++
-			if r.Header.Get("Accept") != "application/json" {
+			if r.Header.Get("Accept") != "application/hujson" {
 				t.Error("missing Accept header")
 			}
 			w.Header().Set("ETag", `"etag`+string(rune('0'+gets))+`"`)
-			_, _ = w.Write([]byte(`{"acls":[]}`))
+			_, _ = w.Write([]byte(otherRules))
 		case http.MethodPost:
 			posts++
 			if got, wantTag := r.Header.Get("If-Match"), `"etag`+string(rune('0'+gets))+`"`; got != wantTag {
 				t.Errorf("If-Match %q, want %q", got, wantTag)
 			}
+			if r.Header.Get("Content-Type") != "application/hujson" {
+				t.Errorf("Content-Type %q", r.Header.Get("Content-Type"))
+			}
 			if posts == 1 {
 				w.WriteHeader(http.StatusPreconditionFailed)
 				return
 			}
-			if string(body) != string(want) {
+			if string(body) != string(want) || !strings.Contains(string(body), "// his rule") {
 				t.Errorf("body mismatch: %s", body)
 			}
 		}
@@ -259,10 +331,10 @@ func TestSetPolicyGivesUpAfterSecond412(t *testing.T) {
 }
 
 func TestSetPolicySkipsWhenUnchanged(t *testing.T) {
-	want, _ := PolicyJSON(testPolicy)
-	// Same document, different formatting.
+	// Homelab's part is already there; only formatting differs.
+	std, _ := hujson.Standardize(mustMerge(t, []byte(otherRules), testPolicy))
 	var v any
-	_ = json.Unmarshal(want, &v)
+	_ = json.Unmarshal(std, &v)
 	compact, _ := json.Marshal(v)
 	f, c, _ := newFake(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
 		if r.Method == http.MethodPost {
@@ -356,6 +428,10 @@ func TestRemoveDevicesOnlyThatPersonsUntagged(t *testing.T) {
 			}
 			return
 		}
+		if r.URL.Path == "/api/v2/tailnet/-/users" {
+			_, _ = w.Write([]byte(`{"users":[{"id":"u1","loginName":"ada@x.com","role":"member"}]}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"devices":[
 {"id":"1","nodeId":"n1","name":"a-phone","user":"Ada@X.com","tags":[]},
 {"id":"2","name":"a-laptop","user":"ada@x.com"},
@@ -383,7 +459,7 @@ func TestRemoveUser(t *testing.T) {
 			posted = append(posted, r.URL.Path)
 			return
 		}
-		_, _ = w.Write([]byte(`{"users":[{"id":"u1","loginName":"Ada@x.com"}]}`))
+		_, _ = w.Write([]byte(`{"users":[{"id":"u1","loginName":"Ada@x.com","role":"member"},{"id":"u2","loginName":"own@x.com","role":"owner"},{"id":"u3","loginName":"adm@x.com","role":"admin"}]}`))
 	})
 	ctx := context.Background()
 	if err := c.RemoveUser(ctx, "nobody@x.com"); err != nil || len(posted) != 0 {
@@ -391,6 +467,30 @@ func TestRemoveUser(t *testing.T) {
 	}
 	if err := c.RemoveUser(ctx, "ada@x.com"); err != nil || len(posted) != 1 || posted[0] != "/api/v2/users/u1/delete" {
 		t.Fatalf("err=%v posted=%v", err, posted)
+	}
+	for _, login := range []string{"own@x.com", "adm@x.com"} {
+		if err := c.RemoveUser(ctx, login); err == nil {
+			t.Errorf("%s: expected the owner or an admin to be kept", login)
+		}
+	}
+	if len(posted) != 1 {
+		t.Fatalf("posted %v", posted)
+	}
+}
+
+func TestRemoveDevicesKeepsOwnerAndAdmins(t *testing.T) {
+	_, c, _ := newFake(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		switch {
+		case r.Method == http.MethodDelete:
+			t.Errorf("deleted %s", r.URL.Path)
+		case r.URL.Path == "/api/v2/tailnet/-/users":
+			_, _ = w.Write([]byte(`{"users":[{"id":"u2","loginName":"own@x.com","role":"owner"}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"devices":[{"id":"1","name":"his-laptop","user":"own@x.com"}]}`))
+		}
+	})
+	if n, err := c.RemoveDevices(context.Background(), "own@x.com"); n != 0 || err == nil {
+		t.Fatalf("n=%d err=%v", n, err)
 	}
 }
 

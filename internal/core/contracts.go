@@ -166,7 +166,7 @@ type RemoteAccess interface {
 	Invite(ctx context.Context, email string) (RemoteInvite, error)
 	// CancelInvite withdraws an invite that hasn't been accepted.
 	CancelInvite(ctx context.Context, inviteID string) error
-	// SetPolicy replaces the tailnet's access rules.
+	// SetPolicy writes Homelab's own part of the tailnet's access rules and keeps the rest.
 	SetPolicy(ctx context.Context, p AccessPolicy) error
 	// AuthKey mints a single-use key for one of Homelab's own addresses, with these tags.
 	AuthKey(ctx context.Context, tags []string) (string, error)
