@@ -159,6 +159,8 @@ func New(h *hub.Hub, opts Options) http.Handler {
 	mux.HandleFunc("DELETE /api/push/subscriptions", s.unsubscribePush)
 	mux.HandleFunc("POST /api/push/test", s.testPush)
 	mux.HandleFunc("GET /api/resources", s.resources)
+	mux.HandleFunc("GET /api/device", s.device)
+	mux.HandleFunc("POST /api/device/update", s.updateHomelab)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "There's nothing at that address.")
 	})
@@ -772,6 +774,24 @@ func (s *server) resources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *server) device(w http.ResponseWriter, r *http.Request) {
+	v, err := s.hub.Device(r.Context())
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *server) updateHomelab(w http.ResponseWriter, r *http.Request) {
+	version, err := s.hub.UpdateHomelab(actionCtx(r), viewer(r))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"version": version})
 }
 
 func noContent(w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }

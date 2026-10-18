@@ -219,6 +219,18 @@ export const mockApi: Api = {
 			{ app: 'movie-night', env: 'dev', name: 'Movie Night', cpuPercent: 0.4, memUsed: 121e6 }
 		]
 	}),
+	device: () => delay({
+		system: {
+			hostname: 'mars', os: 'Ubuntu 24.04.4 LTS', kernel: '6.8.0-85-generic', uptimeSeconds: 9 * 86400 + 3600, temperatureC: 47,
+			disks: [
+				{ mount: '/', device: '/dev/mapper/ubuntu--vg-ubuntu--lv', used: 83e9, total: 231e9, health: 'ok' as const },
+				{ mount: '/mnt/storage', device: '/dev/sdb1', used: 410e9, total: 984e9, health: 'ok' as const }
+			],
+			rebootRequired: true, updatesPending: 4, securityPending: 2, reportedAt: new Date().toISOString()
+		},
+		update: { managed: true, current: 'build-12', latest: 'build-14', available: true, checkedAt: new Date().toISOString(), lastResult: 'Updated to build-12.' }
+	}),
+	updateHomelab: () => delay('build-14'),
 	async removePerson(id: string) {
 		const entry = household.find((p) => p.id === id);
 		if (!entry) throw new ApiError("That person isn't in Homelab.", 404);

@@ -201,6 +201,8 @@ export interface Api {
 	unsubscribePush(endpoint: string): Promise<void>;
 	testPush(): Promise<number>;
 	resources(): Promise<ResourcesView>;
+	device(): Promise<DeviceView>;
+	updateHomelab(): Promise<string>;
 	apps(): Promise<AppView[]>;
 	projects(): Promise<AppView[]>;
 	addApp(repo: string, branch: string): Promise<AppView>;
@@ -225,3 +227,12 @@ export interface PushSubscriptionInput { endpoint: string; p256dh: string; auth:
 export interface DeviceUsage { cpuPercent: number; memUsed: number; memTotal: number; diskUsed: number; diskTotal: number; }
 export interface AppUsage { app: string; env: EnvName; name: string; cpuPercent: number; memUsed: number; }
 export interface ResourcesView { device?: DeviceUsage; apps: AppUsage[]; problems?: string[]; }
+export interface DiskInfo { mount: string; device: string; used: number; total: number; health?: 'ok' | 'failing' | ''; }
+export interface SystemInfo {
+	hostname?: string; os?: string; kernel?: string; uptimeSeconds?: number; temperatureC?: number;
+	disks: DiskInfo[]; rebootRequired: boolean;
+	/** -1 when unknown */
+	updatesPending: number; securityPending: number; reportedAt?: string;
+}
+export interface UpdateStatus { managed: boolean; current: string; latest?: string; available: boolean; checkedAt?: string; lastResult?: string; note?: string; }
+export interface DeviceView { system?: SystemInfo; update?: UpdateStatus; problems?: string[]; }

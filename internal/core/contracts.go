@@ -192,3 +192,20 @@ type Resources interface {
 	// Apps reports each running app environment's CPU and memory.
 	Apps(ctx context.Context) ([]AppUsage, error)
 }
+
+// System describes the device itself: its OS, disks, temperature and pending OS updates
+// (milestone 6). On a Mac only part of it is known.
+type System interface {
+	Info(ctx context.Context) (SystemInfo, error)
+}
+
+// Updater keeps Homelab itself up to date (milestone 6). Only a Homelab installed by
+// `homelabd setup` updates itself; elsewhere Status says so and Apply refuses.
+type Updater interface {
+	// Status reports the running version and the newest one, checking GitHub when its
+	// last answer is old.
+	Status(ctx context.Context) (UpdateStatus, error)
+	// Apply installs the newest version and restarts Homelab on it. If the new version
+	// doesn't stay up, the previous one comes back on its own.
+	Apply(ctx context.Context) (string, error)
+}

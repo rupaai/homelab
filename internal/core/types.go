@@ -287,3 +287,40 @@ type AppUsage struct {
 	CPUPercent float64 `json:"cpuPercent"`
 	MemUsed    uint64  `json:"memUsed"`
 }
+
+// SystemInfo is what Homelab knows about the device (milestone 6).
+type SystemInfo struct {
+	Hostname        string     `json:"hostname,omitempty"`
+	OS              string     `json:"os,omitempty"` // e.g. "Ubuntu 24.04.4 LTS"
+	Kernel          string     `json:"kernel,omitempty"`
+	UptimeSeconds   uint64     `json:"uptimeSeconds,omitempty"`
+	TemperatureC    float64    `json:"temperatureC,omitempty"` // hottest sensor; 0 when unknown
+	Disks           []DiskInfo `json:"disks"`
+	RebootRequired  bool       `json:"rebootRequired"`
+	UpdatesPending  int        `json:"updatesPending"`       // -1 when unknown
+	SecurityPending int        `json:"securityPending"`      // -1 when unknown
+	ReportedAt      *time.Time `json:"reportedAt,omitempty"` // when the root report last ran; nil if never
+}
+
+// DiskInfo is one mounted disk.
+type DiskInfo struct {
+	Mount  string `json:"mount"`
+	Device string `json:"device"`
+	Used   uint64 `json:"used"`
+	Total  uint64 `json:"total"`
+	// Health is "ok", "failing" or "" when unknown (needs the root report and smartctl).
+	Health string `json:"health,omitempty"`
+}
+
+// UpdateStatus is Homelab's own version and the newest one available (milestone 6).
+type UpdateStatus struct {
+	Managed   bool       `json:"managed"` // installed by `homelabd setup`, so it can update itself
+	Current   string     `json:"current"`
+	Latest    string     `json:"latest,omitempty"`
+	Available bool       `json:"available"`
+	CheckedAt *time.Time `json:"checkedAt,omitempty"`
+	// LastResult says how the last update went, e.g. "Updated to build-12" or "build-12
+	// didn't start, so Homelab went back to build-11".
+	LastResult string `json:"lastResult,omitempty"`
+	Note       string `json:"note,omitempty"`
+}

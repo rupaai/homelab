@@ -1,0 +1,49 @@
+name: Release
+
+# Every change merged to main becomes a numbered release (build-<n>) with the program for
+# the device, the Mac and arm64 Linux. Homelab on the device updates itself from these.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: build-${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build the companion
+        working-directory: web
+        run: npm ci && npm run build
+      - name: Build homelabd
+        run: |
+          mkdir dist
+          for target in linux/amd64 linux/arm64 darwin/arm64; do
+            os=${target%/*}; arch=${target#*/}
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
+              -ldflags "-s -w -X main.version=$VERSION" -o "dist/homelabd-$os-$arch" ./cmd/homelabd
+          done
+          dist/homelabd-linux-amd64 version | grep -q "$VERSION"
+          (cd dist && sha256sum homelabd-* > checksums.txt)
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$VERSION" dist/* --target "$GITHUB_SHA" --title "$VERSION" \
+            --notes "Built from ${GITHUB_SHA::7}. On the device, update from the companion (Resources). For a first install see docs/milestone6.md."

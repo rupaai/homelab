@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/rupaai/homelab/internal/sharedir"
 )
 
 // SupportingService describes a hidden Homelab-managed container such as Pocket ID.
@@ -44,6 +46,9 @@ func (d *Deployer) EnsureSupportingService(ctx context.Context, s SupportingServ
 		return err
 	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
+		return err
+	}
+	if err := sharedir.Open(root); err != nil {
 		return err
 	}
 	compose, variables, err := supportingComposeYAML(s, root)

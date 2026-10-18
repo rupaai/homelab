@@ -28,6 +28,8 @@ import (
 	"github.com/rupaai/homelab/internal/adapters/noop"
 	"github.com/rupaai/homelab/internal/adapters/pocketid"
 	"github.com/rupaai/homelab/internal/adapters/secretstore"
+	"github.com/rupaai/homelab/internal/adapters/selfupdate"
+	"github.com/rupaai/homelab/internal/adapters/sysinfo"
 	"github.com/rupaai/homelab/internal/adapters/sysres"
 	"github.com/rupaai/homelab/internal/adapters/tailscale"
 	"github.com/rupaai/homelab/internal/adapters/tsapi"
@@ -81,6 +83,9 @@ func cmdRun(args []string) error {
 	if err := checkLoopback(cfg.Listen); err != nil {
 		return err
 	}
+	if err := checkNotMoved(home); err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -88,6 +93,9 @@ func cmdRun(args []string) error {
 }
 
 func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
+	// Stopping (for an update) ends run normally; systemd then starts the new version.
+	ctx, restart := context.WithCancel(ctx)
+	defer restart()
 	secretsDir := filepath.Join(home, "secrets")
 	secrets, err := secretstore.Open(filepath.Join(secretsDir, "secrets.db"), filepath.Join(secretsDir, "master.key"))
 	if err != nil {
@@ -176,12 +184,13 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 		notifier = nil
 	}
 	resources := sysres.New(sysres.Options{Logger: log})
+	updater := selfupdate.New(selfupdate.Options{Home: home, Version: version, Token: token, Logger: log, Restart: restart})
 
 	h := hub.New(hub.Config{DataDir: home, Logger: log, Owners: cfg.Owners, Identity: signer, PushPublicKey: pushPublic}, store, hub.Adapters{
 		Source: gh, Builder: gh, Registry: gh, Deployer: deployer,
 		Addresses: addrs, Health: httphealth.New(nil), Secrets: secrets,
 		Smoke: deployer, Mirror: mirror, Identity: idp, Email: noop.Email{}, Remote: remote,
-		Notifier: notifier, Resources: resources,
+		Notifier: notifier, Resources: resources, System: sysinfo.New(sysinfo.Options{}), Updater: updater,
 	})
 
 	oidcConfig := api.NewOIDCConfig("", "", "")
@@ -210,6 +219,10 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 		go announceTailscale(ctx, addrs)
 	}
 
+	if selfupdate.Managed(home) {
+		go confirmUpdate(ctx, home, h, log)
+	}
+
 	hubDone := make(chan struct{})
 	go func() { defer close(hubDone); h.Run(ctx) }()
 
@@ -227,6 +240,28 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	_ = srv.Shutdown(stopCtx)
 	<-hubDone
 	return result
+}
+
+// confirmUpdate marks a just-installed version as good once it has kept running a while.
+func confirmUpdate(ctx context.Context, home string, h *hub.Hub, log *slog.Logger) {
+	bin := selfupdate.BinDir(home)
+	if !selfupdate.Pending(bin) {
+		return
+	}
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(selfupdate.ProveAfter):
+	}
+	ok, err := selfupdate.Confirm(bin, version, time.Now())
+	if err != nil {
+		log.Warn("couldn't confirm the update", "err", err)
+		return
+	}
+	if ok {
+		log.Info("update confirmed", "version", version)
+		h.RecordUpdate(ctx, "Homelab is now on "+version)
+	}
 }
 
 func configurePocketID(ctx context.Context, deployer *docker.Deployer, idp *pocketid.Client, apiKey, encryptionKey, oidcSecret string, oidcConfig *api.OIDCConfig, log *slog.Logger, home string) {

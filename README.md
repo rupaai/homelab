@@ -7,8 +7,11 @@ in SQLite and a reconciler makes Docker, GitHub and Tailscale match it.
 Milestones so far: 1, the deploy loop on a Mac ([docs/milestone1.md](docs/milestone1.md)), and
 2, apps with no setup: encrypted secrets set in the companion, auto-promote with automatic
 rollback, signed identity headers and a mirror of every app's code
-([docs/milestone2.md](docs/milestone2.md)); and 3, people and sign-in
-([docs/milestone3.md](docs/milestone3.md)).
+([docs/milestone2.md](docs/milestone2.md)); 3, people and sign-in
+([docs/milestone3.md](docs/milestone3.md)); 4, access from anywhere
+([docs/milestone4.md](docs/milestone4.md)); 5, know what's happening
+([docs/milestone5.md](docs/milestone5.md)); and 6, running on a Linux device at home with
+self-update ([docs/milestone6.md](docs/milestone6.md)).
 
 ## Build
 
@@ -37,6 +40,13 @@ Secrets are set in the companion: platform credentials (the GitHub token) under
 `~/.homelab/secrets/secrets.db` with the key in `~/.homelab/secrets/master.key`; keep a copy
 of that key somewhere safe. Plain `KEY=VALUE` files from milestone 1 are imported once at
 start and renamed to `*.imported`.
+
+## On a Linux device
+
+Every merge to `main` publishes a release with `homelabd-linux-amd64`. Copy it to the device
+and run `sudo ./homelabd-linux-amd64 setup` (add `--import FILE` to bring a Mac's Homelab,
+made with `homelabd export`). After that it updates itself from the companion's Resources
+screen. See [docs/milestone6.md](docs/milestone6.md).
 
 ## Adding an app
 
