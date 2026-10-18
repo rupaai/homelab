@@ -76,6 +76,7 @@ func newRig(t *testing.T) *rig {
 	h := hub.New(hub.Config{DataDir: dir}, st, hub.Adapters{
 		Source: flakySource{src, fail}, Builder: fake.NewBuilder(), Registry: fake.NewRegistry(), Deployer: fake.NewDeployer(),
 		Addresses: fake.NewAddresses(), Health: fake.NewHealth(), Secrets: fake.NewSecrets(), Identity: idp, Email: fake.Email{},
+		Notifier: fake.NewNotifier(), Resources: &fake.Resources{Usage: core.DeviceUsage{DiskUsed: 1, DiskTotal: 2}},
 	})
 	return &rig{h: h, src: src, fail: fail, store: st, idp: idp}
 }
@@ -621,7 +622,7 @@ func TestInviteRedemptionReturnsPasskeyRegistrationLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token := strings.TrimPrefix(invite, "http://localhost:7080/invite/")
+	token := strings.TrimPrefix(invite.URL, "http://localhost:7080/invite/")
 	h := r.handler()
 	path := "/api/invites/" + token + "/redeem"
 	got := post(h, path, `{}`, nil)
@@ -786,7 +787,7 @@ func TestPasskeyLinksAreReissuedAfterAnEarlierLinkIsUsed(t *testing.T) {
 			t.Fatal(err)
 		}
 		h := r.handler()
-		path := "/api/invites/" + strings.TrimPrefix(invite, "http://localhost:7080/invite/") + "/redeem"
+		path := "/api/invites/" + strings.TrimPrefix(invite.URL, "http://localhost:7080/invite/") + "/redeem"
 		before := r.idp.LoginLinkCalls
 		for attempt := 1; attempt <= 3; attempt++ {
 			if got := post(h, path, `{}`, nil); got.Code != http.StatusCreated {
@@ -797,4 +798,73 @@ func TestPasskeyLinksAreReissuedAfterAnEarlierLinkIsUsed(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestTailnetLoginIsTheSignIn(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if err := r.store.SavePerson(ctx, core.Person{ID: "sam", Name: "Sam", Email: "sam@example.test", Status: "invited", Roles: []string{"member"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.SetTailscaleLogin(ctx, "sam", "sam@gmail.test"); err != nil {
+		t.Fatal(err)
+	}
+	h := r.handler()
+	sam := &core.Viewer{Login: "sam@gmail.test", Name: "Sam"}
+	if rec := do(h, "GET", "/api/me", "", sam); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"tailscale":true`) {
+		t.Fatalf("me = %d %s", rec.Code, rec.Body)
+	}
+	if p, _ := r.store.Person(ctx, "sam"); p.Status != "signed_in" {
+		t.Fatalf("first visit didn't count as sign-in: %+v", p)
+	}
+	for _, path := range []string{"/api/people", "/api/settings/secrets", "/api/projects"} {
+		if rec := do(h, "GET", path, "", sam); rec.Code != http.StatusForbidden {
+			t.Errorf("%s = %d, want 403", path, rec.Code)
+		}
+	}
+	stranger := &core.Viewer{Login: "who@gmail.test"}
+	if rec := do(h, "GET", "/api/me", "", stranger); rec.Code != http.StatusForbidden {
+		t.Fatalf("stranger me = %d", rec.Code)
+	}
+	if rec := do(h, "GET", "/api/bootstrap", "", stranger); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"known":false`) || !strings.Contains(rec.Body.String(), `"remote":true`) {
+		t.Fatalf("stranger bootstrap = %d %s", rec.Code, rec.Body)
+	}
+	tagged := &core.Viewer{Login: "sam@gmail.test", Tagged: true}
+	if rec := do(h, "GET", "/api/me", "", tagged); rec.Code != http.StatusForbidden {
+		t.Fatalf("tagged node me = %d", rec.Code)
+	}
+	if rec := do(h, "POST", "/api/logout", "", sam); rec.Code == 200 {
+		t.Fatalf("logout without the companion header = %d", rec.Code)
+	}
+}
+
+func TestPushResourcesAndBuilderActivity(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if _, err := r.store.AddApp(ctx, state.App{ID: "movies", Name: "Movies", Repo: "a/b", Manifest: []byte("id: movies"), Promotion: "manual"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.store.SavePerson(ctx, core.Person{ID: "b", Name: "B", Status: "signed_in", Roles: []string{"builder"}, Grants: map[string]string{"movies": "build"}}); err != nil {
+		t.Fatal(err)
+	}
+	h := r.handler()
+	b := &core.Viewer{Local: true, PersonID: "b"}
+	sub := `{"endpoint":"https://fcm.googleapis.com/fcm/send/x","p256dh":"k","auth":"a","device":"Phone"}`
+	if rec := post(h, "/api/push/subscriptions", sub, b); rec.Code != 204 {
+		t.Fatalf("subscribe = %d %s", rec.Code, rec.Body)
+	}
+	if rec := post(h, "/api/push/test", "", b); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"sent":1`) {
+		t.Fatalf("test push = %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(h, "GET", "/api/activity?app=movies", "", b); rec.Code != 200 {
+		t.Fatalf("builder activity for their app = %d", rec.Code)
+	}
+	for _, path := range []string{"/api/activity", "/api/activity?app=other", "/api/resources"} {
+		if rec := do(h, "GET", path, "", b); rec.Code != 403 {
+			t.Errorf("builder %s = %d, want 403", path, rec.Code)
+		}
+	}
+	if rec := do(h, "GET", "/api/resources", "", &local); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"diskTotal":2`) {
+		t.Fatalf("resources = %d %s", rec.Code, rec.Body)
+	}
 }

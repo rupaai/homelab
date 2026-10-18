@@ -44,6 +44,9 @@ type rig struct {
 	smoke    *fake.Smoke
 	mirror   *fake.Mirror
 	identity *fake.Identity
+	remote   *fake.Remote // nil unless a test sets it before open
+	pusher   *fake.Notifier
+	res      *fake.Resources
 
 	clockMu sync.Mutex
 	clock   time.Time // zero means the real time
@@ -71,7 +74,7 @@ func (r *rig) advance(d time.Duration) {
 func newRig(t *testing.T) *rig {
 	r := &rig{t: t, dir: t.TempDir(), src: fake.NewSource(), build: fake.NewBuilder(), reg: fake.NewRegistry(),
 		dep: fake.NewDeployer(), addr: fake.NewAddresses(), health: fake.NewHealth(), sec: fake.NewSecrets(),
-		smoke: fake.NewSmoke(), mirror: fake.NewMirror(), identity: fake.NewIdentity()}
+		smoke: fake.NewSmoke(), mirror: fake.NewMirror(), identity: fake.NewIdentity(), pusher: fake.NewNotifier(), res: &fake.Resources{}}
 	r.open()
 	return r
 }
@@ -88,10 +91,15 @@ func (r *rig) open() {
 	r.store = s
 	key, _ := identity.NewKey()
 	signer, _ := identity.NewSigner(key)
-	r.hub = New(Config{DataDir: r.dir, HealthyWait: 3 * time.Second, Now: r.now, Identity: signer}, s, Adapters{
+	ad := Adapters{
 		Source: r.src, Builder: r.build, Registry: r.reg, Deployer: r.dep,
 		Addresses: r.addr, Health: r.health, Secrets: r.sec, Smoke: r.smoke, Mirror: r.mirror, Identity: r.identity,
-	})
+		Notifier: r.pusher, Resources: r.res,
+	}
+	if r.remote != nil {
+		ad.Remote = r.remote
+	}
+	r.hub = New(Config{DataDir: r.dir, HealthyWait: 3 * time.Second, Now: r.now, Identity: signer}, s, ad)
 	r.t.Cleanup(func() { s.Close() })
 }
 

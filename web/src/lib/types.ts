@@ -161,15 +161,22 @@ export interface PersonView {
 	roles: HouseholdRole[];
 	grants: Record<string, 'use' | 'build'>;
 	lastSignIn?: string;
+	/** The Tailscale login that signs this person in over the tailnet. */
+	tailscaleLogin?: string;
+	/** Their Tailscale invite, until one of their devices connects. */
+	remoteInviteUrl?: string;
+	connectedAt?: string;
 }
 export interface PersonInput {
 	name: string;
 	email: string;
 	roles: HouseholdRole[];
 	grants: Record<string, 'use' | 'build'>;
+	tailscaleLogin?: string;
 }
-export interface MeView { personId: string; login: string; name: string; local: boolean; roles: HouseholdRole[]; }
-export interface BootstrapView { needsSetup: boolean; signInReady: boolean; ownerNeedsPasskey?: boolean; }
+export interface Invitation { id: string; url: string; tailscaleUrl?: string; tailscaleError?: string; }
+export interface MeView { personId: string; login: string; name: string; local: boolean; roles: HouseholdRole[]; tailscale?: boolean; }
+export interface BootstrapView { needsSetup: boolean; signInReady: boolean; ownerNeedsPasskey?: boolean; remote?: boolean; login?: string; known?: boolean; }
 export interface SetupResult { loginUrl: string; recoveryCode: string; }
 export interface PasskeyLink { url: string; }
 export interface RemovalStep { name: string; done: boolean; detail?: string; }
@@ -184,11 +191,16 @@ export interface Api {
 	recover(code: string): Promise<void>;
 	signOut(): Promise<void>;
 	people(): Promise<PersonView[]>;
-	invitePerson(person: PersonInput): Promise<{ url: string }>;
+	invitePerson(person: PersonInput): Promise<Invitation>;
 	redeemInvite(token: string): Promise<PasskeyLink>;
 	resendInvite(id: string): Promise<{ url: string }>;
 	updatePerson(id: string, person: PersonInput): Promise<PersonView>;
 	removePerson(id: string): Promise<RemovalStep[]>;
+	pushKey(): Promise<string>;
+	subscribePush(sub: PushSubscriptionInput): Promise<void>;
+	unsubscribePush(endpoint: string): Promise<void>;
+	testPush(): Promise<number>;
+	resources(): Promise<ResourcesView>;
 	apps(): Promise<AppView[]>;
 	projects(): Promise<AppView[]>;
 	addApp(repo: string, branch: string): Promise<AppView>;
@@ -208,3 +220,8 @@ export interface Api {
 	setSetting(name: string, value: string): Promise<void>;
 	deleteSetting(name: string): Promise<void>;
 }
+
+export interface PushSubscriptionInput { endpoint: string; p256dh: string; auth: string; device: string; }
+export interface DeviceUsage { cpuPercent: number; memUsed: number; memTotal: number; diskUsed: number; diskTotal: number; }
+export interface AppUsage { app: string; env: EnvName; name: string; cpuPercent: number; memUsed: number; }
+export interface ResourcesView { device?: DeviceUsage; apps: AppUsage[]; problems?: string[]; }

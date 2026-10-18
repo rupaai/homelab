@@ -24,7 +24,7 @@ import (
 var _ core.Addresses = (*Addresses)(nil)
 
 const (
-	msgMissingKey = "TS_AUTHKEY is missing from secrets/platform.env"
+	msgMissingKey = "Add the Tailscale OAuth client in Settings, or TS_AUTHKEY to secrets/platform.env"
 	msgHTTPS      = "Turn on HTTPS certificates in the Tailscale admin console (DNS page): enable MagicDNS, then HTTPS Certificates"
 )
 
@@ -34,6 +34,10 @@ type Options struct {
 	AuthKey  string // only needed the first time a node logs in
 	Tags     []string
 	Logger   *slog.Logger
+	// TagsFor, when set, gives each address its own tags instead of Tags.
+	TagsFor func(name string) []string
+	// MintKey, when set, makes a single-use key for a node's first login instead of AuthKey.
+	MintKey func(ctx context.Context, tags []string) (string, error)
 }
 
 // Who is the person or device behind a connection.
@@ -136,7 +140,7 @@ func (a *Addresses) Ensure(_ context.Context, name string, handler http.Handler)
 	e.h.Store(&handlerBox{handler})
 	a.entries[name] = e
 	dir := filepath.Join(a.opts.StateDir, name)
-	if a.opts.AuthKey == "" && !hasState(dir) {
+	if a.opts.AuthKey == "" && a.opts.MintKey == nil && !hasState(dir) {
 		e.err = msgMissingKey
 		close(e.done)
 		return nil
@@ -181,7 +185,18 @@ func isHTTPSError(err error) bool {
 
 // serve runs one attempt: start the node, listen, and serve until something fails.
 func (a *Addresses) serve(ctx context.Context, e *entry, dir string) error {
-	n := a.newNode(e.name, dir, a.opts, a.log)
+	o := a.opts
+	if o.TagsFor != nil {
+		o.Tags = o.TagsFor(e.name)
+	}
+	if o.MintKey != nil && !hasState(dir) {
+		key, err := o.MintKey(ctx, o.Tags)
+		if err != nil {
+			return fmt.Errorf("get a Tailscale key for %s: %w", e.name, err)
+		}
+		o.AuthKey = key
+	}
+	n := a.newNode(e.name, dir, o, a.log)
 	e.set(func() { e.node = n })
 	defer func() {
 		n.Close()

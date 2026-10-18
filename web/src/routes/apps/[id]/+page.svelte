@@ -156,7 +156,7 @@
 		<section aria-labelledby="recent">
 			<div class="page-head">
 				<h2 id="recent">Recent activity</h2>
-				<a class="small" href="/activity">All activity</a>
+				<a class="small" href="/activity?app={encodeURIComponent(id)}">All activity</a>
 			</div>
 			<div class="card">
 				{#if events.length}

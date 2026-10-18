@@ -34,7 +34,7 @@
 <svelte:head><title>Settings · Homelab</title></svelte:head>
 
 <div class="page">
-	<h1>Settings</h1>
+	<div class="page-head"><h1>Settings</h1><a class="btn small" href="/resources">Resources</a></div>
 	<p class="muted intro">Passwords and keys Homelab itself needs. Values can be replaced but not shown again.</p>
 
 	{#if error}<p class="notice bad" role="alert">{error}</p>{/if}

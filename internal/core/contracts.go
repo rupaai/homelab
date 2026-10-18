@@ -158,3 +158,37 @@ type Identity interface {
 type Email interface {
 	Send(ctx context.Context, to, subject, body string) error
 }
+
+// RemoteAccess manages who can reach Homelab from anywhere (R1-R3): people on the tailnet,
+// their devices, the access rules, and keys for Homelab's own addresses.
+type RemoteAccess interface {
+	// Invite returns a link that lets the person join the tailnet.
+	Invite(ctx context.Context, email string) (RemoteInvite, error)
+	// CancelInvite withdraws an invite that hasn't been accepted.
+	CancelInvite(ctx context.Context, inviteID string) error
+	// SetPolicy replaces the tailnet's access rules.
+	SetPolicy(ctx context.Context, p AccessPolicy) error
+	// AuthKey mints a single-use key for one of Homelab's own addresses, with these tags.
+	AuthKey(ctx context.Context, tags []string) (string, error)
+	// Observe lists the tailnet's people and devices.
+	Observe(ctx context.Context) (RemoteState, error)
+	// RemoveDevices deletes every device that belongs to login.
+	RemoveDevices(ctx context.Context, login string) (int, error)
+	// RemoveUser takes login off the tailnet.
+	RemoveUser(ctx context.Context, login string) error
+}
+
+// Notifier delivers push notifications to people's devices (milestone 5, O4).
+type Notifier interface {
+	// Send delivers n to one subscribed device. ErrGone means the device unsubscribed and its
+	// subscription should be forgotten.
+	Send(ctx context.Context, sub PushSubscription, n Notification) error
+}
+
+// Resources reports what the device and the apps use right now (O6). No history is kept.
+type Resources interface {
+	// Device reports the computer's CPU, memory and the disk holding dataDir.
+	Device(ctx context.Context, dataDir string) (DeviceUsage, error)
+	// Apps reports each running app environment's CPU and memory.
+	Apps(ctx context.Context) ([]AppUsage, error)
+}

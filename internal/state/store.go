@@ -130,6 +130,16 @@ var migrations = []string{
 		created_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
 	CREATE INDEX app_sessions_person ON app_sessions(person_id);
 	CREATE INDEX app_sessions_app ON app_sessions(app,env);`,
+	`ALTER TABLE people ADD COLUMN tailscale_login TEXT NOT NULL DEFAULT '';
+	ALTER TABLE people ADD COLUMN remote_invite_id TEXT NOT NULL DEFAULT '';
+	ALTER TABLE people ADD COLUMN remote_invite_url TEXT NOT NULL DEFAULT '';
+	ALTER TABLE people ADD COLUMN connected_at INTEGER;
+	UPDATE people SET tailscale_login=lower(email) WHERE email <> '';
+	CREATE UNIQUE INDEX people_tailscale_login ON people(tailscale_login COLLATE NOCASE) WHERE tailscale_login <> '';`,
+	`CREATE TABLE push_subscriptions (endpoint TEXT PRIMARY KEY, person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+		p256dh TEXT NOT NULL, auth TEXT NOT NULL, device TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL);
+	CREATE INDEX push_subscriptions_person ON push_subscriptions(person_id);
+	CREATE TABLE alerts (key TEXT PRIMARY KEY, since INTEGER NOT NULL, sent_at INTEGER);`,
 }
 
 func (s *Store) migrate() error {

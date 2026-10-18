@@ -59,12 +59,12 @@ func TestInviteCanIssueFreshLinksUntilSignInAndIsHashed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	u, err := url.Parse(link)
+	u, err := url.Parse(link.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	token := strings.TrimPrefix(u.Path, "/invite/")
-	if strings.Contains(link, "@") && strings.Contains(link, "example.test") {
+	if strings.Contains(link.URL, "@") && strings.Contains(link.URL, "example.test") {
 		t.Fatal("invite URL leaked the email")
 	}
 	if _, err := r.hub.RedeemInvite(ctx, token); err != nil {
@@ -108,7 +108,7 @@ func TestResendInviteRevokesOldLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldToken := strings.TrimPrefix(mustURLPath(t, first), "/invite/")
+	oldToken := strings.TrimPrefix(mustURLPath(t, first.URL), "/invite/")
 	newToken := strings.TrimPrefix(mustURLPath(t, resend), "/invite/")
 	if oldToken == newToken {
 		t.Fatal("resend kept the same invite token")

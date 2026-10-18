@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { page } from '$app/state';
 	import { api } from '#lib/api.ts';
 	import { appsStore } from '#lib/apps.svelte.ts';
 	import { messageOf } from '#lib/errors.ts';
@@ -17,7 +18,7 @@
 	async function load(before?: number) {
 		error = '';
 		try {
-			const rows = await api.activity({ before, limit: PAGE });
+			const rows = await api.activity({ app: page.url.searchParams.get('app') || undefined, before, limit: PAGE });
 			events = before ? [...events, ...rows] : rows;
 			more = rows.length === PAGE;
 		} catch (e) {
@@ -40,7 +41,7 @@
 
 <div class="page">
 	<div class="page-head">
-		<h1>Activity</h1>
+		<h1>Activity{#if page.url.searchParams.get('app')} · {appName(page.url.searchParams.get('app') ?? '')}{/if}</h1>
 		<button class="btn small" type="button" onclick={() => load()}>Refresh</button>
 	</div>
 

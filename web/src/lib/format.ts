@@ -127,3 +127,12 @@ export function autoStateLabel(state: string): string {
 			return state;
 	}
 }
+
+/** bytes as people read them: 182 MB, 5.1 GB. */
+export function bytes(n: number): string {
+	if (!Number.isFinite(n) || n < 0) return '–';
+	const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+	let i = 0;
+	while (n >= 1000 && i < units.length - 1) { n /= 1000; i++; }
+	return `${n >= 10 || i === 0 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
+}

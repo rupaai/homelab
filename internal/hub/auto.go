@@ -242,6 +242,7 @@ func (h *Hub) autoRollback(ctx context.Context, a state.App, w watch, detail str
 	h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: a.ID, Env: core.Prod, Action: "rollback.auto",
 		Detail: fmt.Sprintf("%s turned unhealthy after it was promoted (%s), so prod is going back to %s. The data stays as it is; the copy from before the promote is kept.",
 			w.rel.Short(), detail, prev.Short())})
+	h.alertRollback(ctx, a, w.rel, prev)
 	h.setBusy(a.ID, core.Prod, "Going back to "+prev.Short())
 	go func() {
 		defer h.Kick()

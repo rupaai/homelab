@@ -154,6 +154,11 @@ func New(h *hub.Hub, opts Options) http.Handler {
 	mux.HandleFunc("GET /api/settings/secrets", s.settings)
 	mux.HandleFunc("PUT /api/settings/secrets/{name}", s.setSetting)
 	mux.HandleFunc("DELETE /api/settings/secrets/{name}", s.deleteSetting)
+	mux.HandleFunc("GET /api/push/key", s.pushKey)
+	mux.HandleFunc("POST /api/push/subscriptions", s.subscribePush)
+	mux.HandleFunc("DELETE /api/push/subscriptions", s.unsubscribePush)
+	mux.HandleFunc("POST /api/push/test", s.testPush)
+	mux.HandleFunc("GET /api/resources", s.resources)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "There's nothing at that address.")
 	})
@@ -174,6 +179,13 @@ func New(h *hub.Hub, opts Options) http.Handler {
 					v.PersonID, v.Login, v.Name = p.ID, p.Email, p.Name
 					r = r.WithContext(core.WithViewer(r.Context(), v))
 				}
+			}
+		}
+		// Over the tailnet, Tailscale already knows who is asking (milestone 4).
+		if v, ok := core.ViewerFrom(r.Context()); ok && v.PersonID == "" && s.hub != nil {
+			if p, ok := s.hub.TailnetPerson(r.Context(), v); ok {
+				v.PersonID, v.Name = p.ID, p.Name
+				r = r.WithContext(core.WithViewer(r.Context(), v))
 			}
 		}
 		if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
@@ -287,8 +299,13 @@ func apiAction(r *http.Request) (string, string) {
 	if parts[1] == "people" && len(parts) == 3 && r.Method == http.MethodDelete {
 		return hub.ActionRemoveUser, parts[2]
 	}
-	if parts[1] == "me" {
+	if parts[1] == "me" || parts[1] == "push" {
 		return hub.ActionSelf, ""
+	}
+	if parts[1] == "activity" && r.Method == http.MethodGet {
+		if app := r.URL.Query().Get("app"); app != "" {
+			return hub.ActionLogs, app // builders see their own apps' activity (O3)
+		}
 	}
 	if parts[1] == "logout" {
 		return hub.ActionApps, ""
@@ -370,7 +387,7 @@ func (s *server) me(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"login": p.Email, "name": p.Name, "local": v.Local, "roles": p.Roles})
+	writeJSON(w, http.StatusOK, map[string]any{"login": p.Email, "name": p.Name, "local": v.Local, "roles": p.Roles, "tailscale": !v.Local && !v.Tagged})
 }
 
 func (s *server) passkeyLink(w http.ResponseWriter, r *http.Request) {
@@ -413,12 +430,12 @@ func (s *server) invitePerson(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &p, true) {
 		return
 	}
-	link, err := s.hub.InvitePerson(actionCtx(r), p)
+	inv, err := s.hub.InvitePerson(actionCtx(r), p)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]string{"url": link})
+	writeJSON(w, http.StatusCreated, inv)
 }
 func (s *server) updatePerson(w http.ResponseWriter, r *http.Request) {
 	var p core.Person
@@ -701,6 +718,60 @@ func (s *server) activity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, ev)
+}
+
+func (s *server) pushKey(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"publicKey": s.hub.PushPublicKey()})
+}
+
+type pushInput struct {
+	Endpoint string `json:"endpoint"`
+	P256dh   string `json:"p256dh"`
+	Auth     string `json:"auth"`
+	Device   string `json:"device"`
+}
+
+func (s *server) subscribePush(w http.ResponseWriter, r *http.Request) {
+	var in pushInput
+	if !decode(w, r, &in, true) {
+		return
+	}
+	sub := core.PushSubscription{Endpoint: in.Endpoint, P256dh: in.P256dh, Auth: in.Auth}
+	if err := s.hub.SubscribePush(r.Context(), viewer(r).PersonID, in.Device, sub); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	noContent(w)
+}
+
+func (s *server) unsubscribePush(w http.ResponseWriter, r *http.Request) {
+	var in pushInput
+	if !decode(w, r, &in, true) {
+		return
+	}
+	if err := s.hub.UnsubscribePush(r.Context(), viewer(r).PersonID, in.Endpoint); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	noContent(w)
+}
+
+func (s *server) testPush(w http.ResponseWriter, r *http.Request) {
+	n, err := s.hub.TestPush(r.Context(), viewer(r).PersonID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"sent": n})
+}
+
+func (s *server) resources(w http.ResponseWriter, r *http.Request) {
+	v, err := s.hub.Resources(r.Context())
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 func noContent(w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }

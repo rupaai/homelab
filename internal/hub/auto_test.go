@@ -282,21 +282,30 @@ func TestIdentityHeaders(t *testing.T) {
 		proxy.ServeHTTP(httptest.NewRecorder(), req)
 		return <-got
 	}
-	h := send(core.Viewer{PersonID: "owner", Login: "labiba@example.com", Name: "Labiba"})
+	h := send(core.Viewer{Local: true, PersonID: "owner", Login: "labiba@example.com", Name: "Labiba"})
 	p, err := identity.Verify(h, pub, "movies", core.Dev, time.Now())
 	if err != nil || p == nil || p.User != "labiba@example.com" || len(p.Groups) != 2 || p.Groups[0] != "app:movies" || p.Groups[1] != "role:owner" || h.Get("Cookie") != "keep=yes" || h.Get("X-Homelab-User") == "forged" {
 		t.Fatalf("local = %+v %v", p, err)
 	}
-	h = send(core.Viewer{PersonID: "owner", Login: "Labiba@example.com", Name: "Labiba"})
+	h = send(core.Viewer{Local: true, PersonID: "owner", Login: "Labiba@example.com", Name: "Labiba"})
 	if p, err := identity.Verify(h, pub, "movies", core.Dev, time.Now()); err != nil || p == nil || p.Name != "Labiba" {
 		t.Fatalf("owner = %+v %v", p, err)
 	}
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("X-Homelab-User", "forged")
+	req = req.WithContext(core.WithViewer(req.Context(), core.Viewer{Local: true}))
 	rec := httptest.NewRecorder()
 	proxy.ServeHTTP(rec, req)
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("stranger status=%d want sign-in redirect", rec.Code)
+	}
+	// Over the tailnet, a login nobody in Homelab has is refused rather than sent to localhost.
+	req = httptest.NewRequest("GET", "/", nil)
+	req = req.WithContext(core.WithViewer(req.Context(), core.Viewer{Login: "stranger@example.com"}))
+	rec = httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("tailnet stranger status=%d want 403", rec.Code)
 	}
 }
 
@@ -345,10 +354,29 @@ func TestAppProxyChecksUseBuildAndGrant(t *testing.T) {
 		if tc.want == 204 {
 			req.AddCookie(&http.Cookie{Name: "homelab_app_movies_" + tc.env, Value: base64.RawURLEncoding.EncodeToString(raw)})
 		}
+		req = req.WithContext(core.WithViewer(req.Context(), core.Viewer{Local: true}))
 		rec := httptest.NewRecorder()
 		r.hub.appProxy(port, "movies", "Movies", tc.env).ServeHTTP(rec, req)
 		if rec.Code != tc.want {
 			t.Errorf("%s/%s status=%d want=%d", tc.id, tc.env, rec.Code, tc.want)
+		}
+		// The same rules over the tailnet, where the Tailscale login is the sign-in.
+		if err := r.store.SetTailscaleLogin(context.Background(), tc.id, tc.id+"@gmail.test"); err != nil {
+			t.Fatal(err)
+		}
+		req = httptest.NewRequest("GET", "/", nil)
+		req = req.WithContext(core.WithViewer(req.Context(), core.Viewer{Login: tc.id + "@GMAIL.test", Name: tc.id}))
+		rec = httptest.NewRecorder()
+		r.hub.appProxy(port, "movies", "Movies", tc.env).ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Errorf("tailnet %s/%s status=%d want=%d", tc.id, tc.env, rec.Code, tc.want)
+		}
+		tagged := httptest.NewRequest("GET", "/", nil)
+		tagged = tagged.WithContext(core.WithViewer(tagged.Context(), core.Viewer{Login: tc.id + "@gmail.test", Tagged: true}))
+		rec = httptest.NewRecorder()
+		r.hub.appProxy(port, "movies", "Movies", tc.env).ServeHTTP(rec, tagged)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("tagged %s status=%d want 403", tc.id, rec.Code)
 		}
 	}
 }
@@ -373,6 +401,7 @@ func TestAppCallbackExchangesSingleUseCodeForBoundCookie(t *testing.T) {
 	}
 	proxy := r.hub.appProxy(17000, "movies", "Movies", core.Prod)
 	req := httptest.NewRequest("GET", "/_homelab/callback?code="+base64.RawURLEncoding.EncodeToString(code), nil)
+	req = req.WithContext(core.WithViewer(req.Context(), core.Viewer{Local: true}))
 	rec := httptest.NewRecorder()
 	proxy.ServeHTTP(rec, req)
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/watch?x=1" {
@@ -463,7 +492,7 @@ func TestSecretsViewAndLogMasking(t *testing.T) {
 		t.Fatalf("logs = %q %v", out, err)
 	}
 	set, _ := r.hub.PlatformSettings(ctx)
-	if len(set) != 2 || set[0].Name != "GITHUB_TOKEN" || !set[0].Set || set[1].Set {
+	if len(set) != 4 || set[0].Name != "GITHUB_TOKEN" || !set[0].Set || set[1].Set || set[3].Name != "TS_AUTHKEY" {
 		t.Fatalf("settings = %+v", set)
 	}
 }

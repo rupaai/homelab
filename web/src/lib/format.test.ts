@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appInitial, countdown, promotionHelp, deployedLabel, healthLabel, healthSentence, isProblemAction, relativeTime } from './format';
+import { appInitial, bytes, countdown, promotionHelp, deployedLabel, healthLabel, healthSentence, isProblemAction, relativeTime } from './format';
 
 const now = Date.parse('2026-10-14T12:00:00Z');
 const ago = (ms: number) => new Date(now - ms).toISOString();
@@ -70,4 +70,13 @@ describe('countdown', () => {
 
 describe('promotionHelp', () => {
 	it('names the delay for auto', () => expect(promotionHelp('auto', '30m')).toContain('healthy for 30m'));
+});
+
+describe('bytes', () => {
+	it('reads like people write sizes', () => {
+		expect(bytes(512)).toBe('512 B');
+		expect(bytes(182e6)).toBe('182 MB');
+		expect(bytes(5.1e9)).toBe('5.1 GB');
+		expect(bytes(-1)).toBe('–');
+	});
 });
