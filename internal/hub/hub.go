@@ -46,6 +46,8 @@ type Config struct {
 	Owners         []string         // Tailscale logins of the owners, from config.yaml
 	Identity       *identity.Signer // signs the identity headers apps get (A2); nil sends none
 	PushPublicKey  string           // VAPID public key browsers subscribe with (O4)
+	AppAPIURL      string           // where apps reach the Homelab API (the app door); "" means apps get no URL
+	AppHostIP      string           // the app door's address, given to containers as host.docker.internal; "" means Docker's own
 	Now            func() time.Time
 	Logger         *slog.Logger
 }
@@ -94,6 +96,10 @@ type Hub struct {
 	remoteObservedAt time.Time // when the tailnet was last looked at
 	diskCheckedAt    time.Time // when the disk was last checked for the full-disk alert
 	kick             chan struct{}
+
+	keyMu      sync.Mutex
+	keyTouched map[string]time.Time // key id -> last "last used" written
+	keyLogged  map[string]time.Time // key id + read -> last time it was logged
 }
 
 // watch is prod being watched after a promote (C7).
@@ -158,15 +164,17 @@ func New(cfg Config, store *state.Store, ad Adapters) *Hub {
 	}
 	return &Hub{
 		cfg: cfg, store: store, ad: ad, log: cfg.Logger,
-		appLocks:  map[string]*sync.Mutex{},
-		status:    map[envKey]*envStatus{},
-		builds:    map[string]core.Build{},
-		failed:    map[string]string{},
-		addresses: map[string]int{},
-		watches:   map[string]*watch{},
-		smoked:    map[string]string{},
-		autoNote:  map[string]autoState{},
-		kick:      make(chan struct{}, 1),
+		appLocks:   map[string]*sync.Mutex{},
+		status:     map[envKey]*envStatus{},
+		builds:     map[string]core.Build{},
+		failed:     map[string]string{},
+		addresses:  map[string]int{},
+		watches:    map[string]*watch{},
+		smoked:     map[string]string{},
+		autoNote:   map[string]autoState{},
+		kick:       make(chan struct{}, 1),
+		keyTouched: map[string]time.Time{},
+		keyLogged:  map[string]time.Time{},
 	}
 }
 
@@ -445,6 +453,15 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 		vars[k] = v
 	}
 	vars["HOMELAB_APP"], vars["HOMELAB_ENV"], vars["HOMELAB_COMMIT"] = a.ID, env, rel.Commit
+	// The app's own API key, and where to use it (platform services).
+	token, err := h.appKey(ctx, a.ID, env)
+	if err != nil {
+		return core.EnvSpec{}, err
+	}
+	vars[AppTokenSecret] = token
+	if h.cfg.AppAPIURL != "" {
+		vars["HOMELAB_API_URL"] = h.cfg.AppAPIURL
+	}
 	if h.cfg.Identity != nil {
 		vars[identity.EnvPublicKey] = h.cfg.Identity.PublicKey()
 	}
@@ -465,7 +482,7 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 	}
 	return core.EnvSpec{
 		App: a.ID, Env: env, Release: rel, Port: m.Port, HostPort: h.hostPort(a.Slot, env),
-		Memory: m.Memory, Mounts: mounts, Vars: vars, Auth: auth,
+		Memory: m.Memory, Mounts: mounts, Vars: vars, Auth: auth, HostIP: h.cfg.AppHostIP,
 	}, nil
 }
 

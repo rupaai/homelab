@@ -88,6 +88,8 @@ type server struct {
 	httpClient       *http.Client
 	authMu           sync.Mutex
 	recoveryAttempts map[string]recoveryWindow
+	keyFails         *keyLimiter
+	keyMux           *http.ServeMux
 }
 
 type recoveryWindow struct {
@@ -97,6 +99,11 @@ type recoveryWindow struct {
 
 // New returns the handler for everything Homelab serves: /api, /healthz and the companion.
 func New(h *hub.Hub, opts Options) http.Handler {
+	s := newServer(h, opts)
+	return s.handler()
+}
+
+func newServer(h *hub.Hub, opts Options) *server {
 	oidc := opts.OIDCConfig
 	if oidc == nil {
 		oidc = NewOIDCConfig(opts.OIDCIssuer, opts.OIDCClientID, opts.OIDCClientSecret)
@@ -113,7 +120,12 @@ func New(h *hub.Hub, opts Options) http.Handler {
 		}
 	}
 	s.static = newStatic(opts.Static)
+	s.keyFails = &keyLimiter{seen: map[string]recoveryWindow{}}
+	s.keyMux = s.keyRoutes()
+	return s
+}
 
+func (s *server) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": s.ver})
@@ -161,6 +173,12 @@ func New(h *hub.Hub, opts Options) http.Handler {
 	mux.HandleFunc("GET /api/resources", s.resources)
 	mux.HandleFunc("GET /api/device", s.device)
 	mux.HandleFunc("POST /api/device/update", s.updateHomelab)
+	mux.HandleFunc("GET /api/users/me", s.usersMe)
+	mux.HandleFunc("GET /api/users", s.usersList)
+	mux.HandleFunc("GET /api/users/stats", s.usersStats)
+	mux.HandleFunc("GET /api/keys", s.listKeys)
+	mux.HandleFunc("POST /api/keys", s.createKey)
+	mux.HandleFunc("DELETE /api/keys/{id}", s.revokeKey)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "There's nothing at that address.")
 	})
@@ -173,6 +191,11 @@ func New(h *hub.Hub, opts Options) http.Handler {
 		hd.Set("Referrer-Policy", "same-origin")
 		hd.Set("X-Frame-Options", "DENY")
 		hd.Set("Content-Security-Policy", csp)
+		// A call with an API key never uses the session or the companion (platform services).
+		if _, ok := bearer(r); ok && (r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/")) {
+			s.serveKey(w, r, false)
+			return
+		}
 		if c, err := r.Cookie("homelab_session"); err == nil && s.store != nil {
 			if raw, err := base64.RawURLEncoding.DecodeString(c.Value); err == nil && len(raw) == 32 {
 				digest := sha256.Sum256(raw)
@@ -300,6 +323,12 @@ func apiAction(r *http.Request) (string, string) {
 	}
 	if parts[1] == "people" && len(parts) == 3 && r.Method == http.MethodDelete {
 		return hub.ActionRemoveUser, parts[2]
+	}
+	if parts[1] == "users" {
+		if len(parts) == 3 && parts[2] == "me" {
+			return hub.ActionSelf, ""
+		}
+		return hub.ActionPeople, ""
 	}
 	if parts[1] == "me" || parts[1] == "push" {
 		return hub.ActionSelf, ""

@@ -100,6 +100,7 @@ type EnvSpec struct {
 	Mounts   []Mount
 	Vars     map[string]string // settings and secrets, as environment variables
 	Auth     RegistryAuth
+	HostIP   string // if set, the container reaches this address as host.docker.internal (the app door)
 }
 
 // Container states as the deploy adapter reports them.

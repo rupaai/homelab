@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -57,6 +58,7 @@ type composeService struct {
 	Ports      []string          `json:"ports"`
 	Volumes    []composeMount    `json:"volumes,omitempty"`
 	MemLimit   string            `json:"mem_limit,omitempty"`
+	ExtraHosts []string          `json:"extra_hosts,omitempty"`
 	Logging    composeLogging    `json:"logging"`
 	Labels     map[string]string `json:"labels"`
 }
@@ -101,6 +103,13 @@ func composeYAML(spec core.EnvSpec) ([]byte, error) {
 			labelCommit: dollars(spec.Release.Commit),
 			labelDigest: dollars(spec.Release.Digest),
 		},
+	}
+	if spec.HostIP != "" {
+		ip := net.ParseIP(spec.HostIP)
+		if ip == nil || ip.To4() == nil {
+			return nil, fmt.Errorf("%s/%s: host address %q isn't an IPv4 address", spec.App, spec.Env, spec.HostIP)
+		}
+		svc.ExtraHosts = []string{"host.docker.internal:" + ip.String()}
 	}
 	for _, m := range spec.Mounts {
 		if !filepath.IsAbs(m.HostPath) || !strings.HasPrefix(m.ContainerPath, "/") {
