@@ -56,5 +56,4 @@ func TestIntegrationAppDoor(t *testing.T) {
 	if strings.TrimSpace(out) != "ok" {
 		t.Fatalf("container got %q", out)
 	}
-	_ = ctx
 }
