@@ -141,7 +141,7 @@ func (s *server) serveKey(w http.ResponseWriter, r *http.Request, door bool) {
 		// Only the companion's own listeners (Tailscale, or this computer) put a viewer
 		// on the request, so a key that arrives any other way is refused.
 		if _, ok := core.ViewerFrom(r.Context()); !ok {
-			writeErr(w, http.StatusForbidden, "Admin keys only work over Tailscale.")
+			writeErr(w, http.StatusForbidden, "Use this key on the companion's own address.")
 			return
 		}
 	}

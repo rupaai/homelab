@@ -20,10 +20,14 @@ type Config struct {
 		Tags []string `yaml:"tags"`
 	} `yaml:"tailscale"`
 	Listen string `yaml:"listen"`
+	// AppAPIPort is the app door's port: where app containers call the Homelab API with
+	// their own key (platform services). Default 7085.
+	AppAPIPort int `yaml:"app_api_port"`
 }
 
 const (
 	defaultListen = "127.0.0.1:7080"
+	defaultAppAPI = 7085
 	defaultTag    = "tag:homelab"
 )
 
@@ -67,6 +71,12 @@ func parseConfig(b []byte) (Config, error) {
 	}
 	if c.Listen == "" {
 		c.Listen = defaultListen
+	}
+	if c.AppAPIPort == 0 {
+		c.AppAPIPort = defaultAppAPI
+	}
+	if c.AppAPIPort < 1024 || c.AppAPIPort > 65535 {
+		return c, fmt.Errorf("config.yaml: app_api_port must be between 1024 and 65535, not %d", c.AppAPIPort)
 	}
 	if len(c.Tailscale.Tags) == 0 {
 		c.Tailscale.Tags = []string{defaultTag}
