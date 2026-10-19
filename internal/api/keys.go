@@ -138,6 +138,12 @@ func (s *server) serveKey(w http.ResponseWriter, r *http.Request, door bool) {
 			writeErr(w, http.StatusForbidden, "An app's own key only works from inside the app, at HOMELAB_API_URL.")
 			return
 		}
+		// Every companion listener (this computer, the home network, Tailscale) marks its
+		// requests, so a key that arrives any other way is refused.
+		if _, ok := core.ViewerFrom(r.Context()); !ok {
+			writeErr(w, http.StatusForbidden, "Use this key on the companion's own address.")
+			return
+		}
 	}
 	r = r.WithContext(withCaller(core.WithViewer(r.Context(), core.Viewer{}), c))
 	s.keyMux.ServeHTTP(w, r)
