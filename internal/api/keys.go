@@ -17,8 +17,8 @@ import (
 // companion: Homelab drops cookies and any X-Homelab-* headers from them, and they reach
 // only the routes keyRoutes lists.
 //
-//   - Admin keys work on the companion's own listeners: the tailnet address, and this
-//     computer. Never on the app door.
+//   - Admin keys work wherever the companion is reached (home network, Tailscale, this
+//     computer). Never on the app door.
 //   - App keys work only on the app door (Door), which serves nothing else.
 
 const (
@@ -136,12 +136,6 @@ func (s *server) serveKey(w http.ResponseWriter, r *http.Request, door bool) {
 	if !door {
 		if c.Kind != hub.KeyKindAdmin {
 			writeErr(w, http.StatusForbidden, "An app's own key only works from inside the app, at HOMELAB_API_URL.")
-			return
-		}
-		// Only the companion's own listeners (Tailscale, or this computer) put a viewer
-		// on the request, so a key that arrives any other way is refused.
-		if _, ok := core.ViewerFrom(r.Context()); !ok {
-			writeErr(w, http.StatusForbidden, "Use this key on the companion's own address.")
 			return
 		}
 	}

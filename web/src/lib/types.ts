@@ -221,7 +221,20 @@ export interface Api {
 	settings(): Promise<SettingView[]>;
 	setSetting(name: string, value: string): Promise<void>;
 	deleteSetting(name: string): Promise<void>;
+	keys(): Promise<KeysView>;
+	createKey(input: NewKeyInput): Promise<CreatedKey>;
+	revokeKey(id: string): Promise<void>;
 }
+
+export interface KeyView {
+	id: string; prefix: string; name: string; kind: 'app' | 'admin';
+	app?: string; env?: string; scopes: string[];
+	createdBy?: string; createdByName?: string; createdAt: string;
+	lastUsed?: string; expires?: string; revoked?: boolean;
+}
+export interface KeysView { admin: KeyView[]; app: KeyView[]; }
+export interface NewKeyInput { name: string; scopes: string[]; expires?: string | null; }
+export interface CreatedKey { key: string; info: KeyView; }
 
 export interface PushSubscriptionInput { endpoint: string; p256dh: string; auth: string; device: string; }
 export interface DeviceUsage { cpuPercent: number; memUsed: number; memTotal: number; diskUsed: number; diskTotal: number; }
