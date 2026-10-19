@@ -213,7 +213,7 @@ func cmdSetup(args []string, out io.Writer) error {
 	step("Started Homelab")
 	fmt.Fprintf(out, `
 Homelab is starting. Watch it with:
-  journalctl -u homelab -f
+  sudo journalctl -u homelab -f
 When it prints "Companion (Tailscale): https://...", open that address on your phone or Mac.
 `)
 	return nil
@@ -289,8 +289,14 @@ func aptInstall(out io.Writer, pkgs ...string) error {
 // own accounts don't need to be in the docker group.
 func ensureUser(step func(string, ...any)) error {
 	if sh(io.Discard, "id", "-u", deviceUser) != nil {
-		if err := sh(os.Stderr, "useradd", "--system", "--user-group", "--home-dir", deviceHome,
-			"--no-create-home", "--shell", "/usr/sbin/nologin", deviceUser); err != nil {
+		// A homelab group may already be there (made by hand); use it rather than fail.
+		group := []string{"--user-group"}
+		if sh(io.Discard, "getent", "group", deviceUser) == nil {
+			group = []string{"-g", deviceUser}
+		}
+		args := append([]string{"--system"}, group...)
+		args = append(args, "--home-dir", deviceHome, "--no-create-home", "--shell", "/usr/sbin/nologin", deviceUser)
+		if err := sh(os.Stderr, "useradd", args...); err != nil {
 			return err
 		}
 		step("Made the %s system account", deviceUser)
