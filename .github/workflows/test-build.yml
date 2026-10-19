@@ -1,0 +1,66 @@
+name: Test build
+
+# Every open pull request gets a test version: a pre-release named pr-<number>-<commit>
+# that can be tried on the device from the companion (Resources → Homelab → Test versions).
+# A new push replaces it; closing the pull request deletes it. Pull requests from forks get
+# none, because they can't publish releases.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: test-build-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  PR: ${{ github.event.pull_request.number }}
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  build:
+    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build the companion
+        working-directory: web
+        run: npm ci && npm run build
+      - name: Build homelabd
+        env:
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          echo "VERSION=pr-$PR-${SHA::7}" >> "$GITHUB_ENV"
+          scripts/build-release.sh "pr-$PR-${SHA::7}"
+      - name: Replace the test version
+        env:
+          SHA: ${{ github.event.pull_request.head.sha }}
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          gh release list --limit 200 --json tagName -q '.[].tagName' | { grep "^pr-$PR-" || true; } | while read -r tag; do
+            gh release delete "$tag" --cleanup-tag --yes
+          done
+          gh release create "$VERSION" dist/* --prerelease --target "$SHA" --title "$TITLE" \
+            --notes "Test version of #$PR (${SHA::7}). Try it on the device from the companion: Resources → Homelab → Test versions."
+
+  clean-up:
+    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete the test version
+        run: |
+          gh release list -R "$GITHUB_REPOSITORY" --limit 200 --json tagName -q '.[].tagName' | { grep "^pr-$PR-" || true; } | while read -r tag; do
+            gh release delete "$tag" -R "$GITHUB_REPOSITORY" --cleanup-tag --yes
+          done

@@ -1,6 +1,6 @@
 import { ApiError, NETWORK_MESSAGE, errorMessage } from './errors';
 import { mockApi } from './mock';
-import type { Api, AppView, BootstrapView, CreatedKey, KeysView, DeviceView, EnvSecrets, Invitation, KeyView, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult } from './types';
+import type { Api, AppView, BootstrapView, CreatedKey, KeysView, DeviceView, EnvSecrets, Invitation, KeyView, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult, TestVersion } from './types';
 
 /** Mock mode: `?mock` in the URL or VITE_MOCK=1 gives fake data, no server needed. */
 export const useMock: boolean =
@@ -82,6 +82,9 @@ const realApi: Api = {
 		return { ...d, problems: list(d.problems), system: d.system ? { ...d.system, disks: list(d.system.disks) } : undefined };
 	},
 	updateHomelab: async () => (await request<{ version: string }>('POST', '/api/device/update')).version,
+	testVersions: async () => list(await request<TestVersion[]>('GET', '/api/device/tests')),
+	tryTestVersion: (version) => request<TestVersion>('POST', '/api/device/test', { version }),
+	endTest: async (keep) => (await request<{ version: string }>('POST', keep ? '/api/device/test/keep' : '/api/device/test/back')).version,
 	activity: async (q = {}) => {
 		const p = new URLSearchParams();
 		if (q.app) p.set('app', q.app);

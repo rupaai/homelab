@@ -27,8 +27,8 @@ which would have meant reinstalling a device that already runs other things.)
 
 1. Checks Docker runs and installs its compose plugin if missing; installs `git`,
    `smartmontools` and `unattended-upgrades` if missing.
-2. Makes the `homelab` system account (no login, no home in `/home`) and adds it to the
-   `docker` group. People's own accounts don't need Docker access for Homelab.
+2. Makes the `homelab` system account (no login, no home in `/home`; it joins an existing
+   `homelab` group if there is one) and adds it to the `docker` group. People's own accounts don't need Docker access for Homelab.
 3. Makes `/var/lib/homelab` (mode 0700, owned by `homelab`). With `--import`, unpacks the
    move file there (refusing if a Homelab is already there) and switches it to Tailscale
    addresses.
@@ -56,7 +56,7 @@ touches containers with its own labels and the `homelab-pocketid` project.
 ### Logs and control
 
 ```sh
-journalctl -u homelab -f          # follow the log
+sudo journalctl -u homelab -f     # follow the log
 sudo systemctl restart homelab    # restart
 sudo systemctl stop homelab       # stop (it starts again at boot)
 ```
@@ -100,6 +100,30 @@ activity entry). If it fails to start 3 times, the guard points `bin/homelabd` b
 previous version, and Resources says what happened.
 
 On the Mac nothing changes: update with `git pull && make build`.
+
+### Test versions
+
+`.github/workflows/test-build.yml` builds every open pull request (from this repo, not
+forks) as a pre-release named `pr-<number>-<commit>`, titled with the pull request's title.
+A new push replaces it; closing the pull request deletes it. Pre-releases never count as the
+newest version, so normal updates ignore them. Both workflows build with
+`scripts/build-release.sh`.
+
+Resources → Homelab → **Test versions** (admins) lists them. **Try**:
+
+1. downloads and checks the program, as an update does;
+2. copies Homelab's own data (`homelab.db` and `secrets/secrets.db`, with `VACUUM INTO`)
+   into `bin/test-saved/` and writes `bin/test.json`;
+3. switches to it like an update (so the update guard still goes back if it won't start).
+
+While a test runs the card offers **Go back** and **Keep this version**. Go back points
+`bin/homelabd` at the version from before and restarts. When that version starts, before it
+opens any data, it puts the saved copy back (`selfupdate.FinishTest`). The same happens when
+the update guard goes back on its own. Keep (once the test version has run 2 minutes)
+deletes the saved copy. A normal update during a test also ends it, keeping the data.
+
+Apps keep running through all of this, and their data, Pocket ID's data and Tailscale's
+state are not copied: only Homelab's own databases go back.
 
 ## The device card
 

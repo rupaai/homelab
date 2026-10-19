@@ -239,6 +239,9 @@ export const mockApi: Api = {
 		update: { managed: true, current: 'build-12', latest: 'build-14', available: true, checkedAt: new Date().toISOString(), lastResult: 'Updated to build-12.' }
 	}),
 	updateHomelab: () => delay('build-14'),
+	testVersions: () => delay([{ version: 'pr-17-1a2b3c4', pr: 17, title: 'Test version button' }, { version: 'pr-16-9f8e7d6', pr: 16, title: 'Platform services' }]),
+	tryTestVersion: (version: string) => delay({ version, pr: 17, title: 'Test version button' }),
+	endTest: (keep: boolean) => delay(keep ? '' : 'build-12'),
 	async removePerson(id: string) {
 		const entry = household.find((p) => p.id === id);
 		if (!entry) throw new ApiError("That person isn't in Homelab.", 404);

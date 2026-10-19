@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/rupaai/homelab/internal/core"
 	"github.com/rupaai/homelab/internal/state"
@@ -51,4 +52,49 @@ func (h *Hub) UpdateHomelab(ctx context.Context, by core.Viewer) (string, error)
 // RecordUpdate notes in the activity how an update went (said by the program that ran it).
 func (h *Hub) RecordUpdate(ctx context.Context, detail string) {
 	h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, Action: "homelab.updated", Detail: detail})
+}
+
+// TestVersions lists the builds of open Homelab pull requests that can be tried here.
+func (h *Hub) TestVersions(ctx context.Context) ([]core.TestVersion, error) {
+	if h.ad.Updater == nil {
+		return nil, userErr("This Homelab doesn't update itself.")
+	}
+	tests, err := h.ad.Updater.Tests(ctx)
+	if err != nil {
+		return nil, userErr("Couldn't list the test versions: %s.", err)
+	}
+	return tests, nil
+}
+
+// TryTestVersion saves Homelab's data and restarts on a pull request's build.
+func (h *Hub) TryTestVersion(ctx context.Context, by core.Viewer, version string) (core.TestVersion, error) {
+	if h.ad.Updater == nil {
+		return core.TestVersion{}, userErr("This Homelab doesn't update itself.")
+	}
+	t, err := h.ad.Updater.Try(ctx, version)
+	if err != nil {
+		return t, userErr("Homelab didn't switch to the test version: %s.", err)
+	}
+	h.logEvent(ctx, state.Event{Actor: by.Label(), Action: "homelab.test", Detail: fmt.Sprintf("Started trying %s (PR #%d)", t.Version, t.PR)})
+	return t, nil
+}
+
+// EndTest ends a test version: back to the version (and data) from before, or keep it.
+func (h *Hub) EndTest(ctx context.Context, by core.Viewer, keep bool) (string, error) {
+	if h.ad.Updater == nil {
+		return "", userErr("This Homelab doesn't update itself.")
+	}
+	if keep {
+		if err := h.ad.Updater.Keep(ctx); err != nil {
+			return "", userErr("Couldn't keep the test version: %s.", err)
+		}
+		h.logEvent(ctx, state.Event{Actor: by.Label(), Action: "homelab.test", Detail: "Kept the test version"})
+		return "", nil
+	}
+	from, err := h.ad.Updater.GoBack(ctx)
+	if err != nil {
+		return "", userErr("Couldn't go back: %s.", err)
+	}
+	h.logEvent(ctx, state.Event{Actor: by.Label(), Action: "homelab.test", Detail: "Going back to " + from})
+	return from, nil
 }

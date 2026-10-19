@@ -324,4 +324,21 @@ type UpdateStatus struct {
 	// didn't start, so Homelab went back to build-11".
 	LastResult string `json:"lastResult,omitempty"`
 	Note       string `json:"note,omitempty"`
+	// Testing is set while a test version (a pull request's build) runs.
+	Testing *TestRun `json:"testing,omitempty"`
+}
+
+// TestVersion is a build of an open Homelab pull request that can be tried on the device.
+type TestVersion struct {
+	Version string `json:"version"` // such as pr-12-1a2b3c4
+	PR      int    `json:"pr"`
+	Title   string `json:"title"`
+}
+
+// TestRun is a test version running now. Homelab saved its own data before switching, so
+// going back puts both the program and that data back as they were.
+type TestRun struct {
+	TestVersion
+	From string    `json:"from"` // the version to go back to
+	At   time.Time `json:"at"`
 }
