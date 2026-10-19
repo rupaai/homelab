@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -87,8 +88,11 @@ func New(o Options) *Updater {
 }
 
 type release struct {
-	Tag    string  `json:"tag_name"`
-	Assets []asset `json:"assets"`
+	Tag        string  `json:"tag_name"`
+	Name       string  `json:"name"`
+	Prerelease bool    `json:"prerelease"`
+	Draft      bool    `json:"draft"`
+	Assets     []asset `json:"assets"`
 }
 
 type asset struct {
@@ -118,6 +122,9 @@ func (u *Updater) Status(ctx context.Context) (core.UpdateStatus, error) {
 	}
 	if Pending(bin) {
 		s.Note = "Homelab is checking that the new version stays up."
+	}
+	if t, ok := ReadTest(bin); ok {
+		s.Testing = &core.TestRun{TestVersion: core.TestVersion{Version: t.Version, PR: t.PR, Title: t.Title}, From: t.From, At: t.At}
 	}
 	u.mu.Lock()
 	stale := u.o.Now().Sub(u.checkedAt) > checkEvery
@@ -156,23 +163,13 @@ func (u *Updater) check(ctx context.Context) (release, error) {
 }
 
 // Apply downloads the newest release, checks it, switches to it and restarts Homelab.
+// During a test, updating ends the test on the new version.
 func (u *Updater) Apply(ctx context.Context) (string, error) {
-	if !Managed(u.o.Home) {
-		return "", errors.New("this Homelab wasn't installed with `homelabd setup`, so it can't update itself")
+	done, err := u.begin()
+	if err != nil {
+		return "", err
 	}
-	bin := BinDir(u.o.Home)
-	if Pending(bin) {
-		return "", errors.New("the last update is still being checked; try again in a few minutes")
-	}
-	u.mu.Lock()
-	if u.applying {
-		u.mu.Unlock()
-		return "", errors.New("an update is already being installed")
-	}
-	u.applying = true
-	u.mu.Unlock()
-	defer func() { u.mu.Lock(); u.applying = false; u.mu.Unlock() }()
-
+	defer done()
 	r, err := u.check(ctx)
 	if err != nil {
 		return "", err
@@ -180,46 +177,182 @@ func (u *Updater) Apply(ctx context.Context) (string, error) {
 	if !Newer(r.Tag, u.o.Version) {
 		return "", fmt.Errorf("Homelab is already on the newest version (%s)", u.o.Version)
 	}
+	if err := u.install(ctx, r); err != nil {
+		return "", err
+	}
+	if err := Switch(BinDir(u.o.Home), r.Tag, u.o.Now()); err != nil {
+		return "", err
+	}
+	u.restart(r.Tag)
+	return r.Tag, nil
+}
+
+// Tests lists the test versions: pre-releases named pr-<number>-<commit> that have a
+// program for this computer.
+func (u *Updater) Tests(ctx context.Context) ([]core.TestVersion, error) {
+	body, err := u.get(ctx, u.o.API+"/repos/"+u.o.Repo+"/releases?per_page=50", "application/vnd.github+json", 4<<20)
+	if err != nil {
+		return nil, err
+	}
+	var rs []release
+	if err := json.Unmarshal(body, &rs); err != nil {
+		return nil, fmt.Errorf("GitHub's answer about releases was unreadable: %w", err)
+	}
+	tests := []core.TestVersion{}
+	for _, r := range rs {
+		pr, ok := testRelease(r)
+		if !ok {
+			continue
+		}
+		if _, ok := r.asset(AssetName(runtime.GOOS, runtime.GOARCH)); ok {
+			tests = append(tests, core.TestVersion{Version: r.Tag, PR: pr, Title: r.Name})
+		}
+	}
+	return tests, nil
+}
+
+func testRelease(r release) (int, bool) {
+	if !r.Prerelease || r.Draft {
+		return 0, false
+	}
+	return TestPR(r.Tag)
+}
+
+// Try saves Homelab's data, installs a test version and restarts on it.
+func (u *Updater) Try(ctx context.Context, version string) (core.TestVersion, error) {
+	var tv core.TestVersion
+	if _, ok := TestPR(version); !ok {
+		return tv, fmt.Errorf("%q isn't a test version", version)
+	}
+	done, err := u.begin()
+	if err != nil {
+		return tv, err
+	}
+	defer done()
+	bin := BinDir(u.o.Home)
+	if t, ok := ReadTest(bin); ok {
+		return tv, fmt.Errorf("PR #%d's test version is still running; go back or keep it first", t.PR)
+	}
+	body, err := u.get(ctx, u.o.API+"/repos/"+u.o.Repo+"/releases/tags/"+url.PathEscape(version), "application/vnd.github+json", 1<<20)
+	if err != nil {
+		return tv, err
+	}
+	var r release
+	if err := json.Unmarshal(body, &r); err != nil {
+		return tv, fmt.Errorf("GitHub's answer about %s was unreadable: %w", version, err)
+	}
+	pr, ok := testRelease(r)
+	if !ok || r.Tag != version {
+		return tv, fmt.Errorf("%s isn't a test version on GitHub", version)
+	}
+	tv = core.TestVersion{Version: r.Tag, PR: pr, Title: r.Name}
+	if err := u.install(ctx, r); err != nil {
+		return tv, err
+	}
+	if err := SaveData(ctx, u.o.Home); err != nil {
+		return tv, err
+	}
+	if err := StartTest(bin, Test{Version: tv.Version, PR: tv.PR, Title: tv.Title}, u.o.Now()); err != nil {
+		return tv, err
+	}
+	u.restart(r.Tag)
+	return tv, nil
+}
+
+// GoBack ends a test: Homelab restarts on the version from before, which puts the saved
+// data back as it starts.
+func (u *Updater) GoBack(context.Context) (string, error) {
+	if !Managed(u.o.Home) {
+		return "", errors.New("this Homelab wasn't installed with `homelabd setup`")
+	}
+	// Going back is allowed while the test version is still proving itself.
+	u.mu.Lock()
+	if u.applying {
+		u.mu.Unlock()
+		return "", errors.New("an update is already being installed")
+	}
+	u.mu.Unlock()
+	t, err := GoBack(BinDir(u.o.Home))
+	if err != nil {
+		return "", err
+	}
+	u.restart(t.From)
+	return t.From, nil
+}
+
+// Keep ends a test on the test version and deletes the saved data.
+func (u *Updater) Keep(context.Context) error {
+	if !Managed(u.o.Home) {
+		return errors.New("this Homelab wasn't installed with `homelabd setup`")
+	}
+	// Until the test version has proven itself, the guard may still go back to the old
+	// version, which needs the saved data.
+	if Pending(BinDir(u.o.Home)) {
+		return errors.New("the test version is still being checked; keep it in a few minutes")
+	}
+	_, err := Keep(BinDir(u.o.Home))
+	return err
+}
+
+// begin claims the right to change the program; done gives it back. Only one change runs
+// at a time, and none while the last one is still proving itself.
+func (u *Updater) begin() (done func(), err error) {
+	if !Managed(u.o.Home) {
+		return nil, errors.New("this Homelab wasn't installed with `homelabd setup`, so it can't update itself")
+	}
+	if Pending(BinDir(u.o.Home)) {
+		return nil, errors.New("the last update is still being checked; try again in a few minutes")
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.applying {
+		return nil, errors.New("an update is already being installed")
+	}
+	u.applying = true
+	return func() { u.mu.Lock(); u.applying = false; u.mu.Unlock() }, nil
+}
+
+// install downloads a release's program for this computer, checks it against the
+// release's checksums and puts it into bin without switching to it.
+func (u *Updater) install(ctx context.Context, r release) error {
 	name := AssetName(runtime.GOOS, runtime.GOARCH)
 	prog, ok := r.asset(name)
 	if !ok {
-		return "", fmt.Errorf("release %s has no %s", r.Tag, name)
+		return fmt.Errorf("release %s has no %s", r.Tag, name)
 	}
 	sums, ok := r.asset(checksums)
 	if !ok {
-		return "", fmt.Errorf("release %s has no %s", r.Tag, checksums)
+		return fmt.Errorf("release %s has no %s", r.Tag, checksums)
 	}
 	sumText, err := u.get(ctx, sums.URL, "application/octet-stream", 1<<20)
 	if err != nil {
-		return "", err
+		return err
 	}
 	want, err := checksumFor(sumText, name)
 	if err != nil {
-		return "", err
+		return err
 	}
-	u.o.Logger.Info("downloading Homelab update", "version", r.Tag)
+	u.o.Logger.Info("downloading Homelab", "version", r.Tag)
 	data, err := u.get(ctx, prog.URL, "application/octet-stream", maxProgram)
 	if err != nil {
-		return "", err
+		return err
 	}
 	got := sha256.Sum256(data)
 	if hex.EncodeToString(got[:]) != want {
-		return "", fmt.Errorf("the download of %s didn't match its checksum, so it wasn't installed", r.Tag)
+		return fmt.Errorf("the download of %s didn't match its checksum, so it wasn't installed", r.Tag)
 	}
-	path, err := Install(bin, r.Tag, data)
+	path, err := Install(BinDir(u.o.Home), r.Tag, data)
 	if err != nil {
-		return "", err
+		return err
 	}
-	if err := checkProgram(ctx, path, r.Tag); err != nil {
-		return "", err
-	}
-	if err := Switch(bin, r.Tag, u.o.Now()); err != nil {
-		return "", err
-	}
-	u.o.Logger.Info("restarting on the new version", "version", r.Tag)
+	return checkProgram(ctx, path, r.Tag)
+}
+
+// restart stops Homelab so systemd starts it on the version homelabd now points at.
+func (u *Updater) restart(version string) {
+	u.o.Logger.Info("restarting on another version", "version", version)
 	// Give the request that asked for this a moment to get its answer.
 	time.AfterFunc(time.Second, u.o.Restart)
-	return r.Tag, nil
 }
 
 // checkProgram runs the new program's version command to make sure it runs here at all.

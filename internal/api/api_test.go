@@ -77,8 +77,9 @@ func newRig(t *testing.T) *rig {
 		Source: flakySource{src, fail}, Builder: fake.NewBuilder(), Registry: fake.NewRegistry(), Deployer: fake.NewDeployer(),
 		Addresses: fake.NewAddresses(), Health: fake.NewHealth(), Secrets: fake.NewSecrets(), Identity: idp, Email: fake.Email{},
 		Notifier: fake.NewNotifier(), Resources: &fake.Resources{Usage: core.DeviceUsage{DiskUsed: 1, DiskTotal: 2}},
-		System:  &fake.System{Report: core.SystemInfo{OS: "Ubuntu 24.04.4 LTS", UpdatesPending: -1, SecurityPending: -1}},
-		Updater: &fake.Updater{State: core.UpdateStatus{Managed: true, Current: "build-1", Latest: "build-2", Available: true}},
+		System: &fake.System{Report: core.SystemInfo{OS: "Ubuntu 24.04.4 LTS", UpdatesPending: -1, SecurityPending: -1}},
+		Updater: &fake.Updater{State: core.UpdateStatus{Managed: true, Current: "build-1", Latest: "build-2", Available: true},
+			TestList: []core.TestVersion{{Version: "pr-7-abc1234", PR: 7, Title: "Better sign-in"}}},
 	})
 	return &rig{h: h, src: src, fail: fail, store: st, idp: idp}
 }
@@ -890,5 +891,26 @@ func TestDeviceAndUpdate(t *testing.T) {
 	}
 	if rec := post(h, "/api/device/update", "", &local); rec.Code != 202 || !strings.Contains(rec.Body.String(), "build-2") {
 		t.Fatalf("update = %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(h, "GET", "/api/device/tests", "", m); rec.Code != 403 {
+		t.Fatalf("member tests = %d", rec.Code)
+	}
+	if rec := post(h, "/api/device/test", `{"version":"pr-7-abc1234"}`, m); rec.Code != 403 {
+		t.Fatalf("member try = %d", rec.Code)
+	}
+	if rec := do(h, "GET", "/api/device/tests", "", &local); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"pr":7`) {
+		t.Fatalf("tests = %d %s", rec.Code, rec.Body)
+	}
+	if rec := post(h, "/api/device/test", `{"version":"pr-7-abc1234"}`, &local); rec.Code != 202 {
+		t.Fatalf("try = %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(h, "GET", "/api/device", "", &local); !strings.Contains(rec.Body.String(), `"testing":{"version":"pr-7-abc1234"`) {
+		t.Fatalf("device while testing = %s", rec.Body)
+	}
+	if rec := post(h, "/api/device/test/back", "", &local); rec.Code != 202 || !strings.Contains(rec.Body.String(), "build-1") {
+		t.Fatalf("go back = %d %s", rec.Code, rec.Body)
+	}
+	if rec := post(h, "/api/device/test/keep", "", &local); rec.Code == 202 {
+		t.Fatalf("keep without a test = %d", rec.Code)
 	}
 }

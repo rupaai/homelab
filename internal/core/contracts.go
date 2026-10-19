@@ -208,4 +208,12 @@ type Updater interface {
 	// Apply installs the newest version and restarts Homelab on it. If the new version
 	// doesn't stay up, the previous one comes back on its own.
 	Apply(ctx context.Context) (string, error)
+	// Tests lists the test versions: builds of open pull requests.
+	Tests(ctx context.Context) ([]TestVersion, error)
+	// Try saves Homelab's data, then installs a test version and restarts on it.
+	Try(ctx context.Context, version string) (TestVersion, error)
+	// GoBack ends a test: it restarts on the version from before, with the saved data.
+	GoBack(ctx context.Context) (string, error)
+	// Keep ends a test by keeping the test version and its data, and forgets the saved copy.
+	Keep(ctx context.Context) error
 }

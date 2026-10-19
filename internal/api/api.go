@@ -161,6 +161,10 @@ func New(h *hub.Hub, opts Options) http.Handler {
 	mux.HandleFunc("GET /api/resources", s.resources)
 	mux.HandleFunc("GET /api/device", s.device)
 	mux.HandleFunc("POST /api/device/update", s.updateHomelab)
+	mux.HandleFunc("GET /api/device/tests", s.testVersions)
+	mux.HandleFunc("POST /api/device/test", s.tryTestVersion)
+	mux.HandleFunc("POST /api/device/test/back", s.endTest(false))
+	mux.HandleFunc("POST /api/device/test/keep", s.endTest(true))
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "There's nothing at that address.")
 	})
@@ -792,6 +796,41 @@ func (s *server) updateHomelab(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"version": version})
+}
+
+func (s *server) testVersions(w http.ResponseWriter, r *http.Request) {
+	tests, err := s.hub.TestVersions(r.Context())
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, tests)
+}
+
+func (s *server) tryTestVersion(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Version string `json:"version"`
+	}
+	if !decode(w, r, &in, true) {
+		return
+	}
+	t, err := s.hub.TryTestVersion(actionCtx(r), viewer(r), in.Version)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, t)
+}
+
+func (s *server) endTest(keep bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		version, err := s.hub.EndTest(actionCtx(r), viewer(r), keep)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"version": version})
+	}
 }
 
 func noContent(w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }

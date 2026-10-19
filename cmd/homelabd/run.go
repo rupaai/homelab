@@ -86,6 +86,14 @@ func cmdRun(args []string) error {
 	if err := checkNotMoved(home); err != nil {
 		return err
 	}
+	if selfupdate.Managed(home) {
+		// Before opening any data: after a test version, put back the data from before it.
+		if msg, err := selfupdate.FinishTest(home, time.Now()); err != nil {
+			return fmt.Errorf("ending the test version: %w", err)
+		} else if msg != "" {
+			log.Info(msg)
+		}
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
