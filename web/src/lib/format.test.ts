@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appInitial, bytes, countdown, promotionHelp, deployedLabel, healthLabel, healthSentence, isProblemAction, relativeTime, uptime } from './format';
+import { appAddress, appInitial, bytes, countdown, promotionHelp, deployedLabel, healthLabel, healthSentence, isProblemAction, relativeTime, uptime } from './format';
 
 const now = Date.parse('2026-10-14T12:00:00Z');
 const ago = (ms: number) => new Date(now - ms).toISOString();
@@ -88,5 +88,17 @@ describe('uptime', () => {
 		expect(uptime(7200)).toBe('2 hours');
 		expect(uptime(30)).toBe('1 minute');
 		expect(uptime(undefined)).toBe('–');
+	});
+});
+
+describe('appAddress', () => {
+	it('keeps localhost on this computer', () => {
+		expect(appAddress('http://localhost:7100', 'localhost')).toBe('http://localhost:7100');
+	});
+	it('uses the companion host from another device', () => {
+		expect(appAddress('http://localhost:7100', '192.168.1.183')).toBe('http://192.168.1.183:7100');
+	});
+	it('leaves other addresses alone', () => {
+		expect(appAddress('https://movies.tail.ts.net', '192.168.1.183')).toBe('https://movies.tail.ts.net');
 	});
 });

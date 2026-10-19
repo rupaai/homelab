@@ -80,7 +80,7 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := checkLoopback(cfg.Listen); err != nil {
+	if err := checkListen(cfg); err != nil {
 		return err
 	}
 	if err := checkNotMoved(home); err != nil {
@@ -156,7 +156,12 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 		}
 		addrs = a
 	default:
-		a, err := local.New(local.Options{Dir: filepath.Join(home, "local"), CompanionPort: localCompanionPort, Logger: log})
+		// With addresses: ip the app ports are open to other devices too; otherwise only this computer.
+		bind := ""
+		if cfg.Addresses == "ip" {
+			bind = "0.0.0.0"
+		}
+		a, err := local.New(local.Options{Dir: filepath.Join(home, "local"), Bind: bind, CompanionPort: localCompanionPort, Logger: log})
 		if err != nil {
 			return fmt.Errorf("local addresses: %w", err)
 		}
@@ -194,7 +199,8 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	resources := sysres.New(sysres.Options{Logger: log})
 	updater := selfupdate.New(selfupdate.Options{Home: home, Version: version, Token: token, Logger: log, Restart: restart})
 
-	h := hub.New(hub.Config{DataDir: home, Logger: log, Owners: cfg.Owners, Identity: signer, PushPublicKey: pushPublic}, store, hub.Adapters{
+	h := hub.New(hub.Config{DataDir: home, Logger: log, Owners: cfg.Owners, Identity: signer, PushPublicKey: pushPublic,
+		OpenApps: cfg.Addresses == "ip"}, store, hub.Adapters{
 		Source: gh, Builder: gh, Registry: gh, Deployer: deployer,
 		Addresses: addrs, Health: httphealth.New(nil), Secrets: secrets,
 		Smoke: deployer, Mirror: mirror, Identity: idp, Email: noop.Email{}, Remote: remote,
@@ -203,14 +209,14 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 
 	oidcConfig := api.NewOIDCConfig("", "", "")
 	apiHandler := api.New(h, api.Options{Owners: cfg.Owners, Version: version, Static: companion.Site(), Logger: log, Store: store,
-		OIDCConfig: oidcConfig})
+		OIDCConfig: oidcConfig, PasswordFile: passwordFile(home)})
 
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w (is Homelab already running?)", cfg.Listen, err)
 	}
 	srv := &http.Server{
-		Handler:           onThisComputer(apiHandler),
+		Handler:           onThisComputer(apiHandler, cfg.Addresses == "ip"),
 		ReadHeaderTimeout: 10 * time.Second,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
@@ -218,6 +224,9 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	go func() { serveErr <- srv.Serve(ln) }()
 	_, listenPort, _ := net.SplitHostPort(ln.Addr().String())
 	fmt.Printf("Companion: http://localhost:%s\n", listenPort)
+	if cfg.Addresses == "ip" {
+		fmt.Printf("Companion on other devices: http://<this computer's IP>:%s (sign in with the password; set it with `homelabd password`)\n", listenPort)
+	}
 	go configurePocketID(ctx, deployer, idp, apiKey, encryptionKey, oidcSecret, oidcConfig, log, home)
 
 	if cfg.Addresses == "tailscale" {
@@ -428,10 +437,25 @@ func waitForPocketID(ctx context.Context) error {
 }
 
 // onThisComputer marks the request as local for Host checks. It does not grant a session.
-func onThisComputer(next http.Handler) http.Handler {
+// With network set (addresses: ip), a request from another device is marked as coming over
+// the network instead, so it signs in with the password.
+func onThisComputer(next http.Handler, network bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r.WithContext(core.WithViewer(r.Context(), core.Viewer{Local: true})))
+		v := core.Viewer{Local: true}
+		if network && !fromLoopback(r.RemoteAddr) {
+			v = core.Viewer{Network: true}
+		}
+		next.ServeHTTP(w, r.WithContext(core.WithViewer(r.Context(), v)))
 	})
+}
+
+func fromLoopback(remote string) bool {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		host = remote
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // announceTailscale prints the companion's Tailscale address once it's ready.
