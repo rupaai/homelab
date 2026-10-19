@@ -203,6 +203,9 @@ export interface Api {
 	resources(): Promise<ResourcesView>;
 	device(): Promise<DeviceView>;
 	updateHomelab(): Promise<string>;
+	testVersions(): Promise<TestVersion[]>;
+	tryTestVersion(version: string): Promise<TestVersion>;
+	endTest(keep: boolean): Promise<string>;
 	apps(): Promise<AppView[]>;
 	projects(): Promise<AppView[]>;
 	addApp(repo: string, branch: string): Promise<AppView>;
@@ -234,5 +237,8 @@ export interface SystemInfo {
 	/** -1 when unknown */
 	updatesPending: number; securityPending: number; reportedAt?: string;
 }
-export interface UpdateStatus { managed: boolean; current: string; latest?: string; available: boolean; checkedAt?: string; lastResult?: string; note?: string; }
+export interface UpdateStatus { managed: boolean; current: string; latest?: string; available: boolean; checkedAt?: string; lastResult?: string; note?: string; testing?: TestRun; }
+/** A build of an open Homelab pull request. */
+export interface TestVersion { version: string; pr: number; title: string; }
+export interface TestRun extends TestVersion { from: string; at: string; }
 export interface DeviceView { system?: SystemInfo; update?: UpdateStatus; problems?: string[]; }

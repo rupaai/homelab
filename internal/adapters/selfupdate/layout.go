@@ -114,10 +114,15 @@ type Result struct {
 	To   string    `json:"to"`
 	OK   bool      `json:"ok"`
 	At   time.Time `json:"at"`
+	// Note, when set, is the message (for example after going back from a test version).
+	Note string `json:"note,omitempty"`
 }
 
 // Message is the result in words.
 func (r Result) Message() string {
+	if r.Note != "" {
+		return r.Note
+	}
 	if r.OK {
 		return "Updated to " + r.To + "."
 	}

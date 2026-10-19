@@ -32,15 +32,7 @@ jobs:
         working-directory: web
         run: npm ci && npm run build
       - name: Build homelabd
-        run: |
-          mkdir dist
-          for target in linux/amd64 linux/arm64 darwin/arm64; do
-            os=${target%/*}; arch=${target#*/}
-            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
-              -ldflags "-s -w -X main.version=$VERSION" -o "dist/homelabd-$os-$arch" ./cmd/homelabd
-          done
-          dist/homelabd-linux-amd64 version | grep -q "$VERSION"
-          (cd dist && sha256sum homelabd-* > checksums.txt)
+        run: scripts/build-release.sh "$VERSION"
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}

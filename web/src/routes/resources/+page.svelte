@@ -3,7 +3,7 @@
 	import { api } from '#lib/api.ts';
 	import { messageOf } from '#lib/errors.ts';
 	import { bytes, relativeTime, uptime } from '#lib/format.ts';
-	import type { DeviceView, ResourcesView } from '#lib/types.ts';
+	import type { DeviceView, ResourcesView, TestVersion } from '#lib/types.ts';
 	import Spinner from '#lib/components/Spinner.svelte';
 
 	let view = $state<ResourcesView | null>(null);
@@ -12,6 +12,9 @@
 	let device = $state<DeviceView | null>(null);
 	let updating = $state(false);
 	let updateMsg = $state('');
+	let tests = $state<TestVersion[] | null>(null);
+	let testsError = $state('');
+	let loadingTests = $state(false);
 
 	async function load() {
 		busy = true;
@@ -31,6 +34,41 @@
 			const v = await api.updateHomelab();
 			updateMsg = `Updating to ${v}. Homelab is restarting; this page comes back in about a minute.`;
 			setTimeout(() => { updating = false; load(); }, 60_000);
+		} catch (e) { updateMsg = messageOf(e); updating = false; }
+	}
+
+	// The page comes back once Homelab has restarted.
+	function restarting(msg: string) {
+		updateMsg = msg;
+		setTimeout(() => { updating = false; tests = null; load(); }, 60_000);
+	}
+
+	async function showTests() {
+		loadingTests = true; testsError = '';
+		try { tests = await api.testVersions(); }
+		catch (e) { testsError = messageOf(e); }
+		finally { loadingTests = false; }
+	}
+
+	async function tryTest(t: TestVersion) {
+		if (!confirm(`Try PR #${t.pr} (${t.title})? Homelab saves a copy of its data, then restarts on this test version. Your apps keep running. You can go back at any time.`)) return;
+		updating = true; updateMsg = '';
+		try {
+			await api.tryTestVersion(t.version);
+			restarting(`Switching to PR #${t.pr}. Homelab is restarting; this page comes back in about a minute.`);
+		} catch (e) { updateMsg = messageOf(e); updating = false; }
+	}
+
+	async function endTest(keep: boolean) {
+		const msg = keep
+			? 'Keep this test version? Its data stays, and the saved copy from before the test is deleted. It stays until the next update.'
+			: `Go back to ${device?.update?.testing?.from}? Homelab restarts and puts its data back as it was before the test. Changes made during the test are lost.`;
+		if (!confirm(msg)) return;
+		updating = true; updateMsg = '';
+		try {
+			const v = await api.endTest(keep);
+			if (keep) { updateMsg = 'Kept the test version.'; updating = false; load(); }
+			else restarting(`Going back to ${v}. Homelab is restarting; this page comes back in about a minute.`);
 		} catch (e) { updateMsg = messageOf(e); updating = false; }
 	}
 
@@ -99,10 +137,34 @@
 					</dl>
 					{#if u.lastResult}<p class="muted">{u.lastResult}</p>{/if}
 					{#if u.note}<p class="muted">{u.note}</p>{/if}
+					{#if u.testing}
+						{@const t = u.testing}
+						<p class="notice">Testing <strong>PR #{t.pr}</strong> ({t.title}) since {relativeTime(t.at)}. Homelab's data from before the test is saved.</p>
+						<div class="actions">
+							<button class="btn primary" type="button" disabled={updating} onclick={() => endTest(false)}>Go back to {t.from}</button>
+							<button class="btn" type="button" disabled={updating} onclick={() => endTest(true)}>Keep this version</button>
+						</div>
+					{/if}
 					{#if u.managed && u.available}
 						<button class="btn" type="button" disabled={updating} onclick={update}>{updating ? 'Updating…' : `Update to ${u.latest}`}</button>
-					{:else if u.managed}<p class="muted">Homelab is up to date.</p>{/if}
+					{:else if u.managed && !u.testing}<p class="muted">Homelab is up to date.</p>{/if}
 					{#if updateMsg}<p class="notice" role="status">{updateMsg}</p>{/if}
+					{#if u.managed && !u.testing}
+						<details class="tests" ontoggle={(e) => { if ((e.currentTarget as HTMLDetailsElement).open && tests === null) showTests(); }}>
+							<summary>Test versions</summary>
+							<p class="muted">Each open pull request gets its own build. Try one here; Homelab saves its data first, and you can go back.</p>
+							{#if loadingTests}<p class="muted">Looking on GitHub…</p>
+							{:else if testsError}<p class="notice bad">{testsError}</p>
+							{:else if tests && tests.length === 0}<p class="muted">No pull request has a test version right now.</p>
+							{:else if tests}
+								<ul>
+									{#each tests as t (t.version)}
+										<li><span><strong>PR #{t.pr}</strong> {t.title}</span><button class="btn small" type="button" disabled={updating} onclick={() => tryTest(t)}>Try</button></li>
+									{/each}
+								</ul>
+							{/if}
+						</details>
+					{/if}
 				</section>
 			{/if}
 		{/if}
@@ -141,4 +203,9 @@
 	.chip.bad { border-color: var(--bad-border); color: var(--bad-border); }
 	section .btn { margin-top: 0.25rem; }
 	section .notice { margin: 0 0 0.8rem; }
+	.actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0 0 0.8rem; }
+	.tests { margin-top: 1rem; }
+	.tests summary { cursor: pointer; font-weight: 600; }
+	.tests ul { list-style: none; padding: 0; margin: 0.5rem 0 0; }
+	.tests li { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; padding: 0.45rem 0; border-bottom: 1px solid var(--border); }
 </style>

@@ -101,6 +101,30 @@ previous version, and Resources says what happened.
 
 On the Mac nothing changes: update with `git pull && make build`.
 
+### Test versions
+
+`.github/workflows/test-build.yml` builds every open pull request (from this repo, not
+forks) as a pre-release named `pr-<number>-<commit>`, titled with the pull request's title.
+A new push replaces it; closing the pull request deletes it. Pre-releases never count as the
+newest version, so normal updates ignore them. Both workflows build with
+`scripts/build-release.sh`.
+
+Resources → Homelab → **Test versions** (admins) lists them. **Try**:
+
+1. downloads and checks the program, as an update does;
+2. copies Homelab's own data (`homelab.db` and `secrets/secrets.db`, with `VACUUM INTO`)
+   into `bin/test-saved/` and writes `bin/test.json`;
+3. switches to it like an update (so the update guard still goes back if it won't start).
+
+While a test runs the card offers **Go back** and **Keep this version**. Go back points
+`bin/homelabd` at the version from before and restarts. When that version starts, before it
+opens any data, it puts the saved copy back (`selfupdate.FinishTest`). The same happens when
+the update guard goes back on its own. Keep (once the test version has run 2 minutes)
+deletes the saved copy. A normal update during a test also ends it, keeping the data.
+
+Apps keep running through all of this, and their data, Pocket ID's data and Tailscale's
+state are not copied: only Homelab's own databases go back.
+
 ## The device card
 
 `GET /api/device` (admins) returns `{system, update, problems}`. `POST /api/device/update`

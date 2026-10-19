@@ -77,9 +77,10 @@ func (s *System) Info(context.Context) (core.SystemInfo, error) { return s.Repor
 
 // Updater pretends to update Homelab.
 type Updater struct {
-	mu      sync.Mutex
-	State   core.UpdateStatus
-	Applied int
+	mu       sync.Mutex
+	State    core.UpdateStatus
+	Applied  int
+	TestList []core.TestVersion
 }
 
 func (u *Updater) Status(context.Context) (core.UpdateStatus, error) {
@@ -96,4 +97,43 @@ func (u *Updater) Apply(context.Context) (string, error) {
 	}
 	u.Applied++
 	return u.State.Latest, nil
+}
+
+func (u *Updater) Tests(context.Context) ([]core.TestVersion, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.TestList, nil
+}
+
+func (u *Updater) Try(_ context.Context, version string) (core.TestVersion, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	for _, t := range u.TestList {
+		if t.Version == version {
+			u.State.Testing = &core.TestRun{TestVersion: t, From: u.State.Current}
+			return t, nil
+		}
+	}
+	return core.TestVersion{}, errors.New("no such test version")
+}
+
+func (u *Updater) GoBack(context.Context) (string, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.State.Testing == nil {
+		return "", errors.New("no test version is running")
+	}
+	from := u.State.Testing.From
+	u.State.Testing = nil
+	return from, nil
+}
+
+func (u *Updater) Keep(context.Context) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.State.Testing == nil {
+		return errors.New("no test version is running")
+	}
+	u.State.Testing = nil
+	return nil
 }
