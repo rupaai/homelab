@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { deployedLabel, envLabel, healthSentence } from '#lib/format.ts';
+	import { appAddress, deployedLabel, envLabel, healthSentence } from '#lib/format.ts';
 	import type { AppView, EnvView } from '#lib/types.ts';
 	import ReleaseLine from './ReleaseLine.svelte';
 	import Spinner from './Spinner.svelte';
@@ -27,7 +27,7 @@
 
 	<p class="address">
 		{#if env.addressReady && env.address}
-			<a href={env.address} target="_blank" rel="noopener">{env.address.replace(/^https?:\/\//, '')}<span class="sr-only"> (opens in a new tab)</span></a>
+			<a href={appAddress(env.address)} target="_blank" rel="noopener">{appAddress(env.address).replace(/^https?:\/\//, '')}<span class="sr-only"> (opens in a new tab)</span></a>
 		{:else}
 			<span class="muted">Address not ready yet</span>
 		{/if}

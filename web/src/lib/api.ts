@@ -47,6 +47,7 @@ const realApi: Api = {
 	passkeyLink: () => request<PasskeyLink>('POST', '/api/me/passkey-link'),
 	setupOwner: (name, email) => request<SetupResult>('POST', '/api/setup', { name, email }),
 	recover: async (code) => { await request<void>('POST', '/api/recover', { code }); },
+	passwordSignIn: async (password) => { await request<void>('POST', '/api/password-sign-in', { password }); },
 	signOut: async () => { await request<void>('POST', '/api/logout'); },
 	people: async () => list(await request<PersonView[]>('GET', '/api/people')),
 	invitePerson: (person) => request<Invitation>('POST', '/api/people', person),

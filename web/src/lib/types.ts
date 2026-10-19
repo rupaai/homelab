@@ -176,7 +176,7 @@ export interface PersonInput {
 }
 export interface Invitation { id: string; url: string; tailscaleUrl?: string; tailscaleError?: string; }
 export interface MeView { personId: string; login: string; name: string; local: boolean; roles: HouseholdRole[]; tailscale?: boolean; }
-export interface BootstrapView { needsSetup: boolean; signInReady: boolean; ownerNeedsPasskey?: boolean; remote?: boolean; login?: string; known?: boolean; }
+export interface BootstrapView { needsSetup: boolean; signInReady: boolean; ownerNeedsPasskey?: boolean; remote?: boolean; login?: string; known?: boolean; /** addresses: ip, from another device: sign in with the password */ password?: boolean; }
 export interface SetupResult { loginUrl: string; recoveryCode: string; }
 export interface PasskeyLink { url: string; }
 export interface RemovalStep { name: string; done: boolean; detail?: string; }
@@ -189,6 +189,7 @@ export interface Api {
 	passkeyLink(): Promise<PasskeyLink>;
 	setupOwner(name: string, email: string): Promise<SetupResult>;
 	recover(code: string): Promise<void>;
+	passwordSignIn(password: string): Promise<void>;
 	signOut(): Promise<void>;
 	people(): Promise<PersonView[]>;
 	invitePerson(person: PersonInput): Promise<Invitation>;

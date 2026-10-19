@@ -145,3 +145,14 @@ export function uptime(seconds: number | undefined): string {
 	if (seconds >= 3600) return plural(Math.floor(seconds / 3600), 'hour');
 	return plural(Math.max(1, Math.floor(seconds / 60)), 'minute');
 }
+
+/** An app's address as this device can open it. With addresses: ip Homelab reports apps on
+ * localhost; opened from another device, the companion's own host name is the way in. */
+export function appAddress(address: string, host = typeof location === 'undefined' ? 'localhost' : location.hostname): string {
+	try {
+		const u = new URL(address);
+		if (u.hostname !== 'localhost' || host === 'localhost' || host === '127.0.0.1' || host === '') return address;
+		u.hostname = host;
+		return u.toString().replace(/\/$/, '');
+	} catch { return address; }
+}

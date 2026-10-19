@@ -125,6 +125,23 @@ deletes the saved copy. A normal update during a test also ends it, keeping the 
 Apps keep running through all of this, and their data, Pocket ID's data and Tailscale's
 state are not copied: only Homelab's own databases go back.
 
+## Plain IP addresses (`addresses: ip`)
+
+For a home that doesn't want Tailscale in the way, `config.yaml` can say `addresses: ip`:
+
+- The companion listens on `0.0.0.0:7080` (unless `listen` says otherwise), so any device
+  that reaches the computer opens `http://<its IP>:7080`.
+- Passkeys can't work on a bare IP, so other devices sign in with a password. Set it on the
+  device: `sudo -u homelab /var/lib/homelab/bin/homelabd password --home /var/lib/homelab`.
+  Only a bcrypt hash is kept, in `secrets/companion-password`. It signs in as the owner.
+  Tries are limited to 5 per device and 20 in all every 5 minutes. On the computer itself
+  (`localhost`) passkeys and the recovery code work as before.
+- Each app environment gets a port from 7100 up on `0.0.0.0`, open to anyone who reaches it,
+  without sign-in. Apps get identity headers that name nobody, and Homelab's own cookies are
+  dropped before they reach the app. The companion shows app links with the IP it was opened on.
+- Plain http isn't encrypted on the home network. Over Tailscale (for example the device
+  shared into your tailnet) it is.
+
 ## The device card
 
 `GET /api/device` (admins) returns `{system, update, problems}`. `POST /api/device/update`

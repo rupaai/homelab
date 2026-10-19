@@ -36,6 +36,9 @@ type Options struct {
 	OIDCClientSecret string
 	OIDCConfig       *OIDCConfig
 	HTTPClient       *http.Client
+	// PasswordFile holds the bcrypt hash of the owner's password, for signing in from other
+	// devices with addresses: ip. Empty or missing means no password sign-in.
+	PasswordFile string
 }
 
 // OIDCConfig lets startup publish sign-in settings after Pocket ID is ready.
@@ -88,6 +91,7 @@ type server struct {
 	httpClient       *http.Client
 	authMu           sync.Mutex
 	recoveryAttempts map[string]recoveryWindow
+	passwordFile     string
 }
 
 type recoveryWindow struct {
@@ -102,7 +106,7 @@ func New(h *hub.Hub, opts Options) http.Handler {
 		oidc = NewOIDCConfig(opts.OIDCIssuer, opts.OIDCClientID, opts.OIDCClientSecret)
 	}
 	s := &server{hub: h, owners: map[string]bool{}, ver: opts.Version, log: opts.Logger, store: opts.Store,
-		oidc: oidc, httpClient: opts.HTTPClient}
+		oidc: oidc, httpClient: opts.HTTPClient, passwordFile: opts.PasswordFile}
 	s.recoveryAttempts = map[string]recoveryWindow{}
 	if s.log == nil {
 		s.log = slog.Default()
@@ -125,6 +129,7 @@ func New(h *hub.Hub, opts Options) http.Handler {
 	mux.HandleFunc("POST /api/setup", s.setupOwner)
 	mux.HandleFunc("POST /api/setup/passkey-link", s.initialOwnerPasskeyLink)
 	mux.HandleFunc("POST /api/recover", s.recoverCode)
+	mux.HandleFunc("POST /api/password-sign-in", s.passwordSignIn)
 	mux.HandleFunc("GET /api/me", s.me)
 	mux.HandleFunc("POST /api/me/passkey-link", s.passkeyLink)
 	mux.HandleFunc("POST /api/logout", s.logout)
@@ -196,7 +201,7 @@ func New(h *hub.Hub, opts Options) http.Handler {
 		}
 		if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
 			hd.Set("Cache-Control", "no-store")
-			if r.URL.Path == "/api/bootstrap" || (r.URL.Path == "/api/setup" && r.Method == http.MethodPost) || (r.URL.Path == "/api/setup/passkey-link" && r.Method == http.MethodPost) || (r.URL.Path == "/api/recover" && r.Method == http.MethodPost) || (r.URL.Path == "/api/logout" && r.Method == http.MethodPost) || (strings.HasPrefix(r.URL.Path, "/api/invites/") && strings.HasSuffix(r.URL.Path, "/redeem") && r.Method == http.MethodPost) {
+			if r.URL.Path == "/api/bootstrap" || (r.URL.Path == "/api/setup" && r.Method == http.MethodPost) || (r.URL.Path == "/api/setup/passkey-link" && r.Method == http.MethodPost) || (r.URL.Path == "/api/recover" && r.Method == http.MethodPost) || (r.URL.Path == "/api/password-sign-in" && r.Method == http.MethodPost) || (r.URL.Path == "/api/logout" && r.Method == http.MethodPost) || (strings.HasPrefix(r.URL.Path, "/api/invites/") && strings.HasSuffix(r.URL.Path, "/redeem") && r.Method == http.MethodPost) {
 				mux.ServeHTTP(w, r)
 				return
 			}
@@ -406,7 +411,7 @@ func (s *server) passkeyLink(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {
-	if !loopbackHost(r.Host) {
+	if v, _ := core.ViewerFrom(r.Context()); !v.Network && !loopbackHost(r.Host) {
 		writeErr(w, http.StatusForbidden, "Open the companion at http://localhost:7080 on this computer.")
 		return
 	}

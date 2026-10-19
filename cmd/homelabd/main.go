@@ -18,6 +18,7 @@ Usage:
   homelabd service install [--home DIR]    run Homelab at login (macOS)
   homelabd service uninstall               stop running Homelab at login (macOS)
   homelabd recover [--home DIR]             print a 15-minute owner sign-in link
+  homelabd password [--home DIR]            set the password for signing in from other devices (addresses: ip)
   homelabd export [--home DIR] [--out FILE] pack this Homelab up to move it to another computer
   sudo homelabd setup [--import FILE]       install Homelab on a Linux device (milestone 6)
   homelabd version
@@ -51,6 +52,8 @@ func dispatch(args []string) error {
 		return cmdSystemReport(rest)
 	case "recover":
 		return cmdRecover(rest, os.Stdout)
+	case "password":
+		return cmdPassword(rest, os.Stdin, os.Stdout)
 	case "service":
 		return cmdService(rest, os.Stdout)
 	case "version", "--version", "-version":
