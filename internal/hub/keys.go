@@ -226,7 +226,7 @@ func (h *Hub) APIKeys(ctx context.Context) (map[string][]KeyView, error) {
 // with it; they can't be revoked by hand.
 func (h *Hub) RevokeKey(ctx context.Context, id string, by core.Viewer) error {
 	k, err := h.store.APIKeyByID(ctx, id)
-	if err != nil || k.Kind != KeyKindAdmin {
+	if err != nil || k.Kind != KeyKindAdmin || k.Revoked != nil {
 		return userErr("There's no API key %q.", id)
 	}
 	if err := h.store.RevokeAPIKey(ctx, id); err != nil {
