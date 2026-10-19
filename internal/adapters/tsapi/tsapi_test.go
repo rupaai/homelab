@@ -533,3 +533,29 @@ func TestBadCredentialsAtSignIn(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestRemoveHomelabMachinesOnlyOurs(t *testing.T) {
+	var deleted []string
+	_, c, _ := newFake(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/devices"):
+			_, _ = w.Write([]byte(`{"devices":[
+				{"nodeId":"n1","hostname":"homelab","tags":["tag:homelab"]},
+				{"nodeId":"n2","hostname":"movies","tags":["tag:hl-movies"]},
+				{"nodeId":"n3","hostname":"mars","user":"bf@x.com"},
+				{"nodeId":"n4","hostname":"ci","tags":["tag:ci"]},
+				{"nodeId":"n5","hostname":"mixed","tags":["tag:hl-x","tag:ci"]}]}`))
+		case r.Method == http.MethodDelete:
+			deleted = append(deleted, r.URL.Path)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	})
+	names, err := c.RemoveHomelabMachines(context.Background(), []string{"tag:homelab"})
+	if err != nil || strings.Join(names, ",") != "homelab,movies" {
+		t.Fatalf("removed %v, %v", names, err)
+	}
+	if strings.Join(deleted, ",") != "/api/v2/device/n1,/api/v2/device/n2" {
+		t.Fatalf("deleted %v", deleted)
+	}
+}

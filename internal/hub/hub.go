@@ -26,6 +26,7 @@ import (
 	"github.com/rupaai/homelab/internal/core"
 	"github.com/rupaai/homelab/internal/identity"
 	"github.com/rupaai/homelab/internal/manifest"
+	"github.com/rupaai/homelab/internal/sharedir"
 	"github.com/rupaai/homelab/internal/state"
 )
 
@@ -65,6 +66,8 @@ type Adapters struct {
 	Remote    core.RemoteAccess // may be nil: local addresses, nobody joins from elsewhere
 	Notifier  core.Notifier     // may be nil: no push notifications
 	Resources core.Resources    // may be nil: no resource view or disk alert
+	System    core.System       // may be nil: no device card (milestone 6)
+	Updater   core.Updater      // may be nil: Homelab doesn't update itself (milestone 6)
 }
 
 // Hub is the core. Create it with New and run it with Run.
@@ -450,6 +453,9 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 		dir := filepath.Join(h.dataDir(a.ID, env), d.Name)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return core.EnvSpec{}, err
+		}
+		if err := sharedir.Open(dir); err != nil {
+			return core.EnvSpec{}, fmt.Errorf("let the app write its data: %w", err)
 		}
 		mounts = append(mounts, core.Mount{HostPath: dir, ContainerPath: d.Path})
 	}

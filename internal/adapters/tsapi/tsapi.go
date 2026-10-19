@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -437,4 +438,47 @@ func protectedErr(u userDTO) error {
 		role = "unknown"
 	}
 	return fmt.Errorf("%s has the %s role on the tailnet, so Homelab leaves them and their devices alone.", u.LoginName, role)
+}
+
+// RemoveHomelabMachines deletes the tailnet machines Homelab itself runs: those whose tags
+// are all Homelab's (tag:hl-... or one of extraTags, such as tag:homelab). People's devices
+// and other servers are left alone. It is used when Homelab moves to another computer, so
+// the new one can take the same names.
+func (c *Client) RemoveHomelabMachines(ctx context.Context, extraTags []string) ([]string, error) {
+	devs, err := c.devices(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var removed []string
+	var errs []error
+	for _, d := range devs {
+		if !homelabMachine(d.Tags, extraTags) {
+			continue
+		}
+		if err := c.call(ctx, http.MethodDelete, "/device/"+url.PathEscape(d.id()), scopeDevices, nil, nil); err != nil {
+			errs = append(errs, fmt.Errorf("couldn't remove %s: %w", d.Name, err))
+			continue
+		}
+		removed = append(removed, firstName(d))
+	}
+	return removed, errors.Join(errs...)
+}
+
+func homelabMachine(tags, extra []string) bool {
+	if len(tags) == 0 {
+		return false
+	}
+	for _, t := range tags {
+		if !strings.HasPrefix(t, "tag:hl-") && !slices.Contains(extra, t) {
+			return false
+		}
+	}
+	return true
+}
+
+func firstName(d deviceDTO) string {
+	if d.Hostname != "" {
+		return d.Hostname
+	}
+	return d.Name
 }

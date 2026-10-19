@@ -1,6 +1,6 @@
 import { ApiError, NETWORK_MESSAGE, errorMessage } from './errors';
 import { mockApi } from './mock';
-import type { Api, AppView, BootstrapView, EnvSecrets, Invitation, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult } from './types';
+import type { Api, AppView, BootstrapView, DeviceView, EnvSecrets, Invitation, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult } from './types';
 
 /** Mock mode: `?mock` in the URL or VITE_MOCK=1 gives fake data, no server needed. */
 export const useMock: boolean =
@@ -77,6 +77,11 @@ const realApi: Api = {
 		const r = await request<ResourcesView>('GET', '/api/resources');
 		return { ...r, apps: list(r.apps), problems: list(r.problems) };
 	},
+	device: async () => {
+		const d = await request<DeviceView>('GET', '/api/device');
+		return { ...d, problems: list(d.problems), system: d.system ? { ...d.system, disks: list(d.system.disks) } : undefined };
+	},
+	updateHomelab: async () => (await request<{ version: string }>('POST', '/api/device/update')).version,
 	activity: async (q = {}) => {
 		const p = new URLSearchParams();
 		if (q.app) p.set('app', q.app);

@@ -77,6 +77,8 @@ func newRig(t *testing.T) *rig {
 		Source: flakySource{src, fail}, Builder: fake.NewBuilder(), Registry: fake.NewRegistry(), Deployer: fake.NewDeployer(),
 		Addresses: fake.NewAddresses(), Health: fake.NewHealth(), Secrets: fake.NewSecrets(), Identity: idp, Email: fake.Email{},
 		Notifier: fake.NewNotifier(), Resources: &fake.Resources{Usage: core.DeviceUsage{DiskUsed: 1, DiskTotal: 2}},
+		System:  &fake.System{Report: core.SystemInfo{OS: "Ubuntu 24.04.4 LTS", UpdatesPending: -1, SecurityPending: -1}},
+		Updater: &fake.Updater{State: core.UpdateStatus{Managed: true, Current: "build-1", Latest: "build-2", Available: true}},
 	})
 	return &rig{h: h, src: src, fail: fail, store: st, idp: idp}
 }
@@ -866,5 +868,27 @@ func TestPushResourcesAndBuilderActivity(t *testing.T) {
 	}
 	if rec := do(h, "GET", "/api/resources", "", &local); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"diskTotal":2`) {
 		t.Fatalf("resources = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestDeviceAndUpdate(t *testing.T) {
+	r := newRig(t)
+	if err := r.store.SavePerson(context.Background(), core.Person{ID: "m", Name: "M", Status: "signed_in", Roles: []string{"member"}}); err != nil {
+		t.Fatal(err)
+	}
+	h := r.handler()
+	m := &core.Viewer{Local: true, PersonID: "m"}
+	if rec := do(h, "GET", "/api/device", "", m); rec.Code != 403 {
+		t.Fatalf("member device = %d", rec.Code)
+	}
+	if rec := post(h, "/api/device/update", "", m); rec.Code != 403 {
+		t.Fatalf("member update = %d", rec.Code)
+	}
+	rec := do(h, "GET", "/api/device", "", &local)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"os":"Ubuntu 24.04.4 LTS"`) || !strings.Contains(rec.Body.String(), `"available":true`) {
+		t.Fatalf("device = %d %s", rec.Code, rec.Body)
+	}
+	if rec := post(h, "/api/device/update", "", &local); rec.Code != 202 || !strings.Contains(rec.Body.String(), "build-2") {
+		t.Fatalf("update = %d %s", rec.Code, rec.Body)
 	}
 }

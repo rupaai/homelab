@@ -136,3 +136,12 @@ export function bytes(n: number): string {
 	while (n >= 1000 && i < units.length - 1) { n /= 1000; i++; }
 	return `${n >= 10 || i === 0 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
 }
+
+/** how long something has been up: "9 days", "3 hours", "12 minutes". */
+export function uptime(seconds: number | undefined): string {
+	if (!seconds || seconds < 0) return '–';
+	const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
+	if (seconds >= 86400) return plural(Math.floor(seconds / 86400), 'day');
+	if (seconds >= 3600) return plural(Math.floor(seconds / 3600), 'hour');
+	return plural(Math.max(1, Math.floor(seconds / 60)), 'minute');
+}

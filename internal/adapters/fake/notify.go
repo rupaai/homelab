@@ -2,6 +2,7 @@ package fake
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/rupaai/homelab/internal/core"
@@ -67,4 +68,32 @@ func (r *Resources) SetDisk(used, total uint64) {
 	r.mu.Lock()
 	r.Usage.DiskUsed, r.Usage.DiskTotal = used, total
 	r.mu.Unlock()
+}
+
+// System reports a fixed device.
+type System struct{ Report core.SystemInfo }
+
+func (s *System) Info(context.Context) (core.SystemInfo, error) { return s.Report, nil }
+
+// Updater pretends to update Homelab.
+type Updater struct {
+	mu      sync.Mutex
+	State   core.UpdateStatus
+	Applied int
+}
+
+func (u *Updater) Status(context.Context) (core.UpdateStatus, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.State, nil
+}
+
+func (u *Updater) Apply(context.Context) (string, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if !u.State.Available {
+		return "", errors.New("already on the newest version")
+	}
+	u.Applied++
+	return u.State.Latest, nil
 }
