@@ -27,8 +27,8 @@ which would have meant reinstalling a device that already runs other things.)
 
 1. Checks Docker runs and installs its compose plugin if missing; installs `git`,
    `smartmontools` and `unattended-upgrades` if missing.
-2. Makes the `homelab` system account (no login, no home in `/home`) and adds it to the
-   `docker` group. People's own accounts don't need Docker access for Homelab.
+2. Makes the `homelab` system account (no login, no home in `/home`; it joins an existing
+   `homelab` group if there is one) and adds it to the `docker` group. People's own accounts don't need Docker access for Homelab.
 3. Makes `/var/lib/homelab` (mode 0700, owned by `homelab`). With `--import`, unpacks the
    move file there (refusing if a Homelab is already there) and switches it to Tailscale
    addresses.
@@ -56,7 +56,7 @@ touches containers with its own labels and the `homelab-pocketid` project.
 ### Logs and control
 
 ```sh
-journalctl -u homelab -f          # follow the log
+sudo journalctl -u homelab -f     # follow the log
 sudo systemctl restart homelab    # restart
 sudo systemctl stop homelab       # stop (it starts again at boot)
 ```
