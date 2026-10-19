@@ -130,7 +130,7 @@ func (s *server) serveKey(w http.ResponseWriter, r *http.Request, door bool) {
 		return
 	}
 	if door && c.Kind != hub.KeyKindApp {
-		writeErr(w, http.StatusForbidden, "Only an app's own key (HOMELAB_TOKEN) works here. Use admin keys on the companion's Tailscale address.")
+		writeErr(w, http.StatusForbidden, "Only an app's own key (HOMELAB_TOKEN) works here. Use admin keys on the companion's own address.")
 		return
 	}
 	if !door {
