@@ -1,10 +1,10 @@
 import { ApiError, NETWORK_MESSAGE, errorMessage } from './errors';
-import { mockApi } from './mock';
+import { SIGN_IN_MESSAGE, sessionLost } from './session';
 import type { Api, AppView, BootstrapView, DeviceView, EnvSecrets, Invitation, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult, TestVersion } from './types';
 
-/** Mock mode: `?mock` in the URL or VITE_MOCK=1 gives fake data, no server needed. */
+/** Mock mode: `?mock` in the URL or VITE_MOCK=1 gives fake data, no server needed. Dev builds only, so the mock data is dropped from the real companion. */
 export const useMock: boolean =
-	import.meta.env.VITE_MOCK === '1' || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('mock'));
+	import.meta.env.DEV && (import.meta.env.VITE_MOCK === '1' || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('mock')));
 
 async function request<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<T> {
 	const headers: Record<string, string> = { Accept: 'application/json' };
@@ -19,7 +19,12 @@ async function request<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: strin
 		throw new ApiError(NETWORK_MESSAGE, 0);
 	}
 	const text = await res.text();
-	if (!res.ok) throw new ApiError(errorMessage(res.status, text), res.status);
+	if (!res.ok) {
+		const err = new ApiError(errorMessage(res.status, text), res.status);
+		// An expired session: let the layout go back to the sign-in screen.
+		if (res.status === 403 && err.message === SIGN_IN_MESSAGE) sessionLost();
+		throw err;
+	}
 	return (text ? JSON.parse(text) : undefined) as T;
 }
 
@@ -106,4 +111,5 @@ const realApi: Api = {
 	deleteSetting: (name) => request('DELETE', `/api/settings/secrets/${enc(name)}`)
 };
 
-export const api: Api = useMock ? mockApi : realApi;
+// The import sits inside the DEV check, so production builds leave mock.ts out.
+export const api: Api = import.meta.env.DEV && useMock ? (await import('./mock')).mockApi : realApi;

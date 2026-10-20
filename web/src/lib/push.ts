@@ -3,7 +3,7 @@ import { api } from './api';
 /** Why push can't work here, or '' when it can. */
 export function pushUnsupported(): string {
 	if (typeof window === 'undefined') return 'Notifications need a browser.';
-	if (!window.isSecureContext) return 'Notifications need the companion’s https address. Open Homelab through Tailscale.';
+	if (!window.isSecureContext) return 'Notifications need https, and this Homelab is opened over plain http, so they can’t be turned on here.';
 	if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
 		const ios = /iPhone|iPad/.test(navigator.userAgent);
 		return ios

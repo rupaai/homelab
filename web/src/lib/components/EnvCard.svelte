@@ -11,8 +11,9 @@
 		env,
 		onpromote,
 		onrollback,
-		ondeploy
-	}: { app: AppView; env: EnvView; onpromote: () => void; onrollback: () => void; ondeploy: () => void } = $props();
+		ondeploy,
+		admin = false
+	}: { app: AppView; env: EnvView; onpromote: () => void; onrollback: () => void; ondeploy: () => void; admin?: boolean } = $props();
 
 	const build = $derived(app.latestBuild);
 	const canDeploy = $derived(env.env === 'dev' && build?.status === 'passed' && !build.deployed);
@@ -45,7 +46,7 @@
 		<p class="notice">
 			<strong>{env.missingSecrets.length === 1 ? `${env.missingSecrets[0]} isn't set for ${env.env}` : `${env.missingSecrets.length} secrets aren't set for ${env.env}`}</strong>
 			{#if env.missingSecrets.length > 1}{env.missingSecrets.join(', ')}.{/if}
-			<a href="/apps/{encodeURIComponent(app.id)}/secrets">Set {env.missingSecrets.length === 1 ? 'it' : 'them'} on the secrets screen</a>
+			{#if admin}<a href="/apps/{encodeURIComponent(app.id)}/secrets">Set {env.missingSecrets.length === 1 ? 'it' : 'them'} on the secrets screen</a>{:else}Ask an admin to set {env.missingSecrets.length === 1 ? 'it' : 'them'}.{/if}
 		</p>
 	{/if}
 

@@ -175,7 +175,7 @@ export interface PersonInput {
 	tailscaleLogin?: string;
 }
 export interface Invitation { id: string; url: string; tailscaleUrl?: string; tailscaleError?: string; }
-export interface MeView { personId: string; login: string; name: string; local: boolean; roles: HouseholdRole[]; tailscale?: boolean; }
+export interface MeView { personId: string; login: string; name: string; local: boolean; roles: HouseholdRole[]; }
 export interface BootstrapView { needsSetup: boolean; signInReady: boolean; ownerNeedsPasskey?: boolean; remote?: boolean; login?: string; known?: boolean; /** addresses: ip, from another device: sign in with the password */ password?: boolean; }
 export interface SetupResult { loginUrl: string; recoveryCode: string; }
 export interface PasskeyLink { url: string; }
