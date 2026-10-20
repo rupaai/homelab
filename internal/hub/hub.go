@@ -48,6 +48,7 @@ type Config struct {
 	PushPublicKey  string           // VAPID public key browsers subscribe with (O4)
 	AppAPIURL      string           // where apps reach the Homelab API (the app door); "" means apps get no URL
 	AppHostIP      string           // the app door's address, given to containers as host.docker.internal; "" means Docker's own
+	OpenApps       bool             // addresses: ip; anyone who reaches an app's port may use it, without sign-in
 	Now            func() time.Time
 	Logger         *slog.Logger
 }
@@ -534,7 +535,7 @@ func (h *Hub) appProxy(port int, app, appName, env string) http.Handler {
 	p.Director = func(r *http.Request) {
 		v, ok := core.ViewerFrom(r.Context())
 		person, err := h.store.Person(r.Context(), v.PersonID)
-		if !ok || err != nil || !Can(person, ActionApps, app) || (env == core.Dev && !Can(person, ActionProjects, app)) {
+		if !h.cfg.OpenApps && (!ok || err != nil || !Can(person, ActionApps, app) || (env == core.Dev && !Can(person, ActionProjects, app))) {
 			return
 		}
 		// Only Homelab may set its identity headers, so drop any a client sent.
@@ -571,6 +572,12 @@ func (h *Hub) appProxy(port int, app, appName, env string) http.Handler {
 			`<p>It may be starting up. Try again in a moment, or check it in the Homelab companion.</p>`, htmlEscape(label))
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h.cfg.OpenApps {
+			// addresses: ip: the app is open to whoever reaches its port, and gets no person.
+			// The companion's cookies reach this port too (same host), so they are dropped.
+			h.serveAs(w, r, core.Person{}, serve)
+			return
+		}
 		if r.URL.Path == "/_homelab/callback" {
 			h.appCallback(w, r, app, env)
 			return

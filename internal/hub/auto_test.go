@@ -496,3 +496,30 @@ func TestSecretsViewAndLogMasking(t *testing.T) {
 		t.Fatalf("settings = %+v", set)
 	}
 }
+
+func TestOpenAppsServeAnyoneWithoutHomelabCookies(t *testing.T) {
+	r := newRig(t)
+	got := make(chan http.Header, 1)
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) { got <- req.Header.Clone() }))
+	defer app.Close()
+	u, _ := url.Parse(app.URL)
+	port, _ := strconv.Atoi(u.Port())
+	r.hub.cfg.OpenApps = true
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("X-Homelab-User", "forged")
+	req.AddCookie(&http.Cookie{Name: "homelab_session", Value: "secret"})
+	req.AddCookie(&http.Cookie{Name: "keep", Value: "yes"})
+	req = req.WithContext(core.WithViewer(req.Context(), core.Viewer{Local: true}))
+	rec := httptest.NewRecorder()
+	r.hub.appProxy(port, "movies", "Movies", core.Prod).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want the app's page", rec.Code)
+	}
+	h := <-got
+	if h.Get("Cookie") != "keep=yes" || h.Get("X-Homelab-User") == "forged" {
+		t.Fatalf("forwarded headers = %v", h)
+	}
+	if p, err := identity.Verify(h, r.hub.cfg.Identity.PublicKey(), "movies", core.Prod, time.Now()); err != nil || p != nil {
+		t.Fatalf("identity = %+v, %v; want signed headers with nobody", p, err)
+	}
+}

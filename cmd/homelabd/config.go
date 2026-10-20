@@ -15,7 +15,7 @@ import (
 // Config is config.yaml.
 type Config struct {
 	Owners    []string `yaml:"owners"`
-	Addresses string   `yaml:"addresses"` // local | tailscale
+	Addresses string   `yaml:"addresses"` // local | ip | tailscale
 	Tailscale struct {
 		Tags []string `yaml:"tags"`
 	} `yaml:"tailscale"`
@@ -28,7 +28,9 @@ type Config struct {
 const (
 	defaultListen = "127.0.0.1:7080"
 	defaultAppAPI = 7085
-	defaultTag    = "tag:homelab"
+	// ipListen is where the companion listens with addresses: ip, so other devices reach it.
+	ipListen   = "0.0.0.0:7080"
+	defaultTag = "tag:homelab"
 )
 
 // defaultHome is ~/.homelab.
@@ -66,11 +68,14 @@ func parseConfig(b []byte) (Config, error) {
 	if c.Addresses == "" {
 		c.Addresses = "local"
 	}
-	if c.Addresses != "local" && c.Addresses != "tailscale" {
-		return c, fmt.Errorf("config.yaml: addresses must be local or tailscale, not %q", c.Addresses)
+	if c.Addresses != "local" && c.Addresses != "ip" && c.Addresses != "tailscale" {
+		return c, fmt.Errorf("config.yaml: addresses must be local, ip or tailscale, not %q", c.Addresses)
 	}
 	if c.Listen == "" {
 		c.Listen = defaultListen
+		if c.Addresses == "ip" {
+			c.Listen = ipListen
+		}
 	}
 	if c.AppAPIPort == 0 {
 		c.AppAPIPort = defaultAppAPI
@@ -96,6 +101,18 @@ func loadConfig(home string) (Config, error) {
 	return parseConfig(b)
 }
 
+// checkListen refuses a listen address that other computers could reach, unless addresses
+// is ip: then other devices reach the companion directly and sign in with the password.
+func checkListen(cfg Config) error {
+	if cfg.Addresses == "ip" {
+		if _, port, err := net.SplitHostPort(cfg.Listen); err != nil || port == "" {
+			return fmt.Errorf("listen %q should look like 0.0.0.0:7080", cfg.Listen)
+		}
+		return nil
+	}
+	return checkLoopback(cfg.Listen)
+}
+
 // checkLoopback refuses a listen address that other computers could reach.
 func checkLoopback(listen string) error {
 	host, port, err := net.SplitHostPort(listen)
@@ -111,5 +128,5 @@ func checkLoopback(listen string) error {
 	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
 		return nil
 	}
-	return fmt.Errorf("listen %q is not a loopback address. It must listen on 127.0.0.1 (or ::1); other devices reach Homelab through Tailscale", listen)
+	return fmt.Errorf("listen %q is not a loopback address. It must listen on 127.0.0.1 (or ::1); other devices reach Homelab through Tailscale, or set addresses: ip", listen)
 }

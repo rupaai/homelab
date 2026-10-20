@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { appsStore } from '#lib/apps.svelte.ts';
 	import { startPolling } from '#lib/poll.ts';
-	import { appInitial } from '#lib/format.ts';
+	import { appAddress, appInitial } from '#lib/format.ts';
 	import Spinner from '#lib/components/Spinner.svelte';
 
 	onMount(() => {
@@ -27,7 +27,7 @@
 			<div class="app-icon" aria-hidden="true">{app.icon || appInitial(app.name)}</div>
 			<div class="app-details"><h2>{app.name}</h2><p class="muted">Production</p></div>
 			{#if prod?.address && prod.addressReady}
-				<a class="btn primary small" href={prod.address} target="_blank" rel="noopener">Open<span class="sr-only"> {app.name}</span></a>
+				<a class="btn primary small" href={appAddress(prod.address)} target="_blank" rel="noopener">Open<span class="sr-only"> {app.name}</span></a>
 			{:else}
 				<span class="muted small">Not running</span>
 			{/if}

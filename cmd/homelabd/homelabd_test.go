@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/xml"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/rupaai/homelab/internal/adapters/secretstore"
 	"github.com/rupaai/homelab/internal/core"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestParseConfigDefaults(t *testing.T) {
@@ -68,11 +70,59 @@ func TestCheckLoopback(t *testing.T) {
 }
 
 func TestOnThisComputer(t *testing.T) {
-	var got core.Viewer
-	h := onThisComputer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { got, _ = core.ViewerFrom(r.Context()) }))
-	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
-	if !got.Local {
-		t.Fatal("not local")
+	viewer := func(network bool, remote string) core.Viewer {
+		var got core.Viewer
+		h := onThisComputer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { got, _ = core.ViewerFrom(r.Context()) }), network)
+		req := httptest.NewRequest("GET", "/", nil)
+		req.RemoteAddr = remote
+		h.ServeHTTP(httptest.NewRecorder(), req)
+		return got
+	}
+	if v := viewer(false, "192.168.1.9:5000"); !v.Local || v.Network {
+		t.Fatalf("loopback-only listener = %+v", v)
+	}
+	if v := viewer(true, "127.0.0.1:5000"); !v.Local || v.Network {
+		t.Fatalf("ip mode from this computer = %+v", v)
+	}
+	if v := viewer(true, "192.168.1.9:5000"); v.Local || !v.Network {
+		t.Fatalf("ip mode from another device = %+v", v)
+	}
+}
+
+func TestListenWithIPAddresses(t *testing.T) {
+	c, err := parseConfig([]byte("addresses: ip\n"))
+	if err != nil || c.Listen != "0.0.0.0:7080" {
+		t.Fatalf("config = %+v, %v", c, err)
+	}
+	if err := checkListen(c); err != nil {
+		t.Fatal(err)
+	}
+	c, _ = parseConfig([]byte("addresses: local\nlisten: 0.0.0.0:7080\n"))
+	if err := checkListen(c); err == nil {
+		t.Fatal("local addresses accepted a non-loopback listen")
+	}
+}
+
+func TestPasswordCommand(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte("addresses: ip\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmdPassword([]string{"--home", home}, strings.NewReader("short\nshort\n"), io.Discard); err == nil {
+		t.Fatal("a short password was accepted")
+	}
+	if err := cmdPassword([]string{"--home", home}, strings.NewReader("long enough pw\nother one here\n"), io.Discard); err == nil {
+		t.Fatal("different passwords were accepted")
+	}
+	if err := cmdPassword([]string{"--home", home}, strings.NewReader("long enough pw\nlong enough pw\n"), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(passwordFile(home))
+	if err != nil || bcrypt.CompareHashAndPassword([]byte(strings.TrimSpace(string(b))), []byte("long enough pw")) != nil {
+		t.Fatalf("hash = %q, %v", b, err)
+	}
+	if st, _ := os.Stat(passwordFile(home)); st.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %v", st.Mode())
 	}
 }
 

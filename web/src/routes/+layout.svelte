@@ -10,13 +10,15 @@
 	import '../app.css';
 
 	let { children } = $props();
-	let authState = $state<'loading'|'setup'|'setupDone'|'recoveryDone'|'inviteDone'|'inviteError'|'signedOut'|'notInvited'|'ready'|'error'>('loading');
+	let authState = $state<'loading'|'setup'|'setupDone'|'recoveryDone'|'inviteDone'|'inviteError'|'signedOut'|'notInvited'|'password'|'ready'|'error'>('loading');
 	let remoteLogin = $state('');
 	let me = $state<MeView | null>(null);
 	let setupName = $state('');
 	let setupEmail = $state('');
 	let setupResult = $state<SetupResult | null>(null);
 	let recoveryCode = $state('');
+	let password = $state('');
+	let passwordReady = $state(true);
 	let authError = $state('');
 	let busy = $state(false);
 	let recoverySaved = $state(false);
@@ -58,10 +60,11 @@
 			ownerNeedsPasskey = status.ownerNeedsPasskey ?? false;
 			if (status.remote && !status.known) { remoteLogin = status.login ?? ''; authState = 'notInvited'; return; }
 			if (status.needsSetup) { authState = 'setup'; return; }
+			passwordReady = status.signInReady;
 			try {
 				me = await api.me(); authState = 'ready';
 				if (!me.roles.some((r) => ['owner', 'admin', 'builder'].includes(r)) && page.url.pathname === '/') await goto('/home', { replaceState: true });
-			} catch (e) { authState = e instanceof ApiError && e.status === 403 ? 'signedOut' : 'error'; }
+			} catch (e) { authState = e instanceof ApiError && e.status === 403 ? (status.password ? 'password' : 'signedOut') : 'error'; }
 		} catch { authState = 'error'; }
 	});
 
@@ -82,6 +85,12 @@
 		catch (e) { authError = messageOf(e); }
 		finally { busy = false; }
 	}
+	async function passwordSignIn(e: SubmitEvent) {
+		e.preventDefault(); busy = true; authError = '';
+		try { await api.passwordSignIn(password); password = ''; location.reload(); }
+		catch (e) { authError = messageOf(e); }
+		finally { busy = false; }
+	}
 	async function refreshRecoveryPasskeyLink() {
 		busy = true; authError = ''; recoveryPasskeyUrl = '';
 		try { recoveryPasskeyUrl = (await api.passkeyLink()).url; }
@@ -96,7 +105,7 @@
 	}
 	async function signOut() {
 		try { await api.signOut(); } catch (e) { authError = messageOf(e); return; }
-		me = null; authState = 'signedOut'; await goto('/');
+		me = null; authState = location.hostname === 'localhost' || location.hostname === '127.0.0.1' ? 'signedOut' : 'password'; await goto('/');
 	}
 	function continueFromInvite() {
 		location.assign('/auth/start');
@@ -149,6 +158,8 @@
 			<div class="auth-card"><h1>This invite can’t be used</h1><p class="notice bad" role="alert">{authError}</p><p>Ask the Homelab owner to send a new invite, then open it on the Homelab computer.</p></div>
 		{:else if authState === 'notInvited'}
 			<div class="auth-card"><h1>You’re not in this household yet</h1><p>You’re connected through Tailscale{#if remoteLogin} as <strong>{remoteLogin}</strong>{/if}, but no one in Homelab has that login.</p><p>Ask the owner to invite you, or to add this login to your profile under People.</p><button class="btn" type="button" onclick={() => location.reload()}>Try again</button></div>
+		{:else if authState === 'password'}
+			<div class="auth-card"><h1>Sign in to Homelab</h1>{#if passwordReady}<form onsubmit={passwordSignIn}><label for="password">Password</label><input id="password" type="password" bind:value={password} autocomplete="current-password" required />{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}<button class="btn primary" type="submit" disabled={busy}>{busy ? 'Checking…' : 'Sign in'}</button></form>{:else}<p>No password is set yet. On the device, run:</p><p><code>sudo -u homelab /var/lib/homelab/bin/homelabd password --home /var/lib/homelab</code></p><button class="btn" type="button" onclick={() => location.reload()}>Try again</button>{/if}</div>
 		{:else if authState === 'signedOut'}
 			<div class="auth-card"><h1>Sign in to Homelab</h1><p>Use the passkey you set up with Pocket ID.</p>{#if ownerNeedsPasskey}<p>Passkey setup for the owner hasn’t completed. You can request a fresh Pocket ID setup link here.</p>{#if initialOwnerPasskeyUrl}<PasskeyRegistration url={initialOwnerPasskeyUrl} continueLabel="Continue to sign in" onContinue={() => location.assign('/auth/start')} />{:else}<button class="btn primary" type="button" onclick={prepareInitialOwnerPasskeyLink} disabled={busy}>{busy ? 'Preparing…' : 'Set up passkey'}</button>{/if}{/if}{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}<a class="btn" href="/auth/start" data-sveltekit-reload>Sign in with passkey</a><details><summary>Use your recovery code</summary><form onsubmit={recover}><label for="recovery-code">Recovery code</label><input id="recovery-code" bind:value={recoveryCode} autocomplete="off" required />{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}<button class="btn" type="submit" disabled={busy}>{busy ? 'Checking…' : 'Sign in once'}</button></form></details></div>
 		{:else}

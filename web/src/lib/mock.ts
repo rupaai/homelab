@@ -195,6 +195,7 @@ export const mockApi: Api = {
 	passkeyLink: () => delay({ url: 'http://localhost:7081/mock-passkey-link' }),
 	setupOwner: async () => delay({ loginUrl: 'http://localhost:7081', recoveryCode: '' }),
 	recover: async () => delay(undefined),
+	passwordSignIn: async () => delay(undefined),
 	signOut: async () => delay(undefined),
 	people: () => delay(structuredClone(household)),
 	async invitePerson(person: PersonInput) {

@@ -15,6 +15,11 @@ import (
 )
 
 func (s *server) bootstrapStatus(w http.ResponseWriter, r *http.Request) {
+	if v, ok := core.ViewerFrom(r.Context()); ok && v.Network {
+		// addresses: ip: other devices sign in with the owner's password.
+		writeJSON(w, http.StatusOK, map[string]any{"needsSetup": false, "signInReady": s.passwordSet(), "password": true})
+		return
+	}
 	if v, ok := core.ViewerFrom(r.Context()); ok && !v.Local {
 		// Over the tailnet there is no setup or passkey: the Tailscale login is the sign-in.
 		writeJSON(w, http.StatusOK, map[string]any{"needsSetup": false, "signInReady": true, "remote": true, "login": v.Login, "known": v.PersonID != ""})
@@ -193,16 +198,22 @@ func clientIP(r *http.Request) string {
 func (s *server) allowRecoveryAttempt(ip string) bool {
 	s.authMu.Lock()
 	defer s.authMu.Unlock()
+	return s.countAttempt(ip, 5)
+}
+
+// countAttempt counts one try for key in its five-minute window; false once max is reached.
+// The caller holds authMu.
+func (s *server) countAttempt(key string, max int) bool {
 	now := time.Now()
-	entry := s.recoveryAttempts[ip]
+	entry := s.recoveryAttempts[key]
 	if now.Sub(entry.started) > 5*time.Minute {
 		entry = recoveryWindow{started: now}
 	}
-	if entry.count >= 5 {
-		s.recoveryAttempts[ip] = entry
+	if entry.count >= max {
+		s.recoveryAttempts[key] = entry
 		return false
 	}
 	entry.count++
-	s.recoveryAttempts[ip] = entry
+	s.recoveryAttempts[key] = entry
 	return true
 }

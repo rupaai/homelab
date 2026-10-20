@@ -151,6 +151,7 @@ type Viewer struct {
 	Login    string // e.g. labiba@example.com; empty when unknown
 	Name     string // display name
 	Local    bool   // connected from this machine (127.0.0.1)
+	Network  bool   // came over the plain network (addresses: ip); signs in with the password
 	Tagged   bool   // a tagged Tailscale node (a server, not a person)
 	PersonID string
 }
