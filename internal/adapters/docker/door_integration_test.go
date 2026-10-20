@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+const doorTestImage = "mirror.gcr.io/library/busybox:1.37"
+
 // TestIntegrationAppDoor checks the app door's path on Linux: a container on its own
 // network reaches a server listening on Docker's bridge address as host.docker.internal.
 func TestIntegrationAppDoor(t *testing.T) {
@@ -50,8 +52,9 @@ func TestIntegrationAppDoor(t *testing.T) {
 	exec.Command("docker", "network", "rm", network).Run()
 	sh(t, "", "network", "create", network)
 	t.Cleanup(func() { exec.Command("docker", "network", "rm", network).Run() })
+	sh(t, "", "pull", "-q", doorTestImage) // so the run below prints only what wget got
 	out := sh(t, "", "run", "--rm", "--network", network, "--add-host", "host.docker.internal:"+gw,
-		"mirror.gcr.io/library/busybox:1.37", "wget", "-qO-", "--header", "Authorization: Bearer test",
+		doorTestImage, "wget", "-qO-", "--header", "Authorization: Bearer test",
 		"http://host.docker.internal:"+port+"/")
 	if strings.TrimSpace(out) != "ok" {
 		t.Fatalf("container got %q", out)
