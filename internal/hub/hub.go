@@ -884,6 +884,11 @@ func (h *Hub) checkEnv(ctx context.Context, a state.App, env string, want *core.
 	if prev != status {
 		s.health, s.since = status, h.cfg.Now()
 	}
+	if status == core.Healthy {
+		// The wanted version runs and answers, however it got started (e.g. by hand), so an
+		// earlier failed start no longer applies.
+		s.lastErr, s.nextAttempt = "", time.Time{}
+	}
 	h.mu.Unlock()
 
 	if prev != status && !(prev == core.Unknown && status == core.Healthy) {
