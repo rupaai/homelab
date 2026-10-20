@@ -116,7 +116,7 @@ func TestOIDCFlowUsesPKCEAndCreatesServerSideSession(t *testing.T) {
 		}
 		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{"Content-Type": []string{"application/json"}}}, nil
 	})}
-	h := New(r.h, Options{Version: "test", Static: testSite(), Store: r.store, OIDCIssuer: issuer, OIDCClientID: clientID, OIDCClientSecret: clientSecret, HTTPClient: client})
+	h := asLocal(New(r.h, Options{Version: "test", Static: testSite(), Store: r.store, OIDCIssuer: issuer, OIDCClientID: clientID, OIDCClientSecret: clientSecret, HTTPClient: client}))
 	start := httptest.NewRequest("GET", "/auth/start?return=%2Fhome", nil)
 	start.Host = "localhost:7080"
 	started := httptest.NewRecorder()

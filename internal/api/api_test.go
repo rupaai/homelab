@@ -138,7 +138,7 @@ func TestInitialOwnerCanRequestFreshPasskeyLinkUntilSignIn(t *testing.T) {
 	}
 	h := r.handler()
 	path := "/api/setup/passkey-link"
-	if got := post(h, path, `{}`, nil); got.Code != http.StatusCreated || !strings.Contains(got.Body.String(), `"url":"http://localhost:1411/login/pocket-owner"`) {
+	if got := post(h, path, `{}`, &core.Viewer{Local: true}); got.Code != http.StatusCreated || !strings.Contains(got.Body.String(), `"url":"http://localhost:1411/login/pocket-owner"`) {
 		t.Fatalf("fresh initial-owner link: %d %s", got.Code, got.Body)
 	}
 	if r.idp.LoginLinkTTL != time.Hour {
@@ -147,7 +147,7 @@ func TestInitialOwnerCanRequestFreshPasskeyLinkUntilSignIn(t *testing.T) {
 	if err := r.store.RecordSignIn(ctx, "owner", "pocket-owner"); err != nil {
 		t.Fatal(err)
 	}
-	if got := post(h, path, `{}`, nil); got.Code != http.StatusBadRequest {
+	if got := post(h, path, `{}`, &core.Viewer{Local: true}); got.Code != http.StatusBadRequest {
 		t.Fatalf("signed-in owner could request setup-only link: %d %s", got.Code, got.Body)
 	}
 }
@@ -301,6 +301,7 @@ func TestHealthAndRecoveryStayAvailableWhenIdentityProviderFails(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodGet, "/recover/"+token, nil)
 	req.Host = "localhost:7080"
+	req = req.WithContext(core.WithViewer(req.Context(), core.Viewer{Local: true}))
 	link := httptest.NewRecorder()
 	h.ServeHTTP(link, req)
 	if link.Code != http.StatusSeeOther {
@@ -309,7 +310,18 @@ func TestHealthAndRecoveryStayAvailableWhenIdentityProviderFails(t *testing.T) {
 }
 
 func (r *rig) handler(owners ...string) http.Handler {
-	return New(r.h, Options{Owners: owners, Version: "test", Static: testSite(), Logger: nil, Store: r.store})
+	return asLocal(New(r.h, Options{Owners: owners, Version: "test", Static: testSite(), Logger: nil, Store: r.store}))
+}
+
+// asLocal marks requests that carry no viewer as arriving over the loopback connection, as
+// homelabd does for every request on its local listener.
+func asLocal(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := core.ViewerFrom(r.Context()); !ok {
+			r = r.WithContext(core.WithViewer(r.Context(), core.Viewer{Local: true}))
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func testSite() fstest.MapFS {
@@ -447,6 +459,7 @@ func TestRecoveryLinkCreatesOneOwnerSession(t *testing.T) {
 	h := r.handler()
 	req := httptest.NewRequest("GET", "/recover/"+token, nil)
 	req.Host = "localhost:7080"
+	req = req.WithContext(core.WithViewer(req.Context(), core.Viewer{Local: true}))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusSeeOther {
@@ -466,6 +479,7 @@ func TestRecoveryLinkCreatesOneOwnerSession(t *testing.T) {
 	}
 	req = httptest.NewRequest("GET", "/recover/"+token, nil)
 	req.Host = "localhost:7080"
+	req = req.WithContext(core.WithViewer(req.Context(), core.Viewer{Local: true}))
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusGone {
@@ -628,7 +642,7 @@ func TestInviteRedemptionReturnsPasskeyRegistrationLink(t *testing.T) {
 	token := strings.TrimPrefix(invite.URL, "http://localhost:7080/invite/")
 	h := r.handler()
 	path := "/api/invites/" + token + "/redeem"
-	got := post(h, path, `{}`, nil)
+	got := post(h, path, `{}`, &core.Viewer{Local: true})
 	if got.Code != http.StatusCreated {
 		t.Fatalf("redeem invite: %d %s", got.Code, got.Body)
 	}
@@ -645,7 +659,7 @@ func TestInviteRedemptionReturnsPasskeyRegistrationLink(t *testing.T) {
 	if r.idp.LoginLinkTTL != time.Hour {
 		t.Fatalf("invite login link TTL = %s, want %s", r.idp.LoginLinkTTL, time.Hour)
 	}
-	if got = post(h, path, `{}`, nil); got.Code != http.StatusCreated {
+	if got = post(h, path, `{}`, &core.Viewer{Local: true}); got.Code != http.StatusCreated {
 		t.Fatalf("redeem invite for a fresh Pocket ID link: %d %s", got.Code, got.Body)
 	}
 	people, err := r.h.People(ctx)
@@ -664,7 +678,7 @@ func TestInviteRedemptionReturnsPasskeyRegistrationLink(t *testing.T) {
 	if err := r.store.RecordSignIn(ctx, invited.ID, "pocket-id-subject"); err != nil {
 		t.Fatal(err)
 	}
-	if got = post(h, path, `{}`, nil); got.Code != http.StatusGone {
+	if got = post(h, path, `{}`, &core.Viewer{Local: true}); got.Code != http.StatusGone {
 		t.Fatalf("redeem accepted invite after sign-in: %d %s", got.Code, got.Body)
 	}
 
@@ -774,7 +788,7 @@ func TestPasskeyLinksAreReissuedAfterAnEarlierLinkIsUsed(t *testing.T) {
 		}
 		h := r.handler()
 		for attempt := 1; attempt <= 3; attempt++ {
-			if got := post(h, "/api/setup/passkey-link", `{}`, nil); got.Code != http.StatusCreated {
+			if got := post(h, "/api/setup/passkey-link", `{}`, &core.Viewer{Local: true}); got.Code != http.StatusCreated {
 				t.Fatalf("attempt %d: %d %s", attempt, got.Code, got.Body)
 			}
 			if r.idp.LoginLinkCalls != attempt {
@@ -793,7 +807,7 @@ func TestPasskeyLinksAreReissuedAfterAnEarlierLinkIsUsed(t *testing.T) {
 		path := "/api/invites/" + strings.TrimPrefix(invite.URL, "http://localhost:7080/invite/") + "/redeem"
 		before := r.idp.LoginLinkCalls
 		for attempt := 1; attempt <= 3; attempt++ {
-			if got := post(h, path, `{}`, nil); got.Code != http.StatusCreated {
+			if got := post(h, path, `{}`, &core.Viewer{Local: true}); got.Code != http.StatusCreated {
 				t.Fatalf("attempt %d: %d %s", attempt, got.Code, got.Body)
 			}
 			if r.idp.LoginLinkCalls != before+attempt {
@@ -814,7 +828,7 @@ func TestTailnetLoginIsTheSignIn(t *testing.T) {
 	}
 	h := r.handler()
 	sam := &core.Viewer{Login: "sam@gmail.test", Name: "Sam"}
-	if rec := do(h, "GET", "/api/me", "", sam); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"tailscale":true`) {
+	if rec := do(h, "GET", "/api/me", "", sam); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"login":"sam@example.test"`) {
 		t.Fatalf("me = %d %s", rec.Code, rec.Body)
 	}
 	if p, _ := r.store.Person(ctx, "sam"); p.Status != "signed_in" {

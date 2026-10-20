@@ -14,7 +14,7 @@ export function errorMessage(status: number, body: string): string {
 	} catch {
 		// not JSON; fall through
 	}
-	if (status === 403) return "Homelab doesn't recognise this device. Open it from a device on your Tailscale network.";
+	if (status === 403) return "Homelab doesn't recognise this device. Sign in again, or ask the owner for access.";
 	if (status === 404) return "Homelab couldn't find that.";
 	if (status >= 500) return 'Something went wrong inside Homelab. Try again in a moment.';
 	return `Something went wrong (error ${status}).`;

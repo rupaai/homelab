@@ -15,7 +15,7 @@ import (
 
 // appAuth issues a 60-second code after checking the current person and the app grant.
 func (s *server) appAuth(w http.ResponseWriter, r *http.Request) {
-	if !loopbackHost(r.Host) {
+	if !onThisComputer(r) {
 		http.Error(w, "Open Homelab at http://localhost:7080 on this computer.", http.StatusForbidden)
 		return
 	}

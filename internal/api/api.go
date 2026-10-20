@@ -233,6 +233,29 @@ func loopbackHost(hostport string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// onThisComputer says whether a "this computer only" request really is: it must arrive over
+// a loopback connection (the viewer's Local flag, set from RemoteAddr) and name this computer
+// in its Host header. The Host header alone is chosen by the client.
+func onThisComputer(r *http.Request) bool {
+	v, _ := core.ViewerFrom(r.Context())
+	return v.Local && loopbackHost(r.Host)
+}
+
+// publicPost holds the rules for every POST that skips guard: the companion's header, a JSON
+// body and a size limit. Keep them in one place so those endpoints can't drift apart.
+func publicPost(w http.ResponseWriter, r *http.Request) bool {
+	if r.Header.Get(csrfHeader) != "1" {
+		writeErr(w, http.StatusForbidden, "That request didn't come from the Homelab companion.")
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]), "application/json") {
+		writeErr(w, http.StatusUnsupportedMediaType, "Send JSON with Content-Type: application/json.")
+		return false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+	return true
+}
+
 // guard applies the owner check and, for changes, the CSRF header and body rules.
 func (s *server) guard(w http.ResponseWriter, r *http.Request) bool {
 	v, ok := core.ViewerFrom(r.Context())
@@ -398,7 +421,7 @@ func (s *server) me(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"login": p.Email, "name": p.Name, "local": v.Local, "roles": p.Roles, "tailscale": !v.Local && !v.Tagged})
+	writeJSON(w, http.StatusOK, map[string]any{"login": p.Email, "name": p.Name, "local": v.Local, "roles": p.Roles})
 }
 
 func (s *server) passkeyLink(w http.ResponseWriter, r *http.Request) {
@@ -415,8 +438,7 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "Open the companion at http://localhost:7080 on this computer.")
 		return
 	}
-	if r.Header.Get(csrfHeader) != "1" {
-		writeErr(w, http.StatusForbidden, "That request didn't come from the Homelab companion.")
+	if !publicPost(w, r) {
 		return
 	}
 	if c, err := r.Cookie("homelab_session"); err == nil {
@@ -436,12 +458,27 @@ func (s *server) people(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, p)
 }
+
+// personInput is what a client may set on a person. The id, identity id and status are
+// never taken from the client.
+type personInput struct {
+	Name           string            `json:"name"`
+	Email          string            `json:"email"`
+	Roles          []string          `json:"roles"`
+	Grants         map[string]string `json:"grants"`
+	TailscaleLogin string            `json:"tailscaleLogin"`
+}
+
+func (in personInput) person(id string) core.Person {
+	return core.Person{ID: id, Name: in.Name, Email: in.Email, Roles: in.Roles, Grants: in.Grants, TailscaleLogin: in.TailscaleLogin}
+}
+
 func (s *server) invitePerson(w http.ResponseWriter, r *http.Request) {
-	var p core.Person
-	if !decode(w, r, &p, true) {
+	var in personInput
+	if !decode(w, r, &in, true) {
 		return
 	}
-	inv, err := s.hub.InvitePerson(actionCtx(r), p)
+	inv, err := s.hub.InvitePerson(actionCtx(r), in.person(""))
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -449,11 +486,11 @@ func (s *server) invitePerson(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, inv)
 }
 func (s *server) updatePerson(w http.ResponseWriter, r *http.Request) {
-	var p core.Person
-	if !decode(w, r, &p, true) {
+	var in personInput
+	if !decode(w, r, &in, true) {
 		return
 	}
-	p.ID = r.PathValue("id")
+	p := in.person(r.PathValue("id"))
 	if err := s.hub.UpdatePerson(actionCtx(r), p); err != nil {
 		s.fail(w, r, err)
 		return
@@ -477,16 +514,11 @@ func (s *server) resendInvite(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"url": link})
 }
 func (s *server) redeemInvite(w http.ResponseWriter, r *http.Request) {
-	if !loopbackHost(r.Host) {
+	if !onThisComputer(r) {
 		writeErr(w, http.StatusForbidden, "Open this invite on the Homelab computer.")
 		return
 	}
-	if r.Header.Get(csrfHeader) != "1" {
-		writeErr(w, http.StatusForbidden, "That request didn't come from the Homelab companion.")
-		return
-	}
-	if ct := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]); !strings.EqualFold(ct, "application/json") {
-		writeErr(w, http.StatusUnsupportedMediaType, "Send JSON with Content-Type: application/json.")
+	if !publicPost(w, r) {
 		return
 	}
 	var body struct{}
@@ -502,7 +534,7 @@ func (s *server) redeemInvite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) recoverLink(w http.ResponseWriter, r *http.Request) {
-	if !loopbackHost(r.Host) {
+	if !onThisComputer(r) {
 		http.Error(w, "Open this recovery link on the Homelab computer.", http.StatusForbidden)
 		return
 	}

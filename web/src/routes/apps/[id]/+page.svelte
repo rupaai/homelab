@@ -22,6 +22,7 @@
 
 	let sheet = $state<null | { kind: 'promote' | 'deploy' } | { kind: 'rollback'; env: EnvName } | { kind: 'mode'; mode: PromotionMode } | { kind: 'remove' }>(null);
 	const modes: PromotionMode[] = ['manual', 'auto-dev', 'auto'];
+	let admin = $state(false);
 	let events = $state<ActivityEvent[]>([]);
 	let eventsLoaded = $state(false);
 
@@ -36,6 +37,8 @@
 	}
 
 	onMount(() => {
+		// Promotion, secrets and removing an app are for admins; builders don't see them.
+		api.me().then((me) => (admin = me.roles.some((r) => r === 'owner' || r === 'admin')), () => {});
 		const stop = startPolling(async () => {
 			await appsStore.refresh();
 			await loadEvents();
@@ -94,54 +97,58 @@
 				onpromote={() => (sheet = { kind: 'promote' })}
 				onrollback={() => (sheet = { kind: 'rollback', env: env.env })}
 				ondeploy={() => (sheet = { kind: 'deploy' })}
+				{admin}
 			/>
 		{/each}
 
-		<section class="card" aria-labelledby="promotion">
-			<h2 id="promotion">Promotion</h2>
-			<fieldset>
-				<legend class="sr-only">Promotion mode</legend>
-				{#each modes as m}
-					<label class="mode">
-						<input
-							type="radio"
-							name="mode"
-							value={m}
-							checked={app.promotion === m}
-							onchange={(e) => {
-								e.currentTarget.checked = app.promotion === m;
-								sheet = { kind: 'mode', mode: m };
-							}}
-						/>
-						<span><strong>{promotionLabel(m)}</strong><span class="muted small">{promotionHelp(m, app.promoteAfter)}</span></span>
-					</label>
-				{/each}
-			</fieldset>
-
-			{#if app.autoPromote}
-				<p class="auto" role="status">
-					<strong>{autoStateLabel(app.autoPromote.state)}.</strong>
-					{app.autoPromote.detail}
-					{#if app.autoPromote.state === 'waiting' && app.autoPromote.at}
-						<span class="muted">Promotes {countdown(app.autoPromote.at, clock.now)}.</span>
-					{/if}
-				</p>
-			{/if}
-
-			{#if app.held.length}
-				<h3>Held commits</h3>
-				<ul class="held">
-					{#each app.held as h (h.commit)}
-						<li><code>{h.short}</code> {h.reason} <span class="muted small">{relativeTime(h.at, clock.now)}</span></li>
+		{#if admin}
+			<section class="card" aria-labelledby="promotion">
+				<h2 id="promotion">Promotion</h2>
+				<fieldset>
+					<legend class="sr-only">Promotion mode</legend>
+					{#each modes as m}
+						<label class="mode">
+							<input
+								type="radio"
+								name="mode"
+								value={m}
+								checked={app.promotion === m}
+								onchange={(e) => {
+									e.currentTarget.checked = app.promotion === m;
+									sheet = { kind: 'mode', mode: m };
+								}}
+							/>
+							<span><strong>{promotionLabel(m)}</strong><span class="muted small">{promotionHelp(m, app.promoteAfter)}</span></span>
+						</label>
 					{/each}
-				</ul>
-				<p class="hint">Homelab won't promote these by itself. You can still promote them by hand.</p>
-			{/if}
-		</section>
+				</fieldset>
 
+				{#if app.autoPromote}
+					<p class="auto" role="status">
+						<strong>{autoStateLabel(app.autoPromote.state)}.</strong>
+						{app.autoPromote.detail}
+						{#if app.autoPromote.state === 'waiting' && app.autoPromote.at}
+							<span class="muted">Promotes {countdown(app.autoPromote.at, clock.now)}.</span>
+						{/if}
+					</p>
+				{/if}
+
+				{#if app.held.length}
+					<h3>Held commits</h3>
+					<ul class="held">
+						{#each app.held as h (h.commit)}
+							<li><code>{h.short}</code> {h.reason} <span class="muted small">{relativeTime(h.at, clock.now)}</span></li>
+						{/each}
+					</ul>
+					<p class="hint">Homelab won't promote these by itself. You can still promote them by hand.</p>
+				{/if}
+			</section>
+		{/if}
+
+		{#if admin || app.mirror}
 		<section class="card" aria-labelledby="more">
-			<h2 id="more">Secrets and code</h2>
-			<p><a href="/apps/{encodeURIComponent(app.id)}/secrets">Secrets for dev and prod</a></p>
+			<h2 id="more">{admin ? 'Secrets and code' : 'Code'}</h2>
+			{#if admin}<p><a href="/apps/{encodeURIComponent(app.id)}/secrets">Secrets for dev and prod</a></p>{/if}
 			{#if app.mirror}
 				{#if app.mirror.error}
 					<p class="notice bad">The copy of the code on this computer isn't working. {app.mirror.error}{#if app.mirror.lastSync} It last worked <span>{relativeTime(app.mirror.lastSync, clock.now)}</span>.{/if}</p>
@@ -152,6 +159,7 @@
 				{/if}
 			{/if}
 		</section>
+		{/if}
 
 		<section aria-labelledby="recent">
 			<div class="page-head">
@@ -169,9 +177,11 @@
 			</div>
 		</section>
 
-		<div class="danger-zone">
-			<button class="btn" type="button" onclick={() => (sheet = { kind: 'remove' })}>Remove app…</button>
-		</div>
+		{#if admin}
+			<div class="danger-zone">
+				<button class="btn" type="button" onclick={() => (sheet = { kind: 'remove' })}>Remove app…</button>
+			</div>
+		{/if}
 
 		{#if sheet?.kind === 'mode'}
 			<PromotionSheet {app} mode={sheet.mode} onclose={() => (sheet = null)} ondone={started} />

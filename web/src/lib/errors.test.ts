@@ -10,7 +10,7 @@ describe('errorMessage', () => {
 	});
 	it('handles non-JSON bodies', () => {
 		expect(errorMessage(500, '<html>oops</html>')).toMatch(/inside Homelab/);
-		expect(errorMessage(403, '')).toMatch(/Tailscale/);
+		expect(errorMessage(403, '')).toMatch(/Sign in again/);
 		expect(errorMessage(404, 'not found')).toMatch(/couldn't find/);
 	});
 });
