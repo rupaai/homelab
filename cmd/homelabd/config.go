@@ -20,6 +20,9 @@ type Config struct {
 		Tags []string `yaml:"tags"`
 	} `yaml:"tailscale"`
 	Listen string `yaml:"listen"`
+	// Folders are shared folders on the device that apps may ask for by name, e.g.
+	// media: /mnt/storage. Apps see nothing else outside their own data.
+	Folders map[string]string `yaml:"folders"`
 }
 
 const (
@@ -71,6 +74,11 @@ func parseConfig(b []byte) (Config, error) {
 		c.Listen = defaultListen
 		if c.Addresses == "ip" {
 			c.Listen = ipListen
+		}
+	}
+	for name, dir := range c.Folders {
+		if !filepath.IsAbs(dir) {
+			return c, fmt.Errorf("config.yaml: folder %s must be an absolute path, not %q", name, dir)
 		}
 	}
 	if len(c.Tailscale.Tags) == 0 {

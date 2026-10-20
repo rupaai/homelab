@@ -105,3 +105,48 @@ func TestIDFromRepo(t *testing.T) {
 		}
 	}
 }
+
+const withServices = `
+folders:
+  - {name: media, path: /media}
+ports: ["6881-6891:6881-6891", "6881-6891:6881-6891/udp"]
+services:
+  - name: jellyfin
+    image: jellyfin/jellyfin:10.11.11
+    data: [{name: jellyfin-config, path: /config}]
+    folders: [{name: media, path: /media}]
+    ports: ["8096:8096"]
+    gpu: true
+    memory: 4g
+  - name: prowlarr
+    image: lscr.io/linuxserver/prowlarr:version-2.6.5.5623
+    env: {PUID: "1000"}
+`
+
+func TestServices(t *testing.T) {
+	m, err := Parse([]byte(movies+withServices), Defaults{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Services) != 2 || !m.Services[0].GPU || m.Services[1].Env["PUID"] != "1000" || m.Folders[0].Name != "media" || len(m.Ports) != 2 {
+		t.Errorf("parsed %+v", m)
+	}
+	bad := map[string]string{
+		"untagged image":  strings.Replace(withServices, "jellyfin/jellyfin:10.11.11", "jellyfin/jellyfin", 1),
+		"latest":          strings.Replace(withServices, "jellyfin:10.11.11", "jellyfin:latest", 1),
+		"named app":       strings.Replace(withServices, "name: prowlarr", "name: app", 1),
+		"same name":       strings.Replace(withServices, "name: prowlarr", "name: jellyfin", 1),
+		"homelab port":    strings.Replace(withServices, "8096:8096", "7100:8096", 1),
+		"low port":        strings.Replace(withServices, "8096:8096", "80:8096", 1),
+		"uneven range":    strings.Replace(withServices, "6881-6891:6881-6891\"", "6881-6891:6881-6890\"", 1),
+		"bad port":        strings.Replace(withServices, "8096:8096", "8096", 1),
+		"relative folder": strings.Replace(withServices, "{name: media, path: /media}]", "{name: media, path: media}]", 1),
+		"path twice":      strings.Replace(withServices, "path: /config}", "path: /media}", 1),
+		"bad env":         strings.Replace(withServices, "PUID:", "1PUID:", 1),
+	}
+	for name, doc := range bad {
+		if _, err := Parse([]byte(movies+doc), Defaults{}); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+}

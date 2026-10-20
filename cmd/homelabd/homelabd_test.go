@@ -30,17 +30,17 @@ func TestParseConfigDefaults(t *testing.T) {
 }
 
 func TestParseConfigFull(t *testing.T) {
-	c, err := parseConfig([]byte("owners: [a@b.c]\naddresses: tailscale\ntailscale:\n  tags: [tag:x]\nlisten: 127.0.0.1:9000\n"))
+	c, err := parseConfig([]byte("owners: [a@b.c]\naddresses: tailscale\ntailscale:\n  tags: [tag:x]\nlisten: 127.0.0.1:9000\nfolders: {media: /mnt/storage}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Addresses != "tailscale" || c.Listen != "127.0.0.1:9000" || c.Owners[0] != "a@b.c" || c.Tailscale.Tags[0] != "tag:x" {
+	if c.Addresses != "tailscale" || c.Listen != "127.0.0.1:9000" || c.Owners[0] != "a@b.c" || c.Tailscale.Tags[0] != "tag:x" || c.Folders["media"] != "/mnt/storage" {
 		t.Fatalf("%+v", c)
 	}
 }
 
 func TestParseConfigStrict(t *testing.T) {
-	for _, in := range []string{"adresses: local\n", "addresses: wifi\n", "listen: [1\n", "owners: nope: x\n"} {
+	for _, in := range []string{"adresses: local\n", "addresses: wifi\n", "listen: [1\n", "owners: nope: x\n", "folders: {media: storage}\n"} {
 		if _, err := parseConfig([]byte(in)); err == nil {
 			t.Errorf("%q should be refused", in)
 		}
