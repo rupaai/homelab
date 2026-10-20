@@ -12,8 +12,6 @@ project's design docs (milestone_2_plan.md); this file is what the code follows.
 | `internal/adapters/gitmirror` | `core.Mirror`: a full `git clone --mirror` of each app repo |
 | `internal/adapters/docker` (smoke.go) | `core.SmokeTester`: runs an app's smoke test inside its own image |
 
-`internal/adapters/filesecrets` is now only used to import milestone 1's files once.
-
 ## homelab.yaml: what's new
 
 | Field | Default | Meaning |
@@ -45,8 +43,7 @@ homelab-identity-v1\n<app>\n<env>\n<user>\n<name>\n<groups joined by ,>\n<unix s
 Apps get the public key as `HOMELAB_IDENTITY_KEY` (`ed25519:<base64>`), and also
 `HOMELAB_APP` and `HOMELAB_ENV`, which they use when verifying. Accept a signature only
 within 5 minutes of now. Milestone 2 knows one person: on this computer it's user
-`owner`, name `Owner`, groups `role:owner`; over Tailscale, an owner from config.yaml
-gets their login and `role:owner`. Anyone else gets no headers.
+`owner`, name `Owner`, groups `role:owner`. Anyone else gets no headers.
 
 ## Smoke tests
 
@@ -77,9 +74,8 @@ start. Each value is sealed with its own random nonce, and its app, env and name
 additional data, so a value can't be moved to another secret. If the database has values
 and the key file is missing, homelabd stops and says so rather than making a new key.
 
-At start, values from milestone 1's files (`platform.env`, `<app>.<env>.env`) that aren't in
-the store yet are imported, and each file is renamed to `<file>.imported`. homelabd prints
-the command to delete them.
+If a secret exists but can't be read or decrypted, homelabd stops and says so. It only makes
+a new secret when it is really missing.
 
 Platform credentials: `GITHUB_TOKEN` (used right away) and `TS_AUTHKEY` (used at the next
 start). The identity signing key is a platform secret Homelab makes itself and never lists.

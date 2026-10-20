@@ -1,5 +1,4 @@
-// Package local serves addresses on localhost ports, for trying Homelab out without
-// Tailscale. Each name gets its own port, assigned once and remembered in ports.json.
+// Package local serves addresses on localhost ports. Each name gets its own port, assigned once and remembered in ports.json.
 package local
 
 import (
@@ -103,10 +102,14 @@ func (a *Addresses) savePorts() error {
 	return os.Rename(tmp, a.portsFile())
 }
 
-// nextPort picks the lowest port from BasePort that no name uses. Caller holds a.mu.
-func (a *Addresses) nextPort() int {
+// nextPort picks the lowest port from BasePort that no name uses and isn't in skip.
+// Caller holds a.mu.
+func (a *Addresses) nextPort(skip map[int]bool) int {
 	used := map[int]bool{a.opts.CompanionPort: true}
 	for _, p := range a.ports {
+		used[p] = true
+	}
+	for p := range skip {
 		used[p] = true
 	}
 	p := a.opts.BasePort
@@ -148,14 +151,14 @@ func (a *Addresses) Ensure(_ context.Context, name string, handler http.Handler)
 		ln, err = a.listen(port)
 	} else {
 		// New name: take the next free port, skipping any another program holds.
+		tried := map[int]bool{}
 		for i := 0; i < 100; i++ {
-			port = a.nextPort()
+			port = a.nextPort(tried)
 			if ln, err = a.listen(port); err == nil {
 				break
 			}
-			a.ports[name] = port // reserve so nextPort moves on; undone below on failure
+			tried[port] = true
 		}
-		delete(a.ports, name)
 	}
 	if err != nil {
 		a.errs[name] = fmt.Sprintf("Couldn't listen on port %d: %v", port, err)

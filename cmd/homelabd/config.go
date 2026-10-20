@@ -14,12 +14,11 @@ import (
 
 // Config is config.yaml.
 type Config struct {
-	Owners    []string `yaml:"owners"`
-	Addresses string   `yaml:"addresses"` // local | ip | tailscale
-	Tailscale struct {
-		Tags []string `yaml:"tags"`
-	} `yaml:"tailscale"`
-	Listen string `yaml:"listen"`
+	Addresses string `yaml:"addresses"` // local | ip
+	// Old keys from when Homelab used Tailscale. They are read and ignored, so an old config still starts.
+	Owners    any    `yaml:"owners"`
+	Tailscale any    `yaml:"tailscale"`
+	Listen    string `yaml:"listen"`
 	// AppAPIPort is the app door's port: where app containers call the Homelab API with
 	// their own key (platform services). Default 7085.
 	AppAPIPort int `yaml:"app_api_port"`
@@ -32,8 +31,7 @@ const (
 	defaultListen = "127.0.0.1:7080"
 	defaultAppAPI = 7085
 	// ipListen is where the companion listens with addresses: ip, so other devices reach it.
-	ipListen   = "0.0.0.0:7080"
-	defaultTag = "tag:homelab"
+	ipListen = "0.0.0.0:7080"
 )
 
 // defaultHome is ~/.homelab.
@@ -71,8 +69,11 @@ func parseConfig(b []byte) (Config, error) {
 	if c.Addresses == "" {
 		c.Addresses = "local"
 	}
-	if c.Addresses != "local" && c.Addresses != "ip" && c.Addresses != "tailscale" {
-		return c, fmt.Errorf("config.yaml: addresses must be local, ip or tailscale, not %q", c.Addresses)
+	if c.Addresses == "tailscale" {
+		return c, errors.New("config.yaml: addresses: tailscale isn't supported any more. Change it to addresses: ip (other devices use the device's IP address and sign in with the password)")
+	}
+	if c.Addresses != "local" && c.Addresses != "ip" {
+		return c, fmt.Errorf("config.yaml: addresses must be local or ip, not %q", c.Addresses)
 	}
 	if c.Listen == "" {
 		c.Listen = defaultListen
@@ -91,9 +92,6 @@ func parseConfig(b []byte) (Config, error) {
 			return c, fmt.Errorf("config.yaml: folder %s must be an absolute path, not %q", name, dir)
 		}
 	}
-	if len(c.Tailscale.Tags) == 0 {
-		c.Tailscale.Tags = []string{defaultTag}
-	}
 	return c, nil
 }
 
@@ -101,7 +99,7 @@ func loadConfig(home string) (Config, error) {
 	path := filepath.Join(home, "config.yaml")
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return Config{}, fmt.Errorf("no config at %s. Run `homelabd init --home %s` first", path, home)
+		return Config{}, fmt.Errorf("no config at %s. Make an empty file there (it means addresses: local), or write addresses: ip", path)
 	}
 	if err != nil {
 		return Config{}, err
@@ -136,5 +134,5 @@ func checkLoopback(listen string) error {
 	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
 		return nil
 	}
-	return fmt.Errorf("listen %q is not a loopback address. It must listen on 127.0.0.1 (or ::1); other devices reach Homelab through Tailscale, or set addresses: ip", listen)
+	return fmt.Errorf("listen %q is not a loopback address. It must listen on 127.0.0.1 (or ::1); to reach Homelab from other devices set addresses: ip", listen)
 }

@@ -40,8 +40,7 @@ func (s *server) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "Password sign-in is only for other devices when Homelab uses addresses: ip.")
 		return
 	}
-	if r.Header.Get(csrfHeader) != "1" {
-		writeErr(w, http.StatusForbidden, "That request didn't come from the Homelab companion.")
+	if !publicPost(w, r) {
 		return
 	}
 	var in struct {
@@ -50,8 +49,8 @@ func (s *server) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in, true) {
 		return
 	}
-	// Per device and for everyone together, so guessing from many devices is slow too.
-	if !s.allowRecoveryAttempt("password:"+clientIP(r)) || !s.allowPasswordAttempt() {
+	// Per device only: a shared limit would let other devices lock the owner out.
+	if !s.allowRecoveryAttempt("password:" + clientIP(r)) {
 		writeErr(w, http.StatusTooManyRequests, "Too many tries. Wait five minutes and try again.")
 		return
 	}
@@ -82,13 +81,6 @@ func (s *server) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.store.Log(r.Context(), state.Event{Actor: owner.Email, Action: "password.sign-in", Detail: "Signed in with the password from " + clientIP(r)})
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// allowPasswordAttempt limits password tries from all devices together.
-func (s *server) allowPasswordAttempt() bool {
-	s.authMu.Lock()
-	defer s.authMu.Unlock()
-	return s.countAttempt("password", 20)
 }
 
 // owner is the household owner who is signed in (not still invited).

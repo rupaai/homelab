@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -54,6 +55,50 @@ CMD ["sh", "-c", "echo hello from %s greeting=$GREETING; exec httpd -f -vv -p 80
 	digest := strings.Fields(out[i+len("digest: "):])[0]
 	sh(t, dir, "rmi", "-f", tag) // so Prepare really has to download it
 	return digest
+}
+
+// buildSide builds and pushes a service image that just sleeps, and returns its reference.
+func buildSide(t *testing.T) string {
+	dir := t.TempDir()
+	df := "FROM mirror.gcr.io/library/busybox\nCMD [\"sleep\", \"3600\"]\n"
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(df), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ref := testRegistry + "/homelab-itest/side:1"
+	sh(t, dir, "build", "-q", "-t", ref, ".")
+	sh(t, dir, "push", ref)
+	sh(t, dir, "rmi", "-f", ref)
+	return ref
+}
+
+// itestRuns keeps only the environments this test made; other Homelab apps may run here.
+func itestRuns(runs []core.Running) []core.Running {
+	var out []core.Running
+	for _, r := range runs {
+		if r.App == "itest" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// sideContainer returns the id and state of the service container.
+func sideContainer(t *testing.T, project string) (id, state string) {
+	t.Helper()
+	id = sh(t, "", "ps", "-a", "-q", "--filter", "label=com.docker.compose.project="+project, "--filter", "label=homelab.service=side")
+	if id == "" {
+		t.Fatal("no service container")
+	}
+	return id, sh(t, "", "inspect", "-f", "{{.State.Status}}", id)
+}
+
+func fileOwner(t *testing.T, path string) uint32 {
+	t.Helper()
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st.Sys().(*syscall.Stat_t).Uid
 }
 
 func freePort(t *testing.T) int {
@@ -102,8 +147,9 @@ func TestIntegrationFullCycle(t *testing.T) {
 		}
 	}
 	d1, d2 := buildAndPush(t, "v1"), buildAndPush(t, "v2")
+	side := buildSide(t)
 	t.Cleanup(func() {
-		exec.Command("docker", "rmi", "-f", testImage+"@"+d1, testImage+"@"+d2).Run()
+		exec.Command("docker", "rmi", "-f", testImage+"@"+d1, testImage+"@"+d2, side).Run()
 	})
 
 	root := t.TempDir()
@@ -127,6 +173,7 @@ func TestIntegrationFullCycle(t *testing.T) {
 			Memory:   "64m",
 			Mounts:   []core.Mount{{HostPath: data, ContainerPath: "/data"}},
 			Vars:     map[string]string{"GREETING": `it's $HOME "ok" # fine`},
+			Services: []core.Service{{Name: "side", Image: side}},
 		}
 	}
 
@@ -156,6 +203,7 @@ func TestIntegrationFullCycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runs = itestRuns(runs)
 	if len(runs) != 1 || runs[0].App != app || runs[0].Env != env || runs[0].State != core.StateRunning ||
 		runs[0].Commit != "commit-v1" || runs[0].Digest != d1 || runs[0].StartedAt.IsZero() {
 		t.Fatalf("observe: %+v", runs)
@@ -173,6 +221,7 @@ func TestIntegrationFullCycle(t *testing.T) {
 		t.Fatal("stop:", err)
 	}
 	runs, _ = dep.Observe(ctx)
+	runs = itestRuns(runs)
 	if len(runs) != 1 || runs[0].State != core.StateExited || !strings.HasPrefix(runs[0].Detail, "exited with code") {
 		t.Fatalf("after stop: %+v", runs)
 	}
@@ -189,8 +238,82 @@ func TestIntegrationFullCycle(t *testing.T) {
 		t.Fatal("repeat deploy v2:", err)
 	}
 	runs, _ = dep.Observe(ctx)
+	runs = itestRuns(runs)
 	if len(runs) != 1 || runs[0].State != core.StateRunning || runs[0].Digest != d2 {
 		t.Fatalf("after redeploy: %+v", runs)
+	}
+
+	// Stopping only the app leaves the service running, and deploying again doesn't touch it.
+	sideID, state := sideContainer(t, project(app, env))
+	if state != "running" {
+		t.Fatalf("service is %s", state)
+	}
+	if err := dep.StopApp(ctx, app, env); err != nil {
+		t.Fatal("stop app:", err)
+	}
+	if _, state := sideContainer(t, project(app, env)); state != "running" {
+		t.Errorf("StopApp stopped the service: %s", state)
+	}
+	if runs, _ = dep.Observe(ctx); itestRuns(runs)[0].State != core.StateExited {
+		t.Errorf("with the app stopped the environment should be exited: %+v", runs)
+	}
+	if err := dep.Deploy(ctx, spec("v2", d2)); err != nil {
+		t.Fatal("deploy after StopApp:", err)
+	}
+	waitBody(t, port, "v2")
+	if id, state := sideContainer(t, project(app, env)); id != sideID || state != "running" {
+		t.Errorf("the service was replaced by a deploy: %s %s", id, state)
+	}
+
+	// Old images: v1 is no longer used and goes; v2 (kept) and the service image stay.
+	if err := dep.RemoveOldImages(ctx, testImage, []string{d2}); err != nil {
+		t.Fatal("remove old images:", err)
+	}
+	for ref, want := range map[string]bool{testImage + "@" + d1: false, testImage + "@" + d2: true, side: true} {
+		if have, err := dep.api.hasImage(ctx, ref); err != nil || have != want {
+			t.Errorf("image %s here = %v (%v), want %v", ref, have, err, want)
+		}
+	}
+
+	// Data folders are copied, moved and removed with owners kept.
+	if err := dep.CheckFiles(ctx); err != nil {
+		t.Fatal("check files:", err)
+	}
+	src := filepath.Join(t.TempDir(), "src")
+	if err := os.MkdirAll(filepath.Join(src, "private"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(src, "private", "secret")
+	if err := os.WriteFile(secret, []byte("s3cret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(secret, 12345, 12345); err != nil {
+		t.Logf("not root, so owners can't be set: %v", err)
+	}
+	cp := filepath.Join(t.TempDir(), "copy")
+	if err := dep.Copy(ctx, src, cp); err != nil {
+		t.Fatal("copy:", err)
+	}
+	if err := dep.Copy(ctx, src, cp); err == nil {
+		t.Error("copying onto an existing folder should fail")
+	}
+	moved := cp + "-moved"
+	if err := dep.Move(ctx, cp, moved); err != nil {
+		t.Fatal("move:", err)
+	}
+	got := filepath.Join(moved, "private", "secret")
+	if b, err := os.ReadFile(got); err != nil || string(b) != "s3cret" {
+		t.Fatalf("copied file: %q %v", b, err)
+	}
+	a, b := fileOwner(t, secret), fileOwner(t, got)
+	if a != b {
+		t.Errorf("owner not kept: %d became %d", a, b)
+	}
+	if err := dep.Remove(ctx, moved); err != nil {
+		t.Fatal("remove:", err)
+	}
+	if _, err := os.Stat(moved); !os.IsNotExist(err) {
+		t.Errorf("folder still there: %v", err)
 	}
 
 	// A failing deploy explains itself.

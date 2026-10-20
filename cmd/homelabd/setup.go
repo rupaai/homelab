@@ -15,8 +15,6 @@ import (
 
 	"github.com/rupaai/homelab/internal/adapters/selfupdate"
 	"github.com/rupaai/homelab/internal/adapters/sysinfo"
-	"github.com/rupaai/homelab/internal/sharedir"
-	"gopkg.in/yaml.v3"
 )
 
 // Where `homelabd setup` installs Homelab on a Linux device (milestone 6).
@@ -95,24 +93,19 @@ APT::Periodic::Unattended-Upgrade "1";
 
 const deviceConfig = `# Homelab settings. See docs/milestone6.md.
 
-# Each app environment gets its own Tailscale address.
-addresses: tailscale
-
-tailscale:
-  tags: [tag:homelab]
-
-# The companion on the device itself. People use the Tailscale address instead.
-listen: 127.0.0.1:7080
+# Other devices reach apps and the companion at the device's IP address, and sign in with
+# the password (set it with: sudo -u homelab homelabd password --home /var/lib/homelab).
+addresses: ip
 `
 
 func cmdSetup(args []string, out io.Writer) error {
 	flags := flag.NewFlagSet("setup", flag.ContinueOnError)
-	importFlag := flags.String("import", "", "a move file made by `homelabd export` on the old computer")
+	force := flags.Bool("force", false, "install even if this program is older than the one already installed")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if runtime.GOOS != "linux" {
-		return errors.New("setup installs Homelab on a Linux device; on a Mac use `homelabd service install`")
+		return errors.New("setup installs Homelab on a Linux device; on a Mac run `homelabd run`")
 	}
 	if os.Geteuid() != 0 {
 		return errors.New("run setup with sudo")
@@ -140,21 +133,6 @@ func cmdSetup(args []string, out io.Writer) error {
 		return err
 	}
 	fresh := false
-	if *importFlag != "" {
-		if _, err := os.Stat(filepath.Join(home, "homelab.db")); err == nil {
-			return fmt.Errorf("%s already has a Homelab, so the move file wasn't imported. Run setup without --import to just update it", home)
-		}
-		_ = sh(io.Discard, "systemctl", "stop", "homelab")
-		n, err := extractArchive(*importFlag, home)
-		if err != nil {
-			return err
-		}
-		step("Imported %d files from %s", n, *importFlag)
-		if err := useTailscaleAddresses(filepath.Join(home, "config.yaml")); err != nil {
-			return err
-		}
-		fresh = true
-	}
 	if _, err := os.Stat(filepath.Join(home, "config.yaml")); errors.Is(err, os.ErrNotExist) {
 		if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte(deviceConfig), 0o600); err != nil {
 			return err
@@ -166,21 +144,12 @@ func cmdSetup(args []string, out io.Writer) error {
 		fresh = true
 	}
 	if fresh {
-		// Imported app data belongs to root now; open it to the app containers (see sharedir).
-		for _, pattern := range []string{"apps/*/*/data", "services/*/data"} {
-			dirs, _ := filepath.Glob(filepath.Join(home, pattern))
-			for _, d := range dirs {
-				if err := sharedir.Open(d); err != nil {
-					return fmt.Errorf("open %s to its app: %w", d, err)
-				}
-			}
-		}
 		if err := sh(out, "chown", "-R", deviceUser+":"+deviceUser, home); err != nil {
 			return err
 		}
 	}
 
-	version, err := installProgram(home, p.Helper)
+	version, err := installProgram(home, p.Helper, *force)
 	if err != nil {
 		return err
 	}
@@ -214,34 +183,11 @@ func cmdSetup(args []string, out io.Writer) error {
 	fmt.Fprintf(out, `
 Homelab is starting. Watch it with:
   sudo journalctl -u homelab -f
-When it prints "Companion (Tailscale): https://...", open that address on your phone or Mac.
+When it prints "Companion: http://localhost:7080", Homelab is ready. Open http://<this device's IP>:7080 on your phone.
+Set the sign-in password first, if you haven't:
+  sudo -u homelab /usr/local/lib/homelab/homelabd password --home /var/lib/homelab
 `)
 	return nil
-}
-
-// useTailscaleAddresses switches an imported config to Tailscale addresses: on the device,
-// local addresses would only work on the device itself.
-func useTailscaleAddresses(path string) error {
-	b, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	cfg, err := parseConfig(b)
-	if err != nil {
-		return err
-	}
-	if cfg.Addresses == "tailscale" {
-		return nil
-	}
-	cfg.Addresses = "tailscale"
-	out, err := yaml.Marshal(cfg)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, append([]byte("# Switched to Tailscale addresses by homelabd setup.\n"), out...), 0o600)
 }
 
 // checkDocker makes sure Docker and its compose plugin are there.
@@ -306,7 +252,9 @@ func ensureUser(step func(string, ...any)) error {
 
 // installProgram copies this program into Homelab's bin folder, makes it the one that
 // runs, and keeps a copy for the update guard and the device report.
-func installProgram(home, helper string) (string, error) {
+// An older program is refused unless force is set, and a running test version is ended
+// (keeping the current data), so the next start doesn't put back data from before it.
+func installProgram(home, helper string, force bool) (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
@@ -316,10 +264,7 @@ func installProgram(home, helper string) (string, error) {
 		return "", err
 	}
 	bin := selfupdate.BinDir(home)
-	if _, err := selfupdate.Install(bin, version, data); err != nil {
-		return "", err
-	}
-	if err := selfupdate.Activate(bin, version); err != nil {
+	if err := activate(bin, version, data, force); err != nil {
 		return "", err
 	}
 	if err := sh(io.Discard, "chown", "-R", deviceUser+":"+deviceUser, bin); err != nil {
@@ -333,6 +278,39 @@ func installProgram(home, helper string) (string, error) {
 		return "", err
 	}
 	return version, os.Rename(tmp, helper)
+}
+
+// activate installs a program version and makes it the one that runs.
+func activate(bin, version string, program []byte, force bool) error {
+	if !force {
+		if err := checkNotOlder(bin, version); err != nil {
+			return err
+		}
+	}
+	if _, err := selfupdate.Install(bin, version, program); err != nil {
+		return err
+	}
+	if _, ok := selfupdate.ReadTest(bin); ok {
+		if _, err := selfupdate.Keep(bin); err != nil {
+			return err
+		}
+	}
+	return selfupdate.Activate(bin, version)
+}
+
+// checkNotOlder refuses to replace a newer release with an older one. Versions that aren't
+// numbered releases (a test version or a build by hand) can't be compared and are let through.
+func checkNotOlder(bin, version string) error {
+	running, err := selfupdate.Running(bin)
+	if err != nil {
+		return nil
+	}
+	n, ok := selfupdate.BuildNumber(version)
+	r, rok := selfupdate.BuildNumber(running)
+	if ok && rok && n < r {
+		return fmt.Errorf("this program is %s, but %s is already installed. Use the newer program, or add --force to go back", version, running)
+	}
+	return nil
 }
 
 // sh runs a command, sending its output to out.

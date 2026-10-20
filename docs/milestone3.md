@@ -4,8 +4,6 @@ Milestone 3 adds household accounts, passkey sign-in, app-specific access, invit
 recovery and person management. Existing app state and the encrypted secrets database remain
 in place. On upgrade, opening the companion prompts the Mac user to create the first owner.
 Loopback now identifies a local request for Host checks; it no longer grants owner access.
-Installs configured for Tailscale addresses cannot sign in through this milestone's localhost-only
-flow; use local mode until milestone 4 adds HTTPS sign-in for Tailscale hosts.
 
 ## New packages and contracts
 
@@ -122,12 +120,11 @@ References checked against Pocket ID 2.18.0 on 15 October 2026: [API endpoints](
 Open the companion at `http://localhost:7080`. Pocket ID uses `http://localhost:7081`, and
 local app addresses use `localhost` as well. WebAuthn accepts localhost as a relying-party
 host; it does not accept `127.0.0.1`. This milestone supports sign-in on the Mac only. Other
-devices need the Tailscale HTTPS addresses planned for milestone 4.
+devices sign in with the password (`addresses: ip`, see milestone 6).
 Pocket ID marks its session cookies `Secure` even when `APP_URL` is `http://`. Chrome keeps
 Secure cookies on localhost; Safari drops them, so a one-time link succeeded and the next page
 returned to `/login?redirect=%2Fsettings`. The proxy removes `Secure` only from responses to
-plain-HTTP requests, matching Homelab's own cookies. Milestone 4's HTTPS addresses make it
-unnecessary.
+plain-HTTP requests, matching Homelab's own cookies.
 The companion starts before Pocket ID is ready. It creates and configures Pocket ID in the
 background with retries; `/healthz` and the local recovery flows remain available while the
 sign-in service is unavailable. The sign-in page explains when setup is still starting.
@@ -135,14 +132,15 @@ sign-in service is unavailable. The sign-in page explains when setup is still st
 ## Try it on your Mac
 
 These commands build and start a fresh local install using OrbStack. For an existing Homelab
-install, skip `homelabd init`; the additive migration keeps its apps and secrets.
+install, the additive migration keeps its apps and secrets. Make `~/.homelab/config.yaml`
+first (an empty file is fine).
 
 ```sh
 cd ~/codes/homelab
 git switch milestone-3-people
 docker context use orbstack
 make build
-bin/homelabd init
+mkdir -p ~/.homelab && touch ~/.homelab/config.yaml
 bin/homelabd run
 ```
 

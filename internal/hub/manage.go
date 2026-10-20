@@ -50,7 +50,7 @@ func (h *Hub) RemoveApp(ctx context.Context, appID string, by core.Viewer) error
 		return err
 	}
 	for _, env := range []string{core.Dev, core.Prod} {
-		if err := h.ad.Deployer.Stop(ctx, appID, env); err != nil {
+		if _, err := h.stopIfRunning(ctx, appID, env, nil); err != nil {
 			h.log.Warn("remove app: stop", "app", appID, "env", env, "err", err) // the reconciler retries
 		}
 		h.removeAddress(ctx, manifest.AddressName(appID, env))
@@ -139,8 +139,8 @@ func secretView(name string, declared bool, stored map[string]core.SecretInfo) S
 	return v
 }
 
-// SetSecret stores a value for one app environment. Builders and admins may set but never
-// read values back (S4).
+// SetSecret stores a value for one app environment. Only admins may set secrets, and values
+// are never read back (S4).
 func (h *Hub) SetSecret(ctx context.Context, appID, env, name, value string, by core.Viewer) error {
 	if _, err := h.store.App(ctx, appID); err != nil {
 		return userErr("There's no app %q.", appID)
@@ -216,12 +216,6 @@ type Setting struct {
 var Settings = []Setting{
 	{Name: "GITHUB_TOKEN", Description: "Lets Homelab read your repos, builds and images. A classic GitHub token " +
 		"(Settings > Developer settings > Tokens (classic)) with the read:packages scope, plus repo for private repos."},
-	{Name: "TS_OAUTH_CLIENT_ID", AppliesAfterRestart: true, Description: "Lets Homelab invite people to your tailnet, set who reaches what, " +
-		"and give each app its own Tailscale address (only with addresses: tailscale). In the Tailscale admin console: " +
-		"Settings > Trust credentials > OAuth client, with the scopes devices:core, auth_keys, policy_file and users, and the tag tag:homelab."},
-	{Name: "TS_OAUTH_CLIENT_SECRET", AppliesAfterRestart: true, Description: "The secret of that OAuth client. Tailscale shows it once, when you create the client."},
-	{Name: "TS_AUTHKEY", AppliesAfterRestart: true, Description: "Only if you don't set up the OAuth client: lets Homelab give apps Tailscale addresses, " +
-		"but not invite people or set access rules. In the Tailscale admin console: Settings > Keys > Generate auth key, reusable and tagged tag:homelab."},
 }
 
 // SettingView is a platform credential as the companion shows it.

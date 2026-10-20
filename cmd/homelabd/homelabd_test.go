@@ -1,14 +1,12 @@
 package main
 
 import (
-	"bytes"
-	"encoding/xml"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -23,18 +21,18 @@ func TestParseConfigDefaults(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if c.Addresses != "local" || c.Listen != "127.0.0.1:7080" || !reflect.DeepEqual(c.Tailscale.Tags, []string{"tag:homelab"}) || len(c.Owners) != 0 {
+		if c.Addresses != "local" || c.Listen != "127.0.0.1:7080" {
 			t.Fatalf("defaults: %+v", c)
 		}
 	}
 }
 
 func TestParseConfigFull(t *testing.T) {
-	c, err := parseConfig([]byte("owners: [a@b.c]\naddresses: tailscale\ntailscale:\n  tags: [tag:x]\nlisten: 127.0.0.1:9000\nfolders: {media: /mnt/storage}\n"))
+	c, err := parseConfig([]byte("addresses: ip\nlisten: 127.0.0.1:9000\nfolders: {media: /mnt/storage}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Addresses != "tailscale" || c.Listen != "127.0.0.1:9000" || c.Owners[0] != "a@b.c" || c.Tailscale.Tags[0] != "tag:x" || c.Folders["media"] != "/mnt/storage" {
+	if c.Addresses != "ip" || c.Listen != "127.0.0.1:9000" || c.Folders["media"] != "/mnt/storage" {
 		t.Fatalf("%+v", c)
 	}
 }
@@ -47,10 +45,29 @@ func TestParseConfigStrict(t *testing.T) {
 	}
 }
 
-func TestTemplateConfigParses(t *testing.T) {
-	c, err := parseConfig([]byte(configTemplate))
-	if err != nil || c.Addresses != "local" {
+func TestDeviceConfigIsIP(t *testing.T) {
+	c, err := parseConfig([]byte(deviceConfig))
+	if err != nil || c.Addresses != "ip" || c.Listen != "0.0.0.0:7080" {
 		t.Fatalf("%v %+v", err, c)
+	}
+	if err := checkListen(c); err != nil {
+		t.Fatalf("homelabd run would refuse to start: %v", err)
+	}
+	if strings.Contains(deviceConfig, "listen:") {
+		t.Error("setup should not pin the listen address")
+	}
+}
+
+func TestTailscaleAddressesIsRefusedClearly(t *testing.T) {
+	_, err := parseConfig([]byte("addresses: tailscale\n"))
+	if err == nil || !strings.Contains(err.Error(), "addresses: ip") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestOldConfigKeysStillParse(t *testing.T) {
+	if _, err := parseConfig([]byte("owners: [a@b.c]\ntailscale:\n  tags: [tag:homelab]\n")); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -126,106 +143,13 @@ func TestPasswordCommand(t *testing.T) {
 	}
 }
 
-func TestLaunchdPlist(t *testing.T) {
-	out := launchdPlist(plistParams{Exe: "/opt/h&h/homelabd", Home: "/Users/l/.homelab", UserDir: "/Users/l"})
-	if err := xml.NewDecoder(strings.NewReader(out)).Decode(new(any)); err != nil {
-		t.Fatalf("not xml: %v", err)
-	}
-	for _, want := range []string{
-		"<string>net.homelab.homelabd</string>",
-		"<string>/opt/h&amp;h/homelabd</string>",
-		"<string>run</string>", "<string>--home</string>", "<string>/Users/l/.homelab</string>",
-		"<key>RunAtLoad</key>\n\t<true/>", "<key>KeepAlive</key>\n\t<true/>",
-		"<string>/Users/l/.homelab/logs/homelabd.log</string>",
-		"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/Users/l/.orbstack/bin",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("missing %q in\n%s", want, out)
-		}
-	}
-	if strings.Count(out, "homelabd.log") != 2 {
-		t.Error("stdout and stderr should both be logged")
-	}
-}
-
-func TestInitDoesNotOverwrite(t *testing.T) {
-	home := filepath.Join(t.TempDir(), "hh")
-	var out bytes.Buffer
-	if err := initHome(home, &out); err != nil {
-		t.Fatal(err)
-	}
-	mode := func(p string) os.FileMode {
-		st, err := os.Stat(filepath.Join(home, p))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return st.Mode().Perm()
-	}
-	if mode(".") != 0o700 || mode("secrets") != 0o700 {
-		t.Errorf("modes: %v %v", mode("."), mode("secrets"))
-	}
-	if _, err := os.Stat(filepath.Join(home, "secrets", "platform.env")); err == nil {
-		t.Error("init made a plain secrets file; secrets are set in the companion now")
-	}
-	if !strings.Contains(out.String(), "Settings") {
-		t.Errorf("next steps don't mention Settings: %s", out.String())
-	}
-	if _, err := loadConfig(home); err != nil {
-		t.Fatalf("starter config: %v", err)
-	}
-
-	// Edit the config, run init again: nothing changes.
-	cfg := filepath.Join(home, "config.yaml")
-	_ = os.WriteFile(cfg, []byte("addresses: tailscale\n"), 0o644)
-	out.Reset()
-	if err := initHome(home, &out); err != nil {
-		t.Fatal(err)
-	}
-	if b, _ := os.ReadFile(cfg); string(b) != "addresses: tailscale\n" {
-		t.Errorf("config overwritten: %s", b)
-	}
-	if strings.Contains(out.String(), "created") {
-		t.Errorf("second run created things: %s", out.String())
-	}
-}
-
-func TestImportSecretFiles(t *testing.T) {
+func TestIdentityKeyMadeOnce(t *testing.T) {
 	dir := t.TempDir()
-	_ = os.WriteFile(filepath.Join(dir, "platform.env"), []byte("GITHUB_TOKEN=from-file\nTS_AUTHKEY=ts\n"), 0o600)
-	_ = os.WriteFile(filepath.Join(dir, "movies.prod.env"), []byte("TMDB_API_KEY='k p'\n"), 0o600)
 	s, err := secretstore.Open(filepath.Join(dir, "secrets.db"), filepath.Join(dir, "master.key"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	_ = s.Set("", "", "GITHUB_TOKEN", "already-set", "owner") // the store wins
-	var out bytes.Buffer
-	if err := importSecretFiles(dir, s, &out); err != nil {
-		t.Fatal(err)
-	}
-	if v, _ := s.Platform("GITHUB_TOKEN"); v != "already-set" {
-		t.Errorf("GITHUB_TOKEN = %q", v)
-	}
-	if v, _ := s.Platform("TS_AUTHKEY"); v != "ts" {
-		t.Errorf("TS_AUTHKEY = %q", v)
-	}
-	if v, _ := s.Inject("movies", "prod", []string{"TMDB_API_KEY"}); v["TMDB_API_KEY"] != "k p" {
-		t.Errorf("TMDB_API_KEY = %q", v)
-	}
-	for _, f := range []string{"platform.env", "movies.prod.env"} {
-		if _, err := os.Stat(filepath.Join(dir, f+".imported")); err != nil {
-			t.Errorf("%s not renamed: %v", f, err)
-		}
-	}
-	if !strings.Contains(out.String(), "rm ") {
-		t.Errorf("no delete command: %s", out.String())
-	}
-	// Running again (next start) does nothing.
-	out.Reset()
-	if err := importSecretFiles(dir, s, &out); err != nil || out.Len() != 0 {
-		t.Fatalf("second import: %v %q", err, out.String())
-	}
-	// The identity key is made once and kept.
 	a, err := identitySigner(s)
 	if err != nil {
 		t.Fatal(err)
@@ -233,6 +157,34 @@ func TestImportSecretFiles(t *testing.T) {
 	b, _ := identitySigner(s)
 	if a.PublicKey() != b.PublicKey() {
 		t.Error("identity key changed between starts")
+	}
+}
+
+// brokenSecrets can't read platform values, as when the store has a bad row or a locked file.
+type brokenSecrets struct {
+	core.Secrets
+	set int
+}
+
+func (b *brokenSecrets) LoadPlatform(string) (string, error) { return "", errors.New("read failed") }
+func (b *brokenSecrets) Set(app, env, name, value, by string) error {
+	b.set++
+	return nil
+}
+
+func TestStartupStopsOnSecretReadError(t *testing.T) {
+	b := &brokenSecrets{}
+	if _, err := ensurePlatformSecret(b, "X"); err == nil || !strings.Contains(err.Error(), "read failed") {
+		t.Fatalf("ensurePlatformSecret error = %v", err)
+	}
+	if _, err := identitySigner(b); err == nil {
+		t.Fatal("identitySigner made a key although the store can't be read")
+	}
+	if _, _, err := pushKeys(b); err == nil {
+		t.Fatal("pushKeys made keys although the store can't be read")
+	}
+	if b.set != 0 {
+		t.Fatalf("a new secret was written %d times; it would replace the real one", b.set)
 	}
 }
 

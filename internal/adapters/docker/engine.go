@@ -194,3 +194,33 @@ func (e *engine) startedAt(ctx context.Context, id string) (time.Time, error) {
 	}
 	return t, nil
 }
+
+// image is the part of GET /images/json we use.
+type image struct {
+	RepoDigests []string `json:"RepoDigests"`
+}
+
+func (e *engine) images(ctx context.Context) ([]image, error) {
+	var out []image
+	err := e.getJSON(ctx, "/images/json", &out)
+	return out, err
+}
+
+var errImageInUse = fmt.Errorf("the image is used by a container")
+
+// removeImage deletes the image reference ref (without force, so Docker refuses while any
+// container, running or not, uses it). An image that is already gone is fine.
+func (e *engine) removeImage(ctx context.Context, ref string) error {
+	resp, err := e.do(ctx, http.MethodDelete, "/images/"+ref, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusNotFound:
+		return nil
+	case http.StatusConflict:
+		return errImageInUse
+	}
+	return apiError(resp)
+}

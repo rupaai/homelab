@@ -110,8 +110,8 @@ func TestAdminKeyReadsUsersWithoutCSRFHeader(t *testing.T) {
 	r.people(t)
 	h := r.handler()
 	tok, _ := r.adminKey(t, "users:read")
-	tailnet := &core.Viewer{Login: "owner@example.test", PersonID: "owner"}
-	for _, v := range []*core.Viewer{&local, tailnet} {
+	other := &core.Viewer{Login: "owner@example.test", PersonID: "owner"}
+	for _, v := range []*core.Viewer{&local, other} {
 		rec := keyReq(h, "GET", "/api/users", tok, "", v)
 		if rec.Code != 200 || len(ids(t, rec)) != 4 {
 			t.Fatalf("users: %d %s", rec.Code, rec.Body)
@@ -142,7 +142,8 @@ func TestAdminKeyReadsUsersWithoutCSRFHeader(t *testing.T) {
 
 func TestAdminKeyWithoutViewerOrWithWrongKindIsRefused(t *testing.T) {
 	r := newRig(t)
-	h := r.handler()
+	// Without asLocal, so a request that no companion listener marked has no viewer.
+	h := New(r.h, Options{Version: "test", Static: testSite(), Store: r.store})
 	adminTok, _ := r.adminKey(t, "users:read")
 	appTok, _ := r.appKey(t, "movies", "dev")
 	if rec := keyReq(h, "GET", "/api/users", adminTok, "", nil); rec.Code != 403 {

@@ -106,17 +106,24 @@ func (r *Reporter) Device(ctx context.Context, dataDir string) (core.DeviceUsage
 // Apps reports each running app environment's CPU and memory, summed over its containers.
 // Containers that aren't Homelab apps (such as supporting services) are left out.
 func (r *Reporter) Apps(ctx context.Context) ([]core.AppUsage, error) {
-	psOut, err := r.run(ctx, r.docker, "ps", "--format",
+	psOut, err := r.run(ctx, r.docker, "ps", "--filter", "label="+labelApp, "--format",
 		`{{.Names}}`+"\t"+`{{.Label "`+labelApp+`"}}`+"\t"+`{{.Label "`+labelEnv+`"}}`)
 	if err != nil {
 		return nil, r.dockerDown(err)
 	}
-	statsOut, err := r.run(ctx, r.docker, "stats", "--no-stream", "--format", "{{json .}}")
+	owner := parseOwners(psOut)
+	if len(owner) == 0 {
+		return []core.AppUsage{}, nil
+	}
+	// Only Homelab's own containers are sampled, never other things on the shared Docker.
+	args := []string{"stats", "--no-stream", "--format", "{{json .}}"}
+	for name := range owner {
+		args = append(args, name)
+	}
+	statsOut, err := r.run(ctx, r.docker, args...)
 	if err != nil {
 		return nil, r.dockerDown(err)
 	}
-
-	owner := parseOwners(psOut)
 	sums := map[[2]string]*core.AppUsage{}
 	for _, line := range strings.Split(string(statsOut), "\n") {
 		line = strings.TrimSpace(line)

@@ -45,7 +45,6 @@ type rig struct {
 	smoke    *fake.Smoke
 	mirror   *fake.Mirror
 	identity *fake.Identity
-	remote   *fake.Remote // nil unless a test sets it before open
 	pusher   *fake.Notifier
 	res      *fake.Resources
 
@@ -96,9 +95,6 @@ func (r *rig) open() {
 		Source: r.src, Builder: r.build, Registry: r.reg, Deployer: r.dep,
 		Addresses: r.addr, Health: r.health, Secrets: r.sec, Smoke: r.smoke, Mirror: r.mirror, Identity: r.identity,
 		Notifier: r.pusher, Resources: r.res,
-	}
-	if r.remote != nil {
-		ad.Remote = r.remote
 	}
 	r.hub = New(Config{DataDir: r.dir, HealthyWait: 3 * time.Second, Now: r.now, Identity: signer}, s, ad)
 	r.t.Cleanup(func() { s.Close() })
@@ -453,6 +449,22 @@ services:
 	}
 	if len(dev.Ports) != 0 || len(dev.Services[0].Ports) != 0 {
 		t.Error("dev shouldn't open ports on the device; prod has them")
+	}
+	// Dev never gets prod's media folder: it has none, unless the device names "media-dev".
+	for _, m := range append(dev.Mounts, dev.Services[0].Mounts...) {
+		if m.HostPath == media {
+			t.Errorf("dev got prod's folder: %+v", m)
+		}
+	}
+	mediaDev := t.TempDir()
+	r.hub.cfg.Folders["media-dev"] = mediaDev
+	dev, err = r.hub.spec(ctx, a, core.Dev, rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(dev.Mounts, core.Mount{HostPath: mediaDev, ContainerPath: "/media"}) ||
+		!slices.Contains(dev.Services[0].Mounts, core.Mount{HostPath: mediaDev, ContainerPath: "/media"}) {
+		t.Errorf("dev should get media-dev: %v %v", dev.Mounts, dev.Services[0].Mounts)
 	}
 }
 

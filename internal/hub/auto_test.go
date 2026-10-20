@@ -245,7 +245,6 @@ func TestIdentityHeaders(t *testing.T) {
 	defer app.Close()
 	u, _ := url.Parse(app.URL)
 	port, _ := strconv.Atoi(u.Port())
-	r.hub.cfg.Owners = []string{"labiba@example.com"}
 	if _, err := r.store.AddApp(context.Background(), state.App{ID: "movies", Name: "Movies", Repo: "a/b", Manifest: []byte("id: movies"), Promotion: "manual"}); err != nil {
 		t.Fatal(err)
 	}
@@ -299,14 +298,6 @@ func TestIdentityHeaders(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("stranger status=%d want sign-in redirect", rec.Code)
 	}
-	// Over the tailnet, a login nobody in Homelab has is refused rather than sent to localhost.
-	req = httptest.NewRequest("GET", "/", nil)
-	req = req.WithContext(core.WithViewer(req.Context(), core.Viewer{Login: "stranger@example.com"}))
-	rec = httptest.NewRecorder()
-	proxy.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("tailnet stranger status=%d want 403", rec.Code)
-	}
 }
 
 func TestForwardedCookiesPreservesRawAppCookiesAndStripsHomelabValues(t *testing.T) {
@@ -359,24 +350,6 @@ func TestAppProxyChecksUseBuildAndGrant(t *testing.T) {
 		r.hub.appProxy(port, "movies", "Movies", tc.env).ServeHTTP(rec, req)
 		if rec.Code != tc.want {
 			t.Errorf("%s/%s status=%d want=%d", tc.id, tc.env, rec.Code, tc.want)
-		}
-		// The same rules over the tailnet, where the Tailscale login is the sign-in.
-		if err := r.store.SetTailscaleLogin(context.Background(), tc.id, tc.id+"@gmail.test"); err != nil {
-			t.Fatal(err)
-		}
-		req = httptest.NewRequest("GET", "/", nil)
-		req = req.WithContext(core.WithViewer(req.Context(), core.Viewer{Login: tc.id + "@GMAIL.test", Name: tc.id}))
-		rec = httptest.NewRecorder()
-		r.hub.appProxy(port, "movies", "Movies", tc.env).ServeHTTP(rec, req)
-		if rec.Code != tc.want {
-			t.Errorf("tailnet %s/%s status=%d want=%d", tc.id, tc.env, rec.Code, tc.want)
-		}
-		tagged := httptest.NewRequest("GET", "/", nil)
-		tagged = tagged.WithContext(core.WithViewer(tagged.Context(), core.Viewer{Login: tc.id + "@gmail.test", Tagged: true}))
-		rec = httptest.NewRecorder()
-		r.hub.appProxy(port, "movies", "Movies", tc.env).ServeHTTP(rec, tagged)
-		if rec.Code != http.StatusForbidden {
-			t.Errorf("tagged %s status=%d want 403", tc.id, rec.Code)
 		}
 	}
 }
@@ -492,7 +465,7 @@ func TestSecretsViewAndLogMasking(t *testing.T) {
 		t.Fatalf("logs = %q %v", out, err)
 	}
 	set, _ := r.hub.PlatformSettings(ctx)
-	if len(set) != 4 || set[0].Name != "GITHUB_TOKEN" || !set[0].Set || set[1].Set || set[3].Name != "TS_AUTHKEY" {
+	if len(set) != 1 || set[0].Name != "GITHUB_TOKEN" || !set[0].Set {
 		t.Fatalf("settings = %+v", set)
 	}
 }

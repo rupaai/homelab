@@ -25,14 +25,29 @@ services:
 ```
 
 - `data` works like the app's: a folder per environment under
-  `apps/<app>/<env>/data/<name>`, copied before every promote. A service may use the same
-  name as the app to share a folder.
+  `apps/<app>/<env>/data/<name>`. A service may use the same name as the app to share a
+  folder.
+- A promote stops only the app, not the services, so Jellyfin keeps playing. Only the
+  app's own `data` is copied before the switch (and put back if the new version fails).
+  Service data, such as Jellyfin's config, is never copied. A service keeps running
+  until its own part of `homelab.yaml` changes. If a service shares a folder with the
+  app, that folder is copied while the service still runs.
+- The copy is done by a short-lived helper container (the small `busybox` image), so it
+  reads every file and keeps its owner. Homelab checks that the helper works before it
+  stops anything; if not, the promote stops and prod keeps running.
+- After a deploy, Homelab deletes the app's old images that no container uses. It keeps
+  what dev and prod run now and the versions just before them, for rollback. It never
+  touches other images on the device.
 - `folders` are folders on the device that several apps or containers share. The device
-  owner names them in `config.yaml`, so an app can't reach anything else:
+  owner names them in `config.yaml`, so an app can't reach anything else. Prod gets the
+  folder with the name the app asks for. Dev gets the folder with `-dev` added to the
+  name, and if the device has none, dev gets no such folder at all, so dev can't change
+  prod's files:
 
   ```yaml
   folders:
-    media: /mnt/storage
+    media: /mnt/storage/media
+    media-dev: /mnt/storage/media-dev    # optional; without it dev has no media folder
   ```
 
   Homelab reads `config.yaml` when it starts, so restart it after adding one.
@@ -41,4 +56,5 @@ services:
   ports 7000-7999 are kept for Homelab.
 - Service images come from public registries and are downloaded once per tag.
 - Only the app has a health check, a web address and a version; services follow the app's
-  deploys.
+  deploys. If a service stops or never starts, Homelab starts the environment again and
+  shows the service next to the app's health. The app is not marked down because of it.

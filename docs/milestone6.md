@@ -1,15 +1,16 @@
 # Milestone 6: move to the mini device
 
+> History. The move from the Mac is done, so `homelabd export`, `setup --import`, `init` and
+> `service install` are gone. Tailscale is gone too: Homelab uses `addresses: ip` or `local`.
+
 Milestone 6 moves Homelab from the Mac to a Linux device at home, where it runs all the time
 as a system service. Everything from milestones 1 to 5 works the same way there.
 
 What it adds:
 
 - **`homelabd setup`**: one command, run with sudo on the device, that installs Homelab.
-- **`homelabd export`**: packs up the Mac's Homelab (people, apps, settings, secrets, app data)
-  into one file that `setup --import` loads on the device.
 - **Releases**: every merge to `main` becomes a numbered GitHub release (`build-<n>`) with the
-  program for Linux and the Mac.
+  program for Linux and the Mac (the Mac build is for developing Homelab).
 - **Self-update** from the companion, with an automatic return to the previous version if a
   new one doesn't stay up.
 - **Automatic OS security updates** (Ubuntu's unattended-upgrades; it never reboots on its own).
@@ -23,21 +24,23 @@ which would have meant reinstalling a device that already runs other things.)
 
 ## What setup does
 
-`sudo ./homelabd-linux-amd64 setup [--import FILE]`:
+`sudo ./homelabd-linux-amd64 setup [--force]`:
 
 1. Checks Docker runs and installs its compose plugin if missing; installs `git`,
    `smartmontools` and `unattended-upgrades` if missing.
 2. Makes the `homelab` system account (no login, no home in `/home`; it joins an existing
    `homelab` group if there is one) and adds it to the `docker` group. People's own accounts don't need Docker access for Homelab.
-3. Makes `/var/lib/homelab` (mode 0700, owned by `homelab`). With `--import`, unpacks the
-   move file there (refusing if a Homelab is already there) and switches it to Tailscale
-   addresses.
+3. Makes `/var/lib/homelab` (mode 0700, owned by `homelab`). On a first run it writes
+   `config.yaml` with `addresses: ip` (see below). An existing config is never changed.
 4. Installs the program into `/var/lib/homelab/bin` (see below) and a copy at
    `/usr/local/lib/homelab/homelabd` for the update guard and the device report.
 5. Writes `homelab.service`, `homelab-report.service` + `.timer`, and
    `/etc/apt/apt.conf.d/52homelab-unattended-upgrades`; enables and starts them.
 
-Running setup again with a newer program updates it in place and keeps all data.
+Running setup again with a newer program updates it in place and keeps all data. It
+refuses to put an older program over a newer one unless you add `--force`. It also ends a
+running test version (see below), keeping the data as it is now, so the next start doesn't
+put back older data.
 
 Other containers on the device (Home Assistant and friends) are left alone. Homelab only
 touches containers with its own labels and the `homelab-pocketid` project.
@@ -60,20 +63,6 @@ sudo journalctl -u homelab -f     # follow the log
 sudo systemctl restart homelab    # restart
 sudo systemctl stop homelab       # stop (it starts again at boot)
 ```
-
-## Moving from the Mac
-
-1. On the Mac, stop Homelab, then run `bin/homelabd export`. It writes
-   `~/homelab-move-<date>.tar.gz` (mode 0600; it holds every secret and the master key), then:
-   - removes the Mac's Homelab machines from the tailnet (with the OAuth client set; otherwise
-     it says to delete them in the admin console), so the device can take the same names;
-   - stops and removes Homelab's containers on the Mac (their data stays in `~/.homelab`);
-   - writes `~/.homelab/MOVED`, after which `homelabd run` refuses to start there, so two
-     copies never run at once. Delete that file to go back.
-2. Copy the file and the Linux program to the device and run setup with `--import`.
-
-The move leaves behind what the device makes again: Tailscale machine state, code mirrors,
-logs and local addresses.
 
 App data folders on Linux: an app's container usually runs as its own user (the movie app
 runs as uid 1000), not as `homelab`. Homelab can't change file owners, so before each deploy
@@ -120,14 +109,14 @@ While a test runs the card offers **Go back** and **Keep this version**. Go back
 `bin/homelabd` at the version from before and restarts. When that version starts, before it
 opens any data, it puts the saved copy back (`selfupdate.FinishTest`). The same happens when
 the update guard goes back on its own. Keep (once the test version has run 2 minutes)
-deletes the saved copy. A normal update during a test also ends it, keeping the data.
+deletes the saved copy. A normal update is refused during a test: go back or keep the test version first.
 
-Apps keep running through all of this, and their data, Pocket ID's data and Tailscale's
-state are not copied: only Homelab's own databases go back.
+Apps keep running through all of this, and their data and Pocket ID's data
+are not copied: only Homelab's own databases go back.
 
 ## Plain IP addresses (`addresses: ip`)
 
-For a home that doesn't want Tailscale in the way, `config.yaml` can say `addresses: ip`:
+`homelabd setup` writes `addresses: ip` in `config.yaml`:
 
 - The companion listens on `0.0.0.0:7080` (unless `listen` says otherwise), so any device
   that reaches the computer opens `http://<its IP>:7080`.
@@ -139,8 +128,8 @@ For a home that doesn't want Tailscale in the way, `config.yaml` can say `addres
 - Each app environment gets a port from 7100 up on `0.0.0.0`, open to anyone who reaches it,
   without sign-in. Apps get identity headers that name nobody, and Homelab's own cookies are
   dropped before they reach the app. The companion shows app links with the IP it was opened on.
-- Plain http isn't encrypted on the home network. Over Tailscale (for example the device
-  shared into your tailnet) it is.
+- Plain http isn't encrypted on the home network, so use it only on a network you trust.
+  Push notifications need https, so they don't work this way.
 
 ## The device card
 
@@ -155,14 +144,13 @@ use) is read directly.
 
 ## Signing in on the device
 
-People use the companion at `https://homelab.<tailnet>.ts.net`; their Tailscale login signs
-them in (milestone 4). The passkey sign-in and `homelabd recover` still work on
-`localhost`, which on the device is reached with an SSH tunnel from the Mac:
+People open `http://<the device's IP>:7080` and sign in with the password. The passkey sign-in and `homelabd recover` still work on
+`localhost`, which on the device is reached with an SSH tunnel from another computer:
 
 ```sh
 ssh -L 7080:localhost:7080 -L 7081:localhost:7081 <you>@<device>
 sudo -u homelab /var/lib/homelab/bin/homelabd recover --home /var/lib/homelab
-# then open the printed http://localhost:7080/recover/... link on the Mac
+# then open the printed http://localhost:7080/recover/... link on that computer
 ```
 
 ## Not in this milestone

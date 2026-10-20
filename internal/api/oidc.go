@@ -41,7 +41,7 @@ type oidcDiscovery struct {
 }
 
 func (s *server) authStart(w http.ResponseWriter, r *http.Request) {
-	if !loopbackHost(r.Host) {
+	if !onThisComputer(r) {
 		http.Error(w, "Open Homelab at http://localhost:7080 on this computer.", http.StatusForbidden)
 		return
 	}
@@ -85,7 +85,7 @@ func (s *server) authStart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) authCallback(w http.ResponseWriter, r *http.Request) {
-	if !loopbackHost(r.Host) {
+	if !onThisComputer(r) {
 		http.Error(w, "Open Homelab on this computer.", http.StatusForbidden)
 		return
 	}

@@ -20,11 +20,6 @@ func (s *server) bootstrapStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"needsSetup": false, "signInReady": s.passwordSet(), "password": true})
 		return
 	}
-	if v, ok := core.ViewerFrom(r.Context()); ok && !v.Local {
-		// Over the tailnet there is no setup or passkey: the Tailscale login is the sign-in.
-		writeJSON(w, http.StatusOK, map[string]any{"needsSetup": false, "signInReady": true, "remote": true, "login": v.Login, "known": v.PersonID != ""})
-		return
-	}
 	if !loopbackHost(r.Host) {
 		writeErr(w, http.StatusForbidden, "Open Homelab at http://localhost:7080 on this computer.")
 		return
@@ -53,16 +48,11 @@ func (s *server) bootstrapStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) initialOwnerPasskeyLink(w http.ResponseWriter, r *http.Request) {
-	if !loopbackHost(r.Host) {
+	if !onThisComputer(r) {
 		writeErr(w, http.StatusForbidden, "Open Homelab at http://localhost:7080 on this computer.")
 		return
 	}
-	if r.Header.Get(csrfHeader) != "1" {
-		writeErr(w, http.StatusForbidden, "That request didn't come from the Homelab companion.")
-		return
-	}
-	if !strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]), "application/json") {
-		writeErr(w, http.StatusUnsupportedMediaType, "Send JSON with Content-Type: application/json.")
+	if !publicPost(w, r) {
 		return
 	}
 	link, err := s.hub.InitialOwnerPasskeyLink(r.Context())
@@ -74,19 +64,13 @@ func (s *server) initialOwnerPasskeyLink(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *server) setupOwner(w http.ResponseWriter, r *http.Request) {
-	if !loopbackHost(r.Host) {
+	if !onThisComputer(r) {
 		writeErr(w, http.StatusForbidden, "Open Homelab at http://localhost:7080 on this computer.")
 		return
 	}
-	if r.Header.Get(csrfHeader) != "1" {
-		writeErr(w, http.StatusForbidden, "That request didn't come from the Homelab companion.")
+	if !publicPost(w, r) {
 		return
 	}
-	if !strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]), "application/json") {
-		writeErr(w, http.StatusUnsupportedMediaType, "Send JSON with Content-Type: application/json.")
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
 	var in struct {
 		Name  string `json:"name"`
 		Email string `json:"email"`
@@ -128,15 +112,13 @@ func newRecoveryCode() (string, error) {
 }
 
 func (s *server) recoverCode(w http.ResponseWriter, r *http.Request) {
-	if !loopbackHost(r.Host) {
+	if !onThisComputer(r) {
 		writeErr(w, http.StatusForbidden, "Use the recovery code on the Homelab computer.")
 		return
 	}
-	if !strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]), "application/json") {
-		writeErr(w, http.StatusUnsupportedMediaType, "Send JSON with Content-Type: application/json.")
+	if !publicPost(w, r) {
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
 	var in struct {
 		Code string `json:"code"`
 	}

@@ -99,6 +99,6 @@ describe('appAddress', () => {
 		expect(appAddress('http://localhost:7100', '192.168.1.183')).toBe('http://192.168.1.183:7100');
 	});
 	it('leaves other addresses alone', () => {
-		expect(appAddress('https://movies.tail.ts.net', '192.168.1.183')).toBe('https://movies.tail.ts.net');
+		expect(appAddress('https://movies.example.test', '192.168.1.183')).toBe('https://movies.example.test');
 	});
 });
