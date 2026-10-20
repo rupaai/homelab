@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -471,5 +472,35 @@ func TestNeverStartedIsRetried(t *testing.T) {
 	r.hub.Reconcile(ctx)
 	if r.running(core.Dev) != "aaaaaaa1" {
 		t.Fatal("the reconciler didn't start the environment again")
+	}
+}
+
+// A failed start stays on the card only until the wanted version runs and is healthy, even
+// when something other than Homelab started it (e.g. by hand, after freeing a port).
+func TestOldErrorClearsWhenHealthy(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	r.src.Push(repo, "main", "aaaaaaa1", "first", []byte(manifestDoc))
+	if _, err := r.hub.AddApp(ctx, repo, "", owner); err != nil {
+		t.Fatal(err)
+	}
+	r.dep.FailFor["sha256:aaaaaaa1"] = errors.New("failed to bind host port 0.0.0.0:6881/tcp: address already in use")
+	r.push("aaaaaaa1")
+	r.hub.CheckBuilds(ctx)
+	r.settle()
+	if e := r.env(core.Dev); e.LastError == "" {
+		t.Fatalf("failure not shown: %+v", e)
+	}
+
+	r.hub.CheckHealth(ctx) // still not running: the error stays
+	if e := r.env(core.Dev); e.LastError == "" {
+		t.Fatal("the error went away while the app still isn't running")
+	}
+
+	// Started outside Homelab, so no deploy of Homelab's succeeds.
+	r.dep.Envs["movies/dev"] = core.Running{App: "movies", Env: core.Dev, Commit: "aaaaaaa1", Digest: "sha256:aaaaaaa1", State: core.StateRunning}
+	r.hub.CheckHealth(ctx)
+	if e := r.env(core.Dev); e.Health != core.Healthy || e.LastError != "" {
+		t.Fatalf("a healthy app should drop the old error: health %s, error %q", e.Health, e.LastError)
 	}
 }
