@@ -50,7 +50,7 @@ func (h *Hub) RemoveApp(ctx context.Context, appID string, by core.Viewer) error
 		return err
 	}
 	for _, env := range []string{core.Dev, core.Prod} {
-		if err := h.ad.Deployer.Stop(ctx, appID, env); err != nil {
+		if _, err := h.stopIfRunning(ctx, appID, env, nil); err != nil {
 			h.log.Warn("remove app: stop", "app", appID, "env", env, "err", err) // the reconciler retries
 		}
 		h.removeAddress(ctx, manifest.AddressName(appID, env))

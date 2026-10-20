@@ -281,10 +281,6 @@ func (h *Hub) Reconcile(ctx context.Context) {
 		h.log.Error("reconcile: observe", "err", err)
 		return
 	}
-	byKey := map[envKey]core.Running{}
-	for _, r := range running {
-		byKey[envKey{r.App, r.Env}] = r
-	}
 	known := map[string]bool{}
 	for _, a := range apps {
 		known[a.ID] = true
@@ -292,23 +288,54 @@ func (h *Hub) Reconcile(ctx context.Context) {
 		if !lock.TryLock() {
 			continue // an action is working on this app; it reconciles it itself
 		}
+		// Look only now, with the lock held: an earlier look may predate an action's end.
+		envs, err := h.observeApp(ctx, a.ID)
+		if err != nil {
+			lock.Unlock()
+			h.log.Error("reconcile: observe", "err", err)
+			continue
+		}
 		for _, env := range []string{core.Dev, core.Prod} {
-			var r *core.Running
-			if x, ok := byKey[envKey{a.ID, env}]; ok {
-				r = &x
-			}
-			h.reconcileEnv(ctx, a, env, r)
+			h.reconcileEnv(ctx, a, env, envs[env])
 		}
 		lock.Unlock()
 	}
 	// Environments of apps that are no longer registered: stop them, keep their data.
-	for k := range byKey {
-		if !known[k.app] {
-			if err := h.ad.Deployer.Stop(ctx, k.app, k.env); err == nil {
-				h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: k.app, Env: k.env, Action: "env.stopped", Detail: "Stopped, because the app isn't registered any more"})
+	for i := range running {
+		r := &running[i]
+		if !known[r.App] {
+			if stopped, _ := h.stopIfRunning(ctx, r.App, r.Env, r); stopped {
+				h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: r.App, Env: r.Env, Action: "env.stopped", Detail: "Stopped, because the app isn't registered any more"})
 			}
 		}
 	}
+}
+
+// observeApp reports what runs for one app, by environment.
+func (h *Hub) observeApp(ctx context.Context, app string) (map[string]*core.Running, error) {
+	running, err := h.ad.Deployer.Observe(ctx)
+	if err != nil {
+		return nil, err
+	}
+	envs := map[string]*core.Running{}
+	for i := range running {
+		if running[i].App == app {
+			envs[running[i].Env] = &running[i]
+		}
+	}
+	return envs, nil
+}
+
+// stopIfRunning stops an environment's containers unless they are known to be stopped
+// already (r is what was observed, or nil if unknown). It says whether it stopped them.
+func (h *Hub) stopIfRunning(ctx context.Context, app, env string, r *core.Running) (bool, error) {
+	if r != nil && r.State == core.StateExited {
+		return false, nil
+	}
+	if err := h.ad.Deployer.Stop(ctx, app, env); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (h *Hub) reconcilePeople(ctx context.Context) {
@@ -380,12 +407,12 @@ func (h *Hub) reconcileEnv(ctx context.Context, a state.App, env string, r *core
 	name := manifest.AddressName(a.ID, env)
 	if e.Want == nil {
 		if r != nil {
-			_ = h.ad.Deployer.Stop(ctx, a.ID, env)
+			_, _ = h.stopIfRunning(ctx, a.ID, env, r)
 		}
 		h.removeAddress(ctx, name)
 		return
 	}
-	needsDeploy := r == nil || r.Digest != e.Want.Digest || r.State == core.StateExited
+	needsDeploy := r == nil || r.Digest != e.Want.Digest || r.State == core.StateExited || r.Incomplete
 	if needsDeploy {
 		h.mu.Lock()
 		s := h.st(a.ID, env)
@@ -395,6 +422,8 @@ func (h *Hub) reconcileEnv(ctx context.Context, a state.App, env string, r *core
 			why := "it wasn't running"
 			if r != nil && r.Digest != e.Want.Digest {
 				why = "a different version was running"
+			} else if r != nil && r.State != core.StateExited {
+				why = r.Detail // a service next to the app had stopped
 			} else if r != nil {
 				why = "it had stopped"
 			}
@@ -404,6 +433,12 @@ func (h *Hub) reconcileEnv(ctx context.Context, a state.App, env string, r *core
 				h.deployFailed(ctx, a.ID, env, err, true)
 			} else {
 				h.deployOK(a.ID, env)
+				if r != nil && r.Digest == e.Want.Digest {
+					// A restart: if it stops again right away, wait a minute before the next one.
+					h.mu.Lock()
+					h.st(a.ID, env).nextAttempt = h.cfg.Now().Add(time.Minute)
+					h.mu.Unlock()
+				}
 				h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: a.ID, Env: env, Action: "deploy.done", Detail: e.Want.Short() + " is running"})
 			}
 		}
@@ -808,29 +843,36 @@ func (h *Hub) CheckHealth(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	running, err := h.ad.Deployer.Observe(ctx)
-	if err != nil {
+	for _, a := range apps {
+		h.checkApp(ctx, a)
+	}
+}
+
+// checkApp probes one app's environments. It skips an app an action is working on.
+func (h *Hub) checkApp(ctx context.Context, a state.App) {
+	lock := h.appLock(a.ID)
+	if !lock.TryLock() {
 		return
 	}
-	byKey := map[envKey]core.Running{}
-	for _, r := range running {
-		byKey[envKey{r.App, r.Env}] = r
-	}
-	for _, a := range apps {
+	// Look only now, with the lock held, so a deploy that just finished isn't seen half done.
+	envs, err := h.observeApp(ctx, a.ID)
+	var prod *core.Release
+	var status string
+	if err == nil {
 		for _, env := range []string{core.Dev, core.Prod} {
 			e, err := h.store.Env(ctx, a.ID, env)
 			if err != nil || e.Want == nil {
 				continue
 			}
-			var r *core.Running
-			if x, ok := byKey[envKey{a.ID, env}]; ok {
-				r = &x
-			}
-			status := h.checkEnv(ctx, a, env, e.Want, r)
+			s := h.checkEnv(ctx, a, env, e.Want, envs[env])
 			if env == core.Prod {
-				h.watchStep(ctx, a, e.Want, status)
+				prod, status = e.Want, s
 			}
 		}
+	}
+	lock.Unlock() // watchStep may need the lock to roll back
+	if prod != nil {
+		h.watchStep(ctx, a, prod, status)
 	}
 }
 
@@ -856,6 +898,9 @@ func (h *Hub) checkEnv(ctx context.Context, a state.App, env string, want *core.
 		cancel()
 		if res.OK {
 			status, detail = core.Healthy, fmt.Sprintf("Health check passed in %d ms", res.Latency.Milliseconds())
+			if r.Incomplete {
+				detail += " (" + r.Detail + ")"
+			}
 		} else {
 			status, detail = core.Degraded, "Running, but its health check fails: "+res.Detail
 		}

@@ -41,4 +41,5 @@ services:
   ports 7000-7999 are kept for Homelab.
 - Service images come from public registries and are downloaded once per tag.
 - Only the app has a health check, a web address and a version; services follow the app's
-  deploys.
+  deploys. If a service stops or never starts, Homelab starts the environment again and
+  shows the service next to the app's health. The app is not marked down because of it.

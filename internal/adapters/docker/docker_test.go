@@ -226,21 +226,23 @@ func TestEnvRunning(t *testing.T) {
 		name               string
 		cs                 []container
 		wantState, wantDet string
+		wantIncomplete     bool
 	}{
-		{"all running", []container{c("app", "running", "Up"), c("jellyfin", "running", "Up")}, core.StateRunning, ""},
+		{"all running", []container{c("app", "running", "Up"), c("jellyfin", "running", "Up")}, core.StateRunning, "", false},
 		// The bug: compose created the app but couldn't start it (port taken), and Homelab
 		// waited forever for it to start.
-		{"app never started", []container{c("app", "created", "Created"), c("jellyfin", "running", "Up")}, core.StateExited, "never started"},
-		{"service never started", []container{c("app", "running", "Up"), c("jellyfin", "created", "Created")}, core.StateExited, "jellyfin never started"},
-		{"service stopped", []container{c("app", "running", "Up"), c("prowlarr", "exited", "Exited (1) 1 minute ago")}, core.StateExited, "prowlarr exited with code 1"},
-		{"service restarting", []container{c("app", "running", "Up"), c("jellyfin", "restarting", "Restarting (2) 1 second ago")}, core.StateRestarting, "jellyfin restarting after exiting with code 2"},
-		{"exited beats restarting", []container{c("app", "running", "Up"), c("jellyfin", "restarting", "Restarting"), c("prowlarr", "exited", "Exited (1)")}, core.StateExited, "prowlarr exited with code 1"},
-		{"app missing", []container{c("jellyfin", "running", "Up")}, core.StateExited, "the app's container is missing"},
+		{"app never started", []container{c("app", "created", "Created"), c("jellyfin", "running", "Up")}, core.StateExited, "never started", false},
+		// A service that is down never changes the app's state: only the app has a health check.
+		{"service never started", []container{c("app", "running", "Up"), c("jellyfin", "created", "Created")}, core.StateRunning, "jellyfin never started", true},
+		{"service stopped", []container{c("app", "running", "Up"), c("prowlarr", "exited", "Exited (1) 1 minute ago")}, core.StateRunning, "prowlarr exited with code 1", true},
+		{"service restarting", []container{c("app", "running", "Up"), c("jellyfin", "restarting", "Restarting (2) 1 second ago")}, core.StateRunning, "", false},
+		{"two services stopped", []container{c("app", "running", "Up"), c("jellyfin", "exited", "Exited (2)"), c("prowlarr", "exited", "Exited (1)")}, core.StateRunning, "jellyfin exited with code 2, prowlarr exited with code 1", true},
+		{"app missing", []container{c("jellyfin", "running", "Up")}, core.StateExited, "the app's container is missing", true},
 	}
 	for _, tc := range cases {
 		r, id := envRunning(tc.cs)
-		if r.State != tc.wantState || r.Detail != tc.wantDet {
-			t.Errorf("%s: got %s %q, want %s %q", tc.name, r.State, r.Detail, tc.wantState, tc.wantDet)
+		if r.State != tc.wantState || r.Detail != tc.wantDet || r.Incomplete != tc.wantIncomplete {
+			t.Errorf("%s: got %s %q incomplete=%v, want %s %q incomplete=%v", tc.name, r.State, r.Detail, r.Incomplete, tc.wantState, tc.wantDet, tc.wantIncomplete)
 		}
 		if tc.name != "app missing" && (id != "app-id" || r.Digest != "sha256:abc" || r.Commit != "abc") {
 			t.Errorf("%s: version should come from the app container, got %q %+v", tc.name, id, r)

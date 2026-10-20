@@ -199,6 +199,16 @@ func (d *Deployer) SetState(app, env, state, detail string) {
 	d.Envs[app+"/"+env] = r
 }
 
+// SetServiceDown makes Observe report that a service next to the app stopped. The app's own
+// state stays as it is.
+func (d *Deployer) SetServiceDown(app, env, detail string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	r := d.Envs[app+"/"+env]
+	r.Incomplete, r.Detail = true, detail
+	d.Envs[app+"/"+env] = r
+}
+
 func (d *Deployer) Observe(context.Context) ([]core.Running, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
