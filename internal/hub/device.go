@@ -3,6 +3,8 @@ package hub
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/rupaai/homelab/internal/core"
 	"github.com/rupaai/homelab/internal/state"
@@ -36,10 +38,55 @@ func (h *Hub) Device(ctx context.Context) (DeviceView, error) {
 	return v, nil
 }
 
+// refuseIfBusy stops an update or test version from restarting Homelab in the middle of an
+// action, such as a promote or a rollback.
+func (h *Hub) refuseIfBusy() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, s := range h.status {
+		if s.busy != "" {
+			return userErr("Homelab is busy (%s). Try again when it's finished.", s.busy)
+		}
+	}
+	return nil
+}
+
+// WaitIdle waits until no action is working on any app, or until ctx ends. Homelab calls it
+// before it exits, so a promote or rollback isn't cut off halfway.
+func (h *Hub) WaitIdle(ctx context.Context) {
+	for {
+		h.appLocksMu.Lock()
+		locks := make([]*sync.Mutex, 0, len(h.appLocks))
+		for _, l := range h.appLocks {
+			locks = append(locks, l)
+		}
+		h.appLocksMu.Unlock()
+		idle := true
+		for _, l := range locks {
+			if l.TryLock() {
+				l.Unlock()
+			} else {
+				idle = false
+			}
+		}
+		if idle {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
 // UpdateHomelab installs the newest Homelab and restarts on it.
 func (h *Hub) UpdateHomelab(ctx context.Context, by core.Viewer) (string, error) {
 	if h.ad.Updater == nil {
 		return "", userErr("This Homelab doesn't update itself.")
+	}
+	if err := h.refuseIfBusy(); err != nil {
+		return "", err
 	}
 	version, err := h.ad.Updater.Apply(ctx)
 	if err != nil {
@@ -70,6 +117,9 @@ func (h *Hub) TestVersions(ctx context.Context) ([]core.TestVersion, error) {
 func (h *Hub) TryTestVersion(ctx context.Context, by core.Viewer, version string) (core.TestVersion, error) {
 	if h.ad.Updater == nil {
 		return core.TestVersion{}, userErr("This Homelab doesn't update itself.")
+	}
+	if err := h.refuseIfBusy(); err != nil {
+		return core.TestVersion{}, err
 	}
 	t, err := h.ad.Updater.Try(ctx, version)
 	if err != nil {

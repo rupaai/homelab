@@ -526,7 +526,9 @@ func (h *Hub) PreviewRollback(ctx context.Context, appID, env string) (RollbackP
 	return p, nil
 }
 
-// previous returns the current release and the one before it (by digest) in the history.
+// previous returns the current release and the last good version before it. It replays the
+// history: a deploy or promote adds a version, a rollback drops the versions it undid. Held
+// versions (ones that failed) are never offered, and so two rollbacks in a row keep going back.
 func (h *Hub) previous(ctx context.Context, appID, env string) (cur, prev *core.Release, err error) {
 	e, err := h.store.Env(ctx, appID, env)
 	if err != nil || e.Want == nil {
@@ -536,9 +538,32 @@ func (h *Hub) previous(ctx context.Context, appID, env string) (cur, prev *core.
 	if err != nil {
 		return nil, nil, err
 	}
-	for i := range hist {
-		if hist[i].Release.Digest != e.Want.Digest {
-			r := hist[i].Release
+	holds, err := h.store.Holds(ctx, appID)
+	if err != nil {
+		return nil, nil, err
+	}
+	held := map[string]bool{}
+	for _, x := range holds {
+		held[x.Commit] = true
+	}
+	var stack []core.Release
+	for i := len(hist) - 1; i >= 0; i-- { // oldest first
+		d := hist[i]
+		if d.Kind == "rollback" {
+			for j := len(stack) - 1; j >= 0; j-- {
+				if stack[j].Digest == d.Release.Digest {
+					stack = stack[:j+1]
+					break
+				}
+			}
+		}
+		if len(stack) == 0 || stack[len(stack)-1].Digest != d.Release.Digest {
+			stack = append(stack, d.Release)
+		}
+	}
+	for i := len(stack) - 1; i >= 0; i-- {
+		if stack[i].Digest != e.Want.Digest && !held[stack[i].Commit] {
+			r := stack[i]
 			return e.Want, &r, nil
 		}
 	}

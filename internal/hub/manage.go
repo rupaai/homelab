@@ -50,7 +50,7 @@ func (h *Hub) RemoveApp(ctx context.Context, appID string, by core.Viewer) error
 		return err
 	}
 	for _, env := range []string{core.Dev, core.Prod} {
-		if err := h.ad.Deployer.Stop(ctx, appID, env); err != nil {
+		if _, err := h.stopIfRunning(ctx, appID, env, nil); err != nil {
 			h.log.Warn("remove app: stop", "app", appID, "env", env, "err", err) // the reconciler retries
 		}
 		h.removeAddress(ctx, manifest.AddressName(appID, env))
@@ -137,8 +137,8 @@ func secretView(name string, declared bool, stored map[string]core.SecretInfo) S
 	return v
 }
 
-// SetSecret stores a value for one app environment. Builders and admins may set but never
-// read values back (S4).
+// SetSecret stores a value for one app environment. Only admins may set secrets, and values
+// are never read back (S4).
 func (h *Hub) SetSecret(ctx context.Context, appID, env, name, value string, by core.Viewer) error {
 	if _, err := h.store.App(ctx, appID); err != nil {
 		return userErr("There's no app %q.", appID)
