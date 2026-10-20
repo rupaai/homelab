@@ -108,7 +108,9 @@ func (h *Hub) AppSecrets(ctx context.Context, appID string) ([]EnvSecrets, error
 		}
 		byName := map[string]core.SecretInfo{}
 		for _, s := range stored {
-			byName[s.Name] = s
+			if !reservedSecret(s.Name) {
+				byName[s.Name] = s
+			}
 		}
 		es := EnvSecrets{Env: env, Secrets: []SecretView{}}
 		for _, n := range m.Secrets {
@@ -165,6 +167,9 @@ func (h *Hub) DeleteSecret(ctx context.Context, appID, env, name string, by core
 	if env != core.Dev && env != core.Prod {
 		return userErr("There's no environment %q.", env)
 	}
+	if reservedSecret(name) {
+		return userErr("Names starting with HOMELAB_ are Homelab's own and can't be deleted.")
+	}
 	if err := h.ad.Secrets.Delete(appID, env, name); err != nil {
 		return &UserError{Msg: secretErr(err)}
 	}
@@ -177,6 +182,8 @@ var secretNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // checkSecret applies the rules every secret follows, whichever store keeps it.
 func checkSecret(name, value string) error {
 	switch {
+	case reservedSecret(name):
+		return userErr("Names starting with HOMELAB_ are Homelab's own. Pick another name.")
 	case !secretNameRe.MatchString(name):
 		return userErr("%q isn't a valid secret name: use letters, digits and _, not starting with a digit.", name)
 	case value == "" || len(value) > 8192:

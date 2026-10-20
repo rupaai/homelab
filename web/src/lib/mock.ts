@@ -1,6 +1,6 @@
 // Fake data for developing the UI without the Go server (see api.ts for how it's switched on).
 import { ApiError } from './errors';
-import type { ActivityEvent, Api, AppView, EnvName, EnvView, PersonInput, PersonView, ReleaseView, SecretView, SettingView } from './types';
+import type { ActivityEvent, Api, AppView, EnvName, EnvView, PersonInput, KeyView, PersonView, ReleaseView, SecretView, SettingView } from './types';
 
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 const delay = <T>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
@@ -140,6 +140,14 @@ const secretStore: SecretMap = {
 };
 const settingStore: SettingView[] = [
 	{ name: 'GITHUB_TOKEN', description: 'Lets Homelab read your repos and builds on GitHub. Make one at github.com/settings/tokens.', set: true, updatedAt: ago(60 * 24 * 12), updatedBy: 'rupaai', appliesAfterRestart: false },
+];
+const keyStore: KeyView[] = [
+	{ id: 'k1', prefix: 'hlk_Photo', name: 'Photo service', kind: 'admin', scopes: ['users:read'], createdBy: 'owner', createdByName: 'Rupa', createdAt: ago(60 * 24 * 20), lastUsed: ago(12) },
+	{ id: 'k2', prefix: 'hlk_Stat', name: 'Stats dashboard', kind: 'admin', scopes: ['users:read'], createdBy: 'owner', createdByName: 'Rupa', createdAt: ago(60 * 24 * 4), expires: new Date(Date.now() + 30 * 864e5).toISOString() }
+];
+const appKeys: KeyView[] = [
+	{ id: 'a1', prefix: 'hlk_MvPr', name: 'movies prod', kind: 'app', app: 'movie-night', env: 'prod', scopes: ['users:read'], createdAt: ago(60 * 24 * 30), lastUsed: ago(3) },
+	{ id: 'a2', prefix: 'hlk_MvDv', name: 'movies dev', kind: 'app', app: 'movie-night', env: 'dev', scopes: ['users:read'], createdAt: ago(60 * 24 * 30) }
 ];
 const household: PersonView[] = [
 	{ id: 'owner', name: 'Rupa', email: 'rupa@example.test', status: 'signed_in', roles: ['owner', 'admin'], grants: {} },
@@ -356,6 +364,19 @@ export const mockApi: Api = {
 	async deleteSetting(name) {
 		const s = settingStore.find((x) => x.name === name);
 		if (s) Object.assign(s, { set: false, updatedAt: undefined, updatedBy: undefined });
+		await delay(null);
+	},
+	keys: () => delay({ admin: keyStore.filter((k) => !k.revoked).map((k) => ({ ...k })), app: appKeys.map((k) => ({ ...k })) }),
+	async createKey(input) {
+		if (!input.name.trim()) throw new ApiError('Give the key a name.', 400);
+		const info: KeyView = { id: `k${Date.now()}`, prefix: 'hlk_New1', name: input.name.trim(), kind: 'admin', scopes: [...input.scopes], createdBy: 'owner', createdByName: 'Rupa', createdAt: new Date().toISOString(), expires: input.expires ?? undefined };
+		keyStore.push(info);
+		return delay({ key: 'hlk_New1mockmockmockmockmockmockmockmockmock', info: { ...info } });
+	},
+	async revokeKey(id) {
+		const k = keyStore.find((x) => x.id === id);
+		if (!k) throw new ApiError("Homelab couldn't find that key.", 404);
+		k.revoked = true;
 		await delay(null);
 	},
 	async activity(q = {}) {

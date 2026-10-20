@@ -14,6 +14,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -166,8 +168,9 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	resources := sysres.New(sysres.Options{Logger: log})
 	updater := selfupdate.New(selfupdate.Options{Home: home, Version: version, Token: token, Logger: log, Restart: restart})
 
+	appAPIURL := "http://host.docker.internal:" + strconv.Itoa(cfg.AppAPIPort)
 	h := hub.New(hub.Config{DataDir: home, Logger: log, Identity: signer, PushPublicKey: pushPublic,
-		OpenApps: cfg.Addresses == "ip", Folders: cfg.Folders}, store, hub.Adapters{
+		AppAPIURL: appAPIURL, OpenApps: cfg.Addresses == "ip", Folders: cfg.Folders}, store, hub.Adapters{
 		Source: gh, Builder: gh, Registry: gh, Deployer: deployer,
 		Addresses: addrs, Health: httphealth.New(nil), Secrets: secrets,
 		Smoke: deployer, Mirror: mirror, Identity: idp, Email: noop.Email{},
@@ -189,6 +192,12 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
+	doorSrv := &http.Server{
+		Handler:           api.Door(h, api.Options{Version: version, Logger: log, Store: store}),
+		ReadHeaderTimeout: 10 * time.Second,
+		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
+	}
+	go openAppDoor(ctx, doorSrv, deployer, cfg.AppAPIPort, log)
 	_, listenPort, _ := net.SplitHostPort(ln.Addr().String())
 	fmt.Printf("Companion: http://localhost:%s\n", listenPort)
 	if cfg.Addresses == "ip" {
@@ -215,6 +224,7 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(stopCtx)
+	_ = doorSrv.Shutdown(stopCtx)
 	<-hubDone
 	// Let a promote or rollback that is running finish, so it isn't cut off halfway.
 	idleCtx, idleCancel := context.WithTimeout(context.Background(), actionWait)
@@ -447,4 +457,43 @@ func identitySigner(secrets core.Secrets) (*identity.Signer, error) {
 		key = k
 	}
 	return identity.NewSigner(key)
+}
+
+// openAppDoor opens the app door, trying again until it can (Docker may still be starting
+// at boot), so the companion never waits for it. On the Mac, Docker runs in a small
+// virtual machine that already forwards host.docker.internal to this computer's
+// 127.0.0.1. On Linux, the door listens on Docker's bridge address. Apps reach it there;
+// anything else needs a route to that address and still needs an app key.
+func openAppDoor(ctx context.Context, srv *http.Server, d *docker.Deployer, port int, log *slog.Logger) {
+	p := strconv.Itoa(port)
+	for warned := false; ; {
+		addr := net.JoinHostPort("127.0.0.1", p)
+		var err error
+		if runtime.GOOS != "darwin" {
+			var gw string
+			if gw, err = d.BridgeGateway(ctx); err == nil {
+				addr = net.JoinHostPort(gw, p)
+			}
+		}
+		var ln net.Listener
+		if err == nil {
+			ln, err = net.Listen("tcp", addr)
+		}
+		if err == nil {
+			log.Info("app door open", "listen", ln.Addr().String())
+			if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("app door stopped", "err", err)
+			}
+			return
+		}
+		if !warned {
+			log.Warn("apps can't call the Homelab API yet: the app door couldn't open; trying again", "err", err)
+			warned = true
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(10 * time.Second):
+		}
+	}
 }

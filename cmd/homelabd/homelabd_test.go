@@ -187,3 +187,17 @@ func TestStartupStopsOnSecretReadError(t *testing.T) {
 		t.Fatalf("a new secret was written %d times; it would replace the real one", b.set)
 	}
 }
+
+func TestParseConfigAppAPIPort(t *testing.T) {
+	if c, err := parseConfig(nil); err != nil || c.AppAPIPort != 7085 {
+		t.Fatalf("default: %v %d", err, c.AppAPIPort)
+	}
+	if c, err := parseConfig([]byte("app_api_port: 9000\n")); err != nil || c.AppAPIPort != 9000 {
+		t.Fatalf("9000: %v %d", err, c.AppAPIPort)
+	}
+	for _, bad := range []string{"app_api_port: 80\n", "app_api_port: 70000\n"} {
+		if _, err := parseConfig([]byte(bad)); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}

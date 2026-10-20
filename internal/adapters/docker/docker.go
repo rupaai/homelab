@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -445,3 +446,25 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 }
 
 func (t *tailBuffer) Bytes() []byte { return t.buf.Bytes() }
+
+// BridgeGateway is the address of Docker's default bridge on this computer (usually
+// 172.17.0.1). On Linux, Homelab's app door listens there, and app containers reach it as
+// host.docker.internal. It's only meaningful when Docker runs on this computer itself.
+func (d *Deployer) BridgeGateway(ctx context.Context) (string, error) {
+	var nw struct {
+		IPAM struct {
+			Config []struct {
+				Gateway string `json:"Gateway"`
+			} `json:"Config"`
+		} `json:"IPAM"`
+	}
+	if err := d.api.getJSON(ctx, "/networks/bridge", &nw); err != nil {
+		return "", fmt.Errorf("look at Docker's bridge network: %w", err)
+	}
+	for _, c := range nw.IPAM.Config {
+		if ip := net.ParseIP(c.Gateway); ip != nil && ip.To4() != nil {
+			return ip.String(), nil
+		}
+	}
+	return "", errors.New("Docker's bridge network has no IPv4 gateway")
+}

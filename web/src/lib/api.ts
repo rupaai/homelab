@@ -1,6 +1,6 @@
 import { ApiError, NETWORK_MESSAGE, errorMessage } from './errors';
 import { SIGN_IN_MESSAGE, sessionLost } from './session';
-import type { Api, AppView, BootstrapView, DeviceView, EnvSecrets, Invitation, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult, TestVersion } from './types';
+import type { Api, AppView, BootstrapView, CreatedKey, KeysView, DeviceView, EnvSecrets, Invitation, KeyView, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult, TestVersion } from './types';
 
 /** Mock mode: `?mock` in the URL or VITE_MOCK=1 gives fake data, no server needed. Dev builds only, so the mock data is dropped from the real companion. */
 export const useMock: boolean =
@@ -108,7 +108,17 @@ const realApi: Api = {
 	deleteSecret: (id, env, name) => request('DELETE', `/api/apps/${enc(id)}/envs/${env}/secrets/${enc(name)}`),
 	settings: async () => list(await request<SettingView[]>('GET', '/api/settings/secrets')),
 	setSetting: (name, value) => request('PUT', `/api/settings/secrets/${enc(name)}`, { value }),
-	deleteSetting: (name) => request('DELETE', `/api/settings/secrets/${enc(name)}`)
+	deleteSetting: (name) => request('DELETE', `/api/settings/secrets/${enc(name)}`),
+	keys: async () => {
+		const r = await request<{ admin: KeyView[] | null; app: KeyView[] | null }>('GET', '/api/keys');
+		const fix = (k: KeyView): KeyView => ({ ...k, scopes: list(k.scopes) });
+		return { admin: list(r.admin).map(fix), app: list(r.app).map(fix) };
+	},
+	createKey: async (input) => {
+		const r = await request<CreatedKey>('POST', '/api/keys', input);
+		return { ...r, info: { ...r.info, scopes: list(r.info.scopes) } };
+	},
+	revokeKey: (id) => request('DELETE', `/api/keys/${enc(id)}`)
 };
 
 // The import sits inside the DEV check, so production builds leave mock.ts out.

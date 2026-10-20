@@ -19,6 +19,9 @@ type Config struct {
 	Owners    any    `yaml:"owners"`
 	Tailscale any    `yaml:"tailscale"`
 	Listen    string `yaml:"listen"`
+	// AppAPIPort is the app door's port: where app containers call the Homelab API with
+	// their own key (platform services). Default 7085.
+	AppAPIPort int `yaml:"app_api_port"`
 	// Folders are shared folders on the device that apps may ask for by name, e.g.
 	// media: /mnt/storage. Apps see nothing else outside their own data.
 	Folders map[string]string `yaml:"folders"`
@@ -26,6 +29,7 @@ type Config struct {
 
 const (
 	defaultListen = "127.0.0.1:7080"
+	defaultAppAPI = 7085
 	// ipListen is where the companion listens with addresses: ip, so other devices reach it.
 	ipListen = "0.0.0.0:7080"
 )
@@ -76,6 +80,12 @@ func parseConfig(b []byte) (Config, error) {
 		if c.Addresses == "ip" {
 			c.Listen = ipListen
 		}
+	}
+	if c.AppAPIPort == 0 {
+		c.AppAPIPort = defaultAppAPI
+	}
+	if c.AppAPIPort < 1024 || c.AppAPIPort > 65535 {
+		return c, fmt.Errorf("config.yaml: app_api_port must be between 1024 and 65535, not %d", c.AppAPIPort)
 	}
 	for name, dir := range c.Folders {
 		if !filepath.IsAbs(dir) {

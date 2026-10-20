@@ -278,7 +278,7 @@ func (a *Addresses) Observe() map[string]core.Address {
 	defer a.mu.Unlock()
 	out := map[string]core.Address{}
 	for n := range a.Handlers {
-		out[n] = core.Address{Name: n, URL: "https://" + n + ".example.ts.net", Ready: true}
+		out[n] = core.Address{Name: n, URL: "https://" + n + ".example.test", Ready: true}
 	}
 	return out
 }
