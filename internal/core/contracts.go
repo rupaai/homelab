@@ -53,10 +53,26 @@ type Deployer interface {
 	Deploy(ctx context.Context, spec EnvSpec) error
 	// Stop stops an environment's containers and keeps its data.
 	Stop(ctx context.Context, app, env string) error
+	// StopApp stops only the app's own container; the environment's services keep running.
+	StopApp(ctx context.Context, app, env string) error
 	// Observe reports every environment Homelab runs, including stopped ones.
 	Observe(ctx context.Context) ([]Running, error)
 	// Logs returns the last lines of an environment's logs, oldest first.
 	Logs(ctx context.Context, app, env string, lines int) (string, error)
+	// RemoveOldImages deletes the downloaded images of one app (repository image) that no
+	// container uses and whose digest isn't in keep. It touches no other image.
+	RemoveOldImages(ctx context.Context, image string, keep []string) error
+
+	// The next four copy, move and delete data folders as root, so files that belong to
+	// other users (the apps' containers) are read and written with their owners kept.
+	// CheckFiles says whether they can work, so a caller can find out before it stops anything.
+	CheckFiles(ctx context.Context) error
+	// Copy makes to (which must not exist) a copy of from.
+	Copy(ctx context.Context, from, to string) error
+	// Move renames from to to (which must not exist; its parent folder does).
+	Move(ctx context.Context, from, to string) error
+	// Remove deletes path and everything in it.
+	Remove(ctx context.Context, path string) error
 }
 
 // Addresses gives each app environment (and the companion) its own name people can open

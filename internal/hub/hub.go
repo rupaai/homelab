@@ -494,7 +494,16 @@ func (h *Hub) mounts(app, env string, data, folders []manifest.Data) ([]core.Mou
 		mounts = append(mounts, core.Mount{HostPath: dir, ContainerPath: d.Path})
 	}
 	for _, f := range folders {
-		dir, ok := h.cfg.Folders[f.Name]
+		// Prod gets the device's folder; dev gets "<name>-dev" if the device has one, and
+		// otherwise none, so dev can't change prod's files.
+		name := f.Name
+		if env != core.Prod {
+			name += "-" + env
+		}
+		dir, ok := h.cfg.Folders[name]
+		if !ok && env != core.Prod {
+			continue
+		}
 		if !ok {
 			return nil, fmt.Errorf("it needs the shared folder %q; add it to config.yaml under folders:, e.g. \"folders: {%s: /mnt/storage}\", and restart Homelab", f.Name, f.Name)
 		}
@@ -917,92 +926,66 @@ func firstNonEmpty(s ...string) string {
 
 // ---- Data copies before promote ----
 
-// backupData copies an environment's data folder while its app is stopped, so the copy is
-// consistent (SQLite files included), and keeps the newest KeepBackups copies.
-func (h *Hub) backupData(app, env, label string) (string, error) {
-	src := h.dataDir(app, env)
-	if _, err := os.Stat(src); errors.Is(err, os.ErrNotExist) {
+// backupData copies the app's own data folders (names) of an environment while its app is
+// stopped, so the copy is consistent (SQLite files included), and keeps the newest
+// KeepBackups copies. Service data (Jellyfin's config, say) isn't copied. The copies are made
+// by a helper container, so files that belong to other users are kept as they are.
+func (h *Hub) backupData(ctx context.Context, app, env, label string, names []string) (string, error) {
+	var have []string
+	for _, n := range names {
+		if _, err := os.Stat(filepath.Join(h.dataDir(app, env), n)); err == nil {
+			have = append(have, n)
+		}
+	}
+	if len(have) == 0 {
 		return "", nil // nothing to copy yet
 	}
 	root := filepath.Join(h.cfg.DataDir, "backups", app, env)
 	dst := filepath.Join(root, h.cfg.Now().UTC().Format("20060102-150405")+"-"+label)
-	if err := copyTree(src, dst); err != nil {
-		os.RemoveAll(dst)
+	if err := os.MkdirAll(dst, 0o700); err != nil {
 		return "", err
 	}
-	entries, _ := os.ReadDir(root)
-	var names []string
-	for _, e := range entries {
-		if e.IsDir() {
-			names = append(names, e.Name())
+	for _, n := range have {
+		if err := h.ad.Deployer.Copy(ctx, filepath.Join(h.dataDir(app, env), n), filepath.Join(dst, n)); err != nil {
+			h.ad.Deployer.Remove(ctx, dst)
+			return "", err
 		}
 	}
-	sort.Strings(names)
-	for len(names) > h.cfg.KeepBackups {
-		os.RemoveAll(filepath.Join(root, names[0]))
-		names = names[1:]
+	entries, _ := os.ReadDir(root)
+	var dirs []string
+	for _, e := range entries {
+		if e.IsDir() {
+			dirs = append(dirs, e.Name())
+		}
+	}
+	sort.Strings(dirs)
+	for len(dirs) > h.cfg.KeepBackups {
+		h.ad.Deployer.Remove(ctx, filepath.Join(root, dirs[0]))
+		dirs = dirs[1:]
 	}
 	return dst, nil
 }
 
-// restoreData replaces an environment's data with a copy made by backupData. The data it
-// replaces is moved next to the copies (named after label) rather than deleted. The app
+// restoreData replaces the data folders found in a copy made by backupData. The folders it
+// replaces are moved next to the copies (named after label) rather than deleted. The app
 // must be stopped.
-func (h *Hub) restoreData(app, env, from, label string) (kept string, err error) {
-	dir := h.dataDir(app, env)
+func (h *Hub) restoreData(ctx context.Context, app, env, from, label string) (kept string, err error) {
+	entries, err := os.ReadDir(from)
+	if err != nil {
+		return "", err
+	}
 	kept = filepath.Join(h.cfg.DataDir, "backups", app, env, h.cfg.Now().UTC().Format("20060102-150405")+"-replaced-by-restore-"+label)
-	if err := os.MkdirAll(filepath.Dir(kept), 0o700); err != nil {
+	if err := os.MkdirAll(kept, 0o700); err != nil {
 		return "", err
 	}
-	if err := os.Rename(dir, kept); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", err
-	}
-	if err := copyTree(from, dir); err != nil {
-		return kept, err
+	for _, e := range entries {
+		dir := filepath.Join(h.dataDir(app, env), e.Name())
+		if err := h.ad.Deployer.Move(ctx, dir, filepath.Join(kept, e.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return kept, err
+		}
+		if err := h.ad.Deployer.Copy(ctx, filepath.Join(from, e.Name()), dir); err != nil {
+			return kept, err
+		}
 	}
 	return kept, nil
-}
-
-func copyTree(src, dst string) error {
-	return filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(src, p)
-		target := filepath.Join(dst, rel)
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		switch {
-		case d.IsDir():
-			return os.MkdirAll(target, info.Mode().Perm()|0o700)
-		case info.Mode()&os.ModeSymlink != 0:
-			l, err := os.Readlink(p)
-			if err != nil {
-				return err
-			}
-			return os.Symlink(l, target)
-		case info.Mode().IsRegular():
-			return copyFile(p, target, info.Mode().Perm())
-		}
-		return nil // sockets and the like aren't data
-	})
-}
-
-func copyFile(src, dst string, perm os.FileMode) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
-	if err != nil {
-		return err
-	}
-	if _, err := out.ReadFrom(in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
 }

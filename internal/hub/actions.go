@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/rupaai/homelab/internal/core"
@@ -233,11 +234,55 @@ func (h *Hub) applyAndWait(ctx context.Context, a state.App, env string, rel cor
 	ok, detail := h.waitHealthy(ctx, a, env, &rel)
 	if ok {
 		h.logEvent(ctx, state.Event{Actor: actor, App: a.ID, Env: env, Action: kind + ".done", Detail: rel.Short() + " is running and healthy"})
+		h.removeOldImages(ctx, a.ID, rel.Image)
 		return true
 	}
 	h.logEvent(ctx, state.Event{Actor: actor, App: a.ID, Env: env, Action: kind + ".unhealthy",
 		Detail: rel.Short() + " started but isn't healthy: " + detail})
 	return false
+}
+
+// removeOldImages deletes the app's downloaded images that no container uses, keeping
+// what each environment runs now and the versions before it, which a rollback may need.
+func (h *Hub) removeOldImages(ctx context.Context, appID, image string) {
+	var keep []string
+	for _, env := range []string{core.Dev, core.Prod} {
+		e, err := h.store.Env(ctx, appID, env)
+		if err != nil {
+			h.log.Warn("old images", "app", appID, "err", err)
+			return
+		}
+		if e.Want != nil {
+			keep = append(keep, e.Want.Digest)
+		}
+		hist, err := h.store.History(ctx, appID, env, 50)
+		if err != nil {
+			h.log.Warn("old images", "app", appID, "err", err)
+			return
+		}
+		seen := map[string]bool{}
+		for _, d := range hist {
+			if len(seen) == 3 {
+				break
+			}
+			if !seen[d.Release.Digest] {
+				seen[d.Release.Digest] = true
+				keep = append(keep, d.Release.Digest)
+			}
+		}
+	}
+	slices.Sort(keep)
+	if err := h.ad.Deployer.RemoveOldImages(ctx, image, slices.Compact(keep)); err != nil {
+		h.log.Warn("old images", "app", appID, "err", err)
+	}
+}
+
+func dataNames(data []manifest.Data) []string {
+	var names []string
+	for _, d := range data {
+		names = append(names, d.Name)
+	}
+	return names
 }
 
 func (h *Hub) setBusy(app, env, what string) {
@@ -372,12 +417,21 @@ func (h *Hub) promote(ctx context.Context, a state.App, rel core.Release, actor 
 	if err := h.ad.Deployer.Prepare(ctx, spec); err != nil {
 		return fmt.Errorf("Nothing changed, the download failed: %w", err)
 	}
-	// Stop prod so the data copy is consistent, then copy it (CI/CD: backup before promote).
+	// Check the copy can work before stopping anything.
+	m, err := h.parse(rel.Manifest, a.Repo)
+	if err != nil {
+		return fmt.Errorf("Nothing changed: %w", err)
+	}
+	if err := h.ad.Deployer.CheckFiles(ctx); err != nil {
+		return fmt.Errorf("Nothing changed, prod's data can't be copied: %w", err)
+	}
+	// Stop prod's app (its services keep running) so the data copy is consistent, then copy
+	// the app's data (CI/CD: backup before promote).
 	h.setBusy(a.ID, core.Prod, "Copying prod's data")
-	if err := h.ad.Deployer.Stop(ctx, a.ID, core.Prod); err != nil {
+	if err := h.ad.Deployer.StopApp(ctx, a.ID, core.Prod); err != nil {
 		return fmt.Errorf("Couldn't stop prod to copy its data: %w", err)
 	}
-	backup, err := h.backupData(a.ID, core.Prod, rel.Short())
+	backup, err := h.backupData(ctx, a.ID, core.Prod, rel.Short(), dataNames(m.Data))
 	if err != nil {
 		return fmt.Errorf("Prod's data couldn't be copied, so the old version is starting again: %w", err)
 	}
@@ -409,11 +463,11 @@ func (h *Hub) undoPromote(ctx context.Context, a state.App, prev *core.Release, 
 	h.setBusy(a.ID, core.Prod, "Going back to "+prev.Short())
 	h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: a.ID, Env: core.Prod, Action: "promote.reverting",
 		Detail: fmt.Sprintf("%s isn't healthy, so prod is going back to %s with its data from before the promote", failed.Short(), prev.Short())})
-	if err := h.ad.Deployer.Stop(ctx, a.ID, core.Prod); err != nil {
+	if err := h.ad.Deployer.StopApp(ctx, a.ID, core.Prod); err != nil {
 		return fmt.Errorf("Couldn't stop %s to go back: %w", failed.Short(), err)
 	}
 	if backup != "" {
-		kept, err := h.restoreData(a.ID, core.Prod, backup, failed.Short())
+		kept, err := h.restoreData(ctx, a.ID, core.Prod, backup, failed.Short())
 		if err != nil {
 			return fmt.Errorf("Couldn't put back prod's data from %s: %w", backup, err)
 		}

@@ -198,23 +198,39 @@ func writeFile(path string, data []byte) error {
 // Stop stops the environment's containers and keeps them and their data. It does nothing
 // if the environment doesn't exist.
 func (d *Deployer) Stop(ctx context.Context, app, env string) error {
+	return d.stop(ctx, app, env, "")
+}
+
+// StopApp stops only the app's own container, so services such as Jellyfin keep running.
+func (d *Deployer) StopApp(ctx context.Context, app, env string) error {
+	return d.stop(ctx, app, env, serviceName)
+}
+
+// stop stops the containers of one compose service, or all of them when service is "".
+func (d *Deployer) stop(ctx context.Context, app, env, service string) error {
 	if err := checkNames(app, env); err != nil {
 		return err
 	}
-	cs, err := d.api.containers(ctx, labelApp+"="+app, labelEnv+"="+env)
+	labels := []string{labelApp + "=" + app, labelEnv + "=" + env}
+	args := []string{"stop"}
+	if service != "" {
+		labels = append(labels, "com.docker.compose.service="+service)
+		args = append(args, service)
+	}
+	cs, err := d.api.containers(ctx, labels...)
 	if err != nil {
 		return err
 	}
 	if len(cs) == 0 {
 		return nil
 	}
-	if _, err := d.compose(ctx, d.envDir(app, env), app, env, "stop"); err != nil {
+	if _, err := d.compose(ctx, d.envDir(app, env), app, env, args...); err != nil {
 		return err
 	}
 	// Callers copy the data folder next, so make sure the engine no longer reports the
 	// container as running (it can lag behind compose after a slow, killed stop).
 	for deadline := time.Now().Add(stopSettle); ; {
-		cs, err := d.api.containers(ctx, labelApp+"="+app, labelEnv+"="+env)
+		cs, err := d.api.containers(ctx, labels...)
 		if err != nil {
 			return err
 		}

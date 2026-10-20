@@ -139,12 +139,13 @@ func (r *Registry) PullAuth(context.Context, string) (core.RegistryAuth, error) 
 // Deployer is a fake container runtime. Running environments are kept in memory, and an
 // optional Serve hook lets tests stand a real HTTP server up on the host port.
 type Deployer struct {
-	mu      sync.Mutex
-	Envs    map[string]core.Running // "app/env"
-	Specs   map[string]core.EnvSpec
-	FailFor map[string]error // digest -> error from Deploy
-	Calls   []string
-	LogTail string // added to every Logs answer
+	mu       sync.Mutex
+	Envs     map[string]core.Running // "app/env"
+	Specs    map[string]core.EnvSpec
+	FailFor  map[string]error // digest -> error from Deploy
+	Calls    []string
+	LogTail  string // added to every Logs answer
+	FilesErr error  // what CheckFiles returns
 }
 
 func NewDeployer() *Deployer {
@@ -180,6 +181,30 @@ func (d *Deployer) Stop(_ context.Context, app, env string) error {
 		r.State = core.StateExited
 		d.Envs[k] = r
 	}
+	return nil
+}
+
+// StopApp stops the app's container; the fake has no separate services, so the
+// environment is stopped the same way as by Stop.
+func (d *Deployer) StopApp(_ context.Context, app, env string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.Calls = append(d.Calls, "stop-app "+app+"/"+env)
+	k := app + "/" + env
+	if r, ok := d.Envs[k]; ok {
+		r.State = core.StateExited
+		d.Envs[k] = r
+	}
+	return nil
+}
+
+// RemoveOldImages records the call as "remove-old-images <image> keep=<digests>".
+func (d *Deployer) RemoveOldImages(_ context.Context, image string, keep []string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	sorted := append([]string(nil), keep...)
+	sort.Strings(sorted)
+	d.Calls = append(d.Calls, "remove-old-images "+image+" keep="+strings.Join(sorted, ","))
 	return nil
 }
 

@@ -42,7 +42,7 @@ Everything is under one folder, `~/.homelab` by default (`--home` to change it):
     compose.yaml           written by the docker adapter
     .env                   settings and secrets for the containers (mode 0600)
     data/<name>/           the app's data folders, one copy per environment
-  backups/<app>/prod/<time>-<commit>/   data copied before each promote (newest 5 kept)
+  backups/<app>/prod/<time>-<commit>/   the app's own data copied before each promote (newest 5 kept)
   tailscale/<node>/        tsnet state per address
   local/ports.json         local adapter's port assignments
   logs/homelabd.log        when run as a service
