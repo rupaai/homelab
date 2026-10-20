@@ -247,3 +247,23 @@ func TestEnvRunning(t *testing.T) {
 		}
 	}
 }
+
+func TestComposeYAMLHostGateway(t *testing.T) {
+	old := addHostGateway
+	defer func() { addHostGateway = old }()
+	for _, on := range []bool{false, true} {
+		addHostGateway = on
+		b, err := composeYAML(testSpec())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var f composeFile
+		if err := json.Unmarshal(b, &f); err != nil {
+			t.Fatal(err)
+		}
+		got := f.Services["app"].ExtraHosts
+		if on != (len(got) == 1 && got[0] == "host.docker.internal:host-gateway") || (!on && len(got) != 0) {
+			t.Errorf("addHostGateway=%v: extra_hosts %v", on, got)
+		}
+	}
+}

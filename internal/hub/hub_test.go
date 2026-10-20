@@ -420,7 +420,11 @@ services:
     ports: ["8096:8096"]
     gpu: true
 `
-	a := state.App{ID: "movies", Repo: repo}
+	a := state.App{ID: "movies", Name: "Movies", Repo: repo, Manifest: []byte(doc), Promotion: "manual"}
+	// Registered, because each environment gets its own API key, which belongs to the app.
+	if _, err := r.store.AddApp(ctx, a); err != nil {
+		t.Fatal(err)
+	}
 	rel := core.Release{Image: "ghcr.io/rupaai/movies", Commit: "abc", Manifest: []byte(doc)}
 
 	if _, err := r.hub.spec(ctx, a, core.Prod, rel); err == nil || !strings.Contains(err.Error(), `shared folder "media"`) {

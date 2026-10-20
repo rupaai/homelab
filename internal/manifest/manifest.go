@@ -280,6 +280,9 @@ func (m *Manifest) validate() error {
 		if !varPattern.MatchString(s) {
 			add("secret name %q isn't a valid variable name", s)
 		}
+		if strings.HasPrefix(s, "HOMELAB_") {
+			add("secret name %q: names starting with HOMELAB_ are Homelab's own", s)
+		}
 		if _, clash := m.Env[s]; clash {
 			add("%q is both a setting and a secret", s)
 		}

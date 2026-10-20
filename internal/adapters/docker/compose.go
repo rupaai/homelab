@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -64,9 +65,15 @@ type composeService struct {
 	Devices     []string          `json:"devices,omitempty"`
 	GroupAdd    []string          `json:"group_add,omitempty"`
 	MemLimit    string            `json:"mem_limit,omitempty"`
+	ExtraHosts  []string          `json:"extra_hosts,omitempty"`
 	Logging     composeLogging    `json:"logging"`
 	Labels      map[string]string `json:"labels"`
 }
+
+// addHostGateway gives the app container the name host.docker.internal for Docker's bridge
+// address, where Homelab's app door listens. Linux needs it; on the Mac Docker already has
+// that name. A variable so tests can pretend.
+var addHostGateway = runtime.GOOS == "linux"
 
 // renderGroup is the group that may use the graphics card, as a number, or "" when the
 // device has none. A variable so tests can pretend.
@@ -143,6 +150,9 @@ func composeYAML(spec core.EnvSpec) ([]byte, error) {
 			labelCommit: dollars(spec.Release.Commit),
 			labelDigest: dollars(spec.Release.Digest),
 		},
+	}
+	if addHostGateway {
+		svc.ExtraHosts = []string{"host.docker.internal:host-gateway"}
 	}
 	var err error
 	if svc.Volumes, err = mounts(spec.Mounts); err != nil {

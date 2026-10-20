@@ -140,6 +140,16 @@ var migrations = []string{
 		p256dh TEXT NOT NULL, auth TEXT NOT NULL, device TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL);
 	CREATE INDEX push_subscriptions_person ON push_subscriptions(person_id);
 	CREATE TABLE alerts (key TEXT PRIMARY KEY, since INTEGER NOT NULL, sent_at INTEGER);`,
+	// API keys (platform services). Only a SHA-256 of each key is kept. An app key belongs to
+	// one app environment; an admin key to the person who made it, and goes when they do.
+	`CREATE TABLE api_keys (
+		id TEXT PRIMARY KEY, hash BLOB NOT NULL UNIQUE, prefix TEXT NOT NULL, name TEXT NOT NULL,
+		kind TEXT NOT NULL CHECK(kind IN ('app','admin')),
+		app TEXT REFERENCES apps(id) ON DELETE CASCADE, env TEXT NOT NULL DEFAULT '',
+		scopes TEXT NOT NULL, created_by TEXT REFERENCES people(id) ON DELETE CASCADE,
+		created_at INTEGER NOT NULL, last_used_at INTEGER, expires_at INTEGER, revoked_at INTEGER,
+		CHECK((kind='app' AND app IS NOT NULL AND created_by IS NULL) OR (kind='admin' AND app IS NULL AND created_by IS NOT NULL)));
+	CREATE UNIQUE INDEX api_keys_one_per_app_env ON api_keys(app, env) WHERE kind='app' AND revoked_at IS NULL;`,
 }
 
 func (s *Store) migrate() error {
