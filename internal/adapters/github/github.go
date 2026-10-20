@@ -166,13 +166,13 @@ func (c *Client) apiError(resp *http.Response, body []byte, path string) error {
 		}
 		return fmt.Errorf("GitHub has no %s%s: %w", path, hint, core.ErrNotFound)
 	case http.StatusUnauthorized:
-		return errors.New("GitHub said 401: the token in secrets/platform.env is missing or wrong")
+		return errors.New("GitHub said 401: the GitHub token in Settings is missing or wrong")
 	case http.StatusForbidden, http.StatusTooManyRequests:
 		if msg, ok := rateLimitMessage(resp, c.now()); ok {
 			return fmt.Errorf("GitHub said %d: %s", code, msg)
 		}
 		if code == http.StatusForbidden {
-			return fmt.Errorf("GitHub said 403: the token in secrets/platform.env isn't allowed to read this (needs read access to repos, Actions and packages)%s", apiMessage(body))
+			return fmt.Errorf("GitHub said 403: the GitHub token in Settings isn't allowed to read this (needs read access to repos, Actions and packages)%s", apiMessage(body))
 		}
 	}
 	return fmt.Errorf("GitHub said %d%s", code, apiMessage(body))
@@ -394,7 +394,7 @@ func (c *Client) Resolve(ctx context.Context, image, tag string) (string, error)
 				if strings.Contains(string(body), "MANIFEST_UNKNOWN") || strings.Contains(string(body), "NAME_UNKNOWN") {
 					return "", fmt.Errorf("%s:%s isn't in the registry: %w", image, tag, core.ErrNotFound)
 				}
-				return "", fmt.Errorf("%s said 401 for %s: the token in secrets/platform.env can't read this package (it needs read:packages)", host, image)
+				return "", fmt.Errorf("%s said 401 for %s: the GitHub token in Settings can't read this package (it needs read:packages)", host, image)
 			}
 			ch := resp.Header.Get("Www-Authenticate")
 			realm, service, scope, ok := parseBearer(ch)
@@ -469,7 +469,7 @@ func (c *Client) registryToken(ctx context.Context, realm, service, scope string
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return "", fmt.Errorf("the registry said %d at sign-in: the token in secrets/platform.env is missing or wrong (it needs read:packages)", resp.StatusCode)
+		return "", fmt.Errorf("the registry said %d at sign-in: the GitHub token in Settings is missing or wrong (it needs read:packages)", resp.StatusCode)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("the registry sign-in said %d", resp.StatusCode)
