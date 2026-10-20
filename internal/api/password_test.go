@@ -1,7 +1,6 @@
 package api
 
 import (
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,23 +42,16 @@ func TestPasswordSignIn(t *testing.T) {
 		t.Fatalf("wrong password = %d", rec.Code)
 	}
 	rec = post(h, "/api/password-sign-in", `{"password":"correct horse"}`, network)
-	if rec.Code != 204 {
+	if rec.Code != 200 {
 		t.Fatalf("sign-in = %d %s", rec.Code, rec.Body)
 	}
-	var session *http.Cookie
-	for _, c := range rec.Result().Cookies() {
-		if c.Name == "homelab_session" {
-			session = c
-		}
-	}
-	if session == nil {
-		t.Fatal("no session cookie")
-	}
-	rec = do(h, "GET", "/api/me", "", network, "Cookie", "homelab_session="+session.Value)
+	noSessionCookie(t, rec)
+	session := "Bearer " + bodyToken(t, rec)
+	rec = do(h, "GET", "/api/me", "", network, "Authorization", session)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "owner") {
 		t.Fatalf("me after sign-in = %d %s", rec.Code, rec.Body)
 	}
-	req := do(h, "GET", "/api/apps", "", network, "Cookie", "homelab_session="+session.Value)
+	req := do(h, "GET", "/api/apps", "", network, "Authorization", session)
 	if req.Code != 200 {
 		t.Fatalf("apps after sign-in = %d %s", req.Code, req.Body)
 	}

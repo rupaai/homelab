@@ -13,26 +13,26 @@ import (
 	"github.com/rupaai/homelab/internal/hub"
 )
 
-// appAuth issues a 60-second code after checking the current person and the app grant.
+// appAuth starts the hand-off for an app: the person signs in with their passkey, and the
+// callback then calls appHandoff. The browser has no companion cookie to check here.
 func (s *server) appAuth(w http.ResponseWriter, r *http.Request) {
 	if !onThisComputer(r) {
 		http.Error(w, "Open Homelab at http://localhost:7080 on this computer.", http.StatusForbidden)
 		return
 	}
-	app, env, returnURL := r.URL.Query().Get("app"), r.URL.Query().Get("env"), r.URL.Query().Get("return")
+	http.Redirect(w, r, "/auth/start?return="+url.QueryEscape(sanitizeReturn("/auth/app?"+r.URL.RawQuery)), http.StatusSeeOther)
+}
+
+// appHandoff issues a 60-second code after checking the person and the app grant.
+func (s *server) appHandoff(w http.ResponseWriter, r *http.Request, personID string, query url.Values) {
+	app, env, returnURL := query.Get("app"), query.Get("env"), query.Get("return")
 	if app == "" || (env != core.Prod && env != core.Dev) {
 		http.Error(w, "That app address isn't valid.", http.StatusBadRequest)
 		return
 	}
-	returnTo := sanitizeReturn("/auth/app?" + r.URL.RawQuery)
-	v, ok := core.ViewerFrom(r.Context())
-	if !ok || v.PersonID == "" {
-		http.Redirect(w, r, "/auth/start?return="+url.QueryEscape(returnTo), http.StatusSeeOther)
-		return
-	}
-	p, err := s.store.Person(r.Context(), v.PersonID)
+	p, err := s.store.Person(r.Context(), personID)
 	if err != nil || p.Status != "signed_in" {
-		http.Redirect(w, r, "/auth/start?return="+url.QueryEscape(returnTo), http.StatusSeeOther)
+		http.Error(w, "This account isn't signed in to Homelab.", http.StatusForbidden)
 		return
 	}
 	if !hub.Can(p, hub.ActionApps, app) || (env == core.Dev && !hub.Can(p, hub.ActionProjects, app)) {

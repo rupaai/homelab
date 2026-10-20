@@ -4,9 +4,7 @@ package api
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -188,18 +186,17 @@ func (s *server) handler() http.Handler {
 		hd.Set("X-Frame-Options", "DENY")
 		hd.Set("Content-Security-Policy", csp)
 		// A call with an API key never uses the session or the companion (platform services).
-		if _, ok := bearer(r); ok && (r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/")) {
+		// A companion session token is also sent as a Bearer token, but starts with sessionPrefix.
+		token, hasToken := bearer(r)
+		if hasToken && !strings.HasPrefix(token, sessionPrefix) && (r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/")) {
 			s.serveKey(w, r, false)
 			return
 		}
-		if c, err := r.Cookie("homelab_session"); err == nil && s.store != nil {
-			if raw, err := base64.RawURLEncoding.DecodeString(c.Value); err == nil && len(raw) == 32 {
-				digest := sha256.Sum256(raw)
-				if p, err := s.store.SessionPerson(r.Context(), digest[:], time.Now(), 7*24*time.Hour); err == nil {
-					v, _ := core.ViewerFrom(r.Context())
-					v.PersonID, v.Login, v.Name = p.ID, p.Email, p.Name
-					r = r.WithContext(core.WithViewer(r.Context(), v))
-				}
+		if digest, ok := sessionDigest(token); ok && s.store != nil {
+			if p, err := s.store.SessionPerson(r.Context(), digest, time.Now(), 7*24*time.Hour); err == nil {
+				v, _ := core.ViewerFrom(r.Context())
+				v.PersonID, v.Login, v.Name = p.ID, p.Email, p.Name
+				r = r.WithContext(core.WithViewer(r.Context(), v))
 			}
 		}
 		if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
@@ -444,12 +441,12 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 	if !publicPost(w, r) {
 		return
 	}
-	if c, err := r.Cookie("homelab_session"); err == nil {
-		if raw, e := base64.RawURLEncoding.DecodeString(c.Value); e == nil {
-			digest := sha256.Sum256(raw)
-			_ = s.store.DeleteSession(r.Context(), digest[:])
+	if token, _ := bearer(r); token != "" {
+		if digest, ok := sessionDigest(token); ok {
+			_ = s.store.DeleteSession(r.Context(), digest)
 		}
 	}
+	// Older versions kept the session in a cookie. Clear it so those browsers drop it.
 	http.SetCookie(w, &http.Cookie{Name: "homelab_session", Value: "", Path: "/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode, MaxAge: -1})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -552,21 +549,13 @@ func (s *server) recoverLink(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "This recovery link is no longer valid.", http.StatusGone)
 		return
 	}
-	var session [32]byte
-	if _, err = rand.Read(session[:]); err != nil {
+	token, err := s.issueSession(r.Context(), id)
+	if err != nil {
 		http.Error(w, msgInternal, http.StatusInternalServerError)
 		return
 	}
-	raw := base64.RawURLEncoding.EncodeToString(session[:])
-	hash := sha256.Sum256(session[:])
-	now := time.Now()
-	if err = s.store.PutSession(r.Context(), hash[:], id, now, now.Add(30*24*time.Hour)); err != nil {
-		http.Error(w, msgInternal, http.StatusInternalServerError)
-		return
-	}
-	http.SetCookie(w, &http.Cookie{Name: "homelab_session", Value: raw, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil || strings.EqualFold(r.URL.Scheme, "https"), MaxAge: 30 * 24 * 60 * 60})
 	_ = s.store.Log(r.Context(), state.Event{Actor: p.Email, Action: "recovery.link.used", Detail: "Signed in with a one-time recovery link"})
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, "/"+sessionFragment+token, http.StatusSeeOther)
 }
 
 func (s *server) listApps(w http.ResponseWriter, r *http.Request) {

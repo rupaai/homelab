@@ -319,7 +319,7 @@ func TestAppProxyChecksUseBuildAndGrant(t *testing.T) {
 	for _, tc := range []struct {
 		id, level, env string
 		want           int
-	}{{"member", "use", core.Prod, 204}, {"member-dev", "use", core.Dev, 403}, {"builder", "build", core.Dev, 204}, {"none", "", core.Prod, 403}} {
+	}{{"member", "use", core.Prod, 204}, {"member-dev", "use", core.Dev, 303}, {"builder", "build", core.Dev, 204}, {"none", "", core.Prod, 303}} {
 		p := core.Person{ID: tc.id, Name: tc.id, Email: tc.id + "@example.test", Status: "signed_in", Roles: []string{"member"}, Grants: map[string]string{}}
 		if tc.level != "" {
 			p.Grants["movies"] = tc.level
@@ -341,7 +341,6 @@ func TestAppProxyChecksUseBuildAndGrant(t *testing.T) {
 			}
 		}
 		req := httptest.NewRequest("GET", "/", nil)
-		req.AddCookie(&http.Cookie{Name: "homelab_session", Value: base64.RawURLEncoding.EncodeToString(raw)})
 		if tc.want == 204 {
 			req.AddCookie(&http.Cookie{Name: "homelab_app_movies_" + tc.env, Value: base64.RawURLEncoding.EncodeToString(raw)})
 		}

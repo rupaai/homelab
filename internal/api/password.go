@@ -75,12 +75,13 @@ func (s *server) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "Homelab hasn't been set up yet.")
 		return
 	}
-	if err := s.issueSession(w, r, owner.ID); err != nil {
+	token, err := s.issueSession(r.Context(), owner.ID)
+	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	_ = s.store.Log(r.Context(), state.Event{Actor: owner.Email, Action: "password.sign-in", Detail: "Signed in with the password from " + clientIP(r)})
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, map[string]string{"token": token})
 }
 
 // owner is the household owner who is signed in (not still invited).
