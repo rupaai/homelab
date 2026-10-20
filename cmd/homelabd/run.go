@@ -28,6 +28,7 @@ import (
 	"github.com/rupaai/homelab/internal/adapters/pocketid"
 	"github.com/rupaai/homelab/internal/adapters/secretstore"
 	"github.com/rupaai/homelab/internal/adapters/selfupdate"
+	"github.com/rupaai/homelab/internal/adapters/services"
 	"github.com/rupaai/homelab/internal/adapters/sysinfo"
 	"github.com/rupaai/homelab/internal/adapters/sysres"
 	"github.com/rupaai/homelab/internal/adapters/webpush"
@@ -168,6 +169,14 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	resources := sysres.New(sysres.Options{Logger: log})
 	updater := selfupdate.New(selfupdate.Options{Home: home, Version: version, Token: token, Logger: log, Restart: restart})
 
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	svc, err := services.New(services.Options{Program: services.Program(exe), DataDir: filepath.Join(home, "services"), Port: cfg.ServicesPort, Logger: log})
+	if err != nil {
+		return err
+	}
 	appAPIURL := "http://host.docker.internal:" + strconv.Itoa(cfg.AppAPIPort)
 	h := hub.New(hub.Config{DataDir: home, Logger: log, Identity: signer, PushPublicKey: pushPublic,
 		AppAPIURL: appAPIURL, OpenApps: cfg.Addresses == "ip", Folders: cfg.Folders}, store, hub.Adapters{
@@ -175,11 +184,12 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 		Addresses: addrs, Health: httphealth.New(nil), Secrets: secrets,
 		Smoke: deployer, Mirror: mirror, Identity: idp, Email: noop.Email{},
 		Notifier: notifier, Resources: resources, System: sysinfo.New(sysinfo.Options{}), Updater: updater,
+		Services: svc,
 	})
 
 	oidcConfig := api.NewOIDCConfig("", "", "")
 	apiHandler := api.New(h, api.Options{Version: version, Static: companion.Site(), Logger: log, Store: store,
-		OIDCConfig: oidcConfig, PasswordFile: passwordFile(home)})
+		OIDCConfig: oidcConfig, PasswordFile: passwordFile(home), Services: svc})
 
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
@@ -193,11 +203,24 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
 	doorSrv := &http.Server{
-		Handler:           api.Door(h, api.Options{Version: version, Logger: log, Store: store}),
+		Handler:           api.Door(h, api.Options{Version: version, Logger: log, Store: store, Services: svc}),
 		ReadHeaderTimeout: 10 * time.Second,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
 	go openAppDoor(ctx, doorSrv, deployer, cfg.AppAPIPort, log)
+	svcCtx, stopServices := context.WithCancel(ctx)
+	defer stopServices()
+	svcDone := make(chan struct{})
+	go func() {
+		defer close(svcDone)
+		// A version installed by an older Homelab came without homelab-services.
+		if _, err := os.Stat(services.Program(exe)); err != nil && selfupdate.Managed(home) {
+			if err := updater.FetchServices(svcCtx); err != nil {
+				log.Warn("couldn't fetch homelab-services", "err", err)
+			}
+		}
+		svc.Run(svcCtx)
+	}()
 	_, listenPort, _ := net.SplitHostPort(ln.Addr().String())
 	fmt.Printf("Companion: http://localhost:%s\n", listenPort)
 	if cfg.Addresses == "ip" {
@@ -225,6 +248,8 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	defer cancel()
 	_ = srv.Shutdown(stopCtx)
 	_ = doorSrv.Shutdown(stopCtx)
+	stopServices()
+	<-svcDone
 	<-hubDone
 	// Let a promote or rollback that is running finish, so it isn't cut off halfway.
 	idleCtx, idleCancel := context.WithTimeout(context.Background(), actionWait)

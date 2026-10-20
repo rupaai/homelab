@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["homelab-services"]
+
+# Small, fully optimised static binaries.
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+codegen-units = 1

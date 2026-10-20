@@ -35,6 +35,11 @@ func (h *Hub) Device(ctx context.Context) (DeviceView, error) {
 			v.Problems = append(v.Problems, "Couldn't check Homelab's version: "+err.Error())
 		}
 	}
+	if h.ad.Services != nil {
+		if p := h.ad.Services.Problem(); p != "" {
+			v.Problems = append(v.Problems, p)
+		}
+	}
 	return v, nil
 }
 

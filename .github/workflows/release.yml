@@ -29,6 +29,8 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: Rust targets for homelab-services
+        run: rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
       - name: Build the companion
         working-directory: web
         run: npm ci && npm run check && npm test && npm run build

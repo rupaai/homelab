@@ -64,6 +64,10 @@ func (s *server) keyRoutes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/users/me", s.usersMe)
 	mux.HandleFunc("GET /api/users", s.usersList)
+	for _, p := range servicePaths {
+		mux.HandleFunc(p, s.keyToServices)
+		mux.HandleFunc(p+"/", s.keyToServices)
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "API keys can't use that part of Homelab.")
 	})

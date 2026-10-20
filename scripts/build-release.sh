@@ -1,6 +1,8 @@
 #!/bin/sh
-# Builds homelabd for every computer Homelab runs on into dist/, with checksums.
-# Used by the release and test-build workflows; the companion must already be built.
+# Builds homelabd for every computer Homelab runs on into dist/, with checksums, and
+# homelab-services (Rust) for Linux. Used by the release and test-build workflows; the
+# companion must already be built. Needs the Rust musl targets:
+#   rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 # Usage: scripts/build-release.sh <version>
 set -eu
 version=${1:?usage: scripts/build-release.sh <version>}
@@ -11,5 +13,12 @@ for target in linux/amd64 linux/arm64 darwin/arm64; do
 	CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
 		-ldflags "-s -w -X main.version=$version" -o "dist/homelabd-$os-$arch" ./cmd/homelabd
 done
+for arch in amd64:x86_64 arm64:aarch64; do
+	rust=${arch#*:}-unknown-linux-musl; arch=${arch%:*}
+	(cd services && HOMELAB_VERSION=$version CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld \
+		cargo build --release --locked --target "$rust")
+	cp "services/target/$rust/release/homelab-services" "dist/homelab-services-linux-$arch"
+done
 dist/homelabd-linux-amd64 version | grep -q "$version"
-(cd dist && sha256sum homelabd-* > checksums.txt)
+dist/homelab-services-linux-amd64 version | grep -q "$version"
+(cd dist && sha256sum homelabd-* homelab-services-* > checksums.txt)

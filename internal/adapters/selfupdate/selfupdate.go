@@ -35,6 +35,12 @@ const (
 // AssetName is the release file holding the program for this kind of computer.
 func AssetName(goos, goarch string) string { return "homelabd-" + goos + "-" + goarch }
 
+// ServicesAssetName is the release file holding homelab-services for this kind of computer.
+// Releases have it for Linux only; elsewhere Homelab runs without files, databases and data.
+func ServicesAssetName(goos, goarch string) string {
+	return "homelab-services-" + goos + "-" + goarch
+}
+
 // Options configures an Updater.
 type Options struct {
 	Home    string        // the Homelab folder
@@ -316,8 +322,9 @@ func (u *Updater) begin() (done func(), err error) {
 	return func() { u.mu.Lock(); u.applying = false; u.mu.Unlock() }, nil
 }
 
-// install downloads a release's program for this computer, checks it against the
-// release's checksums and puts it into bin without switching to it.
+// install downloads a release's programs for this computer, checks them against the
+// release's checksums and puts them into bin without switching to them. homelab-services
+// comes along when the release has it for this computer.
 func (u *Updater) install(ctx context.Context, r release) error {
 	name := AssetName(runtime.GOOS, runtime.GOARCH)
 	prog, ok := r.asset(name)
@@ -332,24 +339,87 @@ func (u *Updater) install(ctx context.Context, r release) error {
 	if err != nil {
 		return err
 	}
-	want, err := checksumFor(sumText, name)
-	if err != nil {
-		return err
-	}
 	u.o.Logger.Info("downloading Homelab", "version", r.Tag)
-	data, err := u.get(ctx, prog.URL, "application/octet-stream", maxProgram)
+	data, err := u.download(ctx, prog, sumText, r.Tag)
 	if err != nil {
 		return err
-	}
-	got := sha256.Sum256(data)
-	if hex.EncodeToString(got[:]) != want {
-		return fmt.Errorf("the download of %s didn't match its checksum, so it wasn't installed", r.Tag)
 	}
 	path, err := Install(BinDir(u.o.Home), r.Tag, data)
 	if err != nil {
 		return err
 	}
+	if err := checkProgram(ctx, path, r.Tag); err != nil {
+		return err
+	}
+	svc, ok := r.asset(ServicesAssetName(runtime.GOOS, runtime.GOARCH))
+	if !ok {
+		return nil
+	}
+	if data, err = u.download(ctx, svc, sumText, r.Tag); err != nil {
+		return err
+	}
+	if path, err = InstallServices(BinDir(u.o.Home), r.Tag, data); err != nil {
+		return err
+	}
 	return checkProgram(ctx, path, r.Tag)
+}
+
+// FetchServices downloads the homelab-services that goes with the running version, when
+// it's missing. A version installed by an older Homelab, which didn't know about it,
+// gets it this way on its first start.
+func (u *Updater) FetchServices(ctx context.Context) error {
+	if !Managed(u.o.Home) {
+		return errors.New("this Homelab wasn't installed with `homelabd setup`")
+	}
+	body, err := u.get(ctx, u.o.API+"/repos/"+u.o.Repo+"/releases/tags/"+url.PathEscape(u.o.Version), "application/vnd.github+json", 1<<20)
+	if err != nil {
+		return err
+	}
+	var r release
+	if err := json.Unmarshal(body, &r); err != nil {
+		return fmt.Errorf("GitHub's answer about %s was unreadable: %w", u.o.Version, err)
+	}
+	if r.Tag != u.o.Version {
+		return fmt.Errorf("GitHub has no release %s", u.o.Version)
+	}
+	svc, ok := r.asset(ServicesAssetName(runtime.GOOS, runtime.GOARCH))
+	if !ok {
+		return fmt.Errorf("release %s has no homelab-services for this device", r.Tag)
+	}
+	sums, ok := r.asset(checksums)
+	if !ok {
+		return fmt.Errorf("release %s has no %s", r.Tag, checksums)
+	}
+	sumText, err := u.get(ctx, sums.URL, "application/octet-stream", 1<<20)
+	if err != nil {
+		return err
+	}
+	data, err := u.download(ctx, svc, sumText, r.Tag)
+	if err != nil {
+		return err
+	}
+	path, err := InstallServices(BinDir(u.o.Home), r.Tag, data)
+	if err != nil {
+		return err
+	}
+	return checkProgram(ctx, path, r.Tag)
+}
+
+// download fetches a release file and checks it against the release's checksums.
+func (u *Updater) download(ctx context.Context, a asset, sumText []byte, tag string) ([]byte, error) {
+	want, err := checksumFor(sumText, a.Name)
+	if err != nil {
+		return nil, err
+	}
+	data, err := u.get(ctx, a.URL, "application/octet-stream", maxProgram)
+	if err != nil {
+		return nil, err
+	}
+	got := sha256.Sum256(data)
+	if hex.EncodeToString(got[:]) != want {
+		return nil, fmt.Errorf("the download of %s (%s) didn't match its checksum, so it wasn't installed", tag, a.Name)
+	}
+	return data, nil
 }
 
 // restart stops Homelab so systemd starts it on the version homelabd now points at.

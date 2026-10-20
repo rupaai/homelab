@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rupaai/homelab/internal/adapters/selfupdate"
+	"github.com/rupaai/homelab/internal/adapters/services"
 	"github.com/rupaai/homelab/internal/adapters/sysinfo"
 )
 
@@ -264,6 +265,12 @@ func installProgram(home, helper string, force bool) (string, error) {
 		return "", err
 	}
 	bin := selfupdate.BinDir(home)
+	// homelab-services comes along when it sits next to this program, as in a release.
+	if svc, err := os.ReadFile(services.Program(exe)); err == nil {
+		if _, err := selfupdate.InstallServices(bin, version, svc); err != nil {
+			return "", err
+		}
+	}
 	if err := activate(bin, version, data, force); err != nil {
 		return "", err
 	}
