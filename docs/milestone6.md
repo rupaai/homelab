@@ -127,7 +127,7 @@ are not copied: only Homelab's own databases go back.
   (`localhost`) passkeys and the recovery code work as before.
 - Each app environment gets a port from 7100 up on `0.0.0.0`, open to anyone who reaches it,
   without sign-in. Apps get identity headers that name nobody, and Homelab's own cookies are
-  dropped before they reach the app. The companion shows app links with the IP it was opened on.
+  dropped before they reach the app. The companion's sign-in is not a cookie, so other ports never receive it. The companion shows app links with the IP it was opened on.
 - Plain http isn't encrypted on the home network, so use it only on a network you trust.
   Push notifications need https, so they don't work this way.
 

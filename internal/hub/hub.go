@@ -654,7 +654,7 @@ func (h *Hub) appProxy(port int, app, appName, env string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if h.cfg.OpenApps {
 			// addresses: ip: the app is open to whoever reaches its port, and gets no person.
-			// The companion's cookies reach this port too (same host), so they are dropped.
+			// Homelab's own cookies reach this port too (same host), so they are dropped.
 			h.serveAs(w, r, core.Person{}, serve)
 			return
 		}
@@ -664,17 +664,11 @@ func (h *Hub) appProxy(port int, app, appName, env string) http.Handler {
 		}
 		person, ok := h.appSessionPerson(r, app, env)
 		if !ok {
-			if companion, signed := h.personFromRequest(r); signed && (!Can(companion, ActionApps, app) || (env == core.Dev && !Can(companion, ActionProjects, app))) {
-				h.proxyForbidden(w)
-				return
-			}
+			// The companion's sign-in is not visible on this port. Send the person through the
+			// companion, which checks the app grant and hands them back with a code.
 			returnURL := "http://" + r.Host + r.URL.RequestURI()
 			query := url.Values{"app": {app}, "env": {env}, "return": {returnURL}}
-			if _, signed := h.personFromRequest(r); signed {
-				http.Redirect(w, r, "http://localhost:7080/auth/app?"+query.Encode(), http.StatusSeeOther)
-			} else {
-				http.Redirect(w, r, "http://localhost:7080/auth/start?return="+url.QueryEscape("/auth/app?"+query.Encode()), http.StatusSeeOther)
-			}
+			http.Redirect(w, r, "http://localhost:7080/auth/app?"+query.Encode(), http.StatusSeeOther)
 			return
 		}
 		if !Can(person, ActionApps, app) || (env == core.Dev && !Can(person, ActionProjects, app)) {
@@ -797,20 +791,6 @@ func (h *Hub) appCallback(w http.ResponseWriter, r *http.Request, app, env strin
 	}
 	http.SetCookie(w, &http.Cookie{Name: "homelab_app_" + app + "_" + env, Value: base64.RawURLEncoding.EncodeToString(raw), Path: "/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode, MaxAge: 24 * 60 * 60})
 	http.Redirect(w, r, path, http.StatusSeeOther)
-}
-
-func (h *Hub) personFromRequest(r *http.Request) (core.Person, bool) {
-	c, err := r.Cookie("homelab_session")
-	if err != nil {
-		return core.Person{}, false
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(c.Value)
-	if err != nil || len(raw) != 32 {
-		return core.Person{}, false
-	}
-	hash := sha256.Sum256(raw)
-	p, err := h.store.SessionPerson(r.Context(), hash[:], h.cfg.Now(), 7*24*time.Hour)
-	return p, err == nil && p.Status == "signed_in"
 }
 
 // person is the signed-in household member an app receives.

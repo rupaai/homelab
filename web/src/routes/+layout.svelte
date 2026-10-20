@@ -4,6 +4,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { api } from '#lib/api.ts';
+	import { takeFragmentToken } from '#lib/token.ts';
 	import { appsStore } from '#lib/apps.svelte.ts';
 	import { ApiError, messageOf } from '#lib/errors.ts';
 	import PasskeyRegistration from '#lib/components/PasskeyRegistration.svelte';
@@ -53,6 +54,7 @@
 	});
 
 	async function start() {
+		takeFragmentToken();
 		const invite = page.url.pathname.match(/^\/invite\/([^/]+)\/?$/);
 		if (invite) {
 			inviteToken = invite[1];

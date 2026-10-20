@@ -158,12 +158,13 @@ func (s *server) recoverCode(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, r, err)
 			return
 		}
-		if err := s.issueSession(w, r, p.ID); err != nil {
+		token, err := s.issueSession(r.Context(), p.ID)
+		if err != nil {
 			s.fail(w, r, err)
 			return
 		}
 		_ = s.store.Log(r.Context(), state.Event{Actor: p.Email, Action: "recovery.code.used", Detail: "Signed in with the recovery code"})
-		w.WriteHeader(http.StatusNoContent)
+		writeJSON(w, http.StatusOK, map[string]string{"token": token})
 		return
 	}
 	writeErr(w, http.StatusUnauthorized, "That recovery code isn't valid. Check it and try again.")

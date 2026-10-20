@@ -140,25 +140,45 @@ func TestOIDCFlowUsesPKCEAndCreatesServerSideSession(t *testing.T) {
 	}
 	completed := httptest.NewRecorder()
 	h.ServeHTTP(completed, callback)
-	if completed.Code != http.StatusSeeOther || completed.Header().Get("Location") != "/home" || !verifierSeen {
+	if completed.Code != http.StatusSeeOther || !strings.HasPrefix(completed.Header().Get("Location"), "/home#session=hls_") || !verifierSeen {
 		t.Fatalf("callback=%d location=%q PKCE=%v body=%s", completed.Code, completed.Header().Get("Location"), verifierSeen, completed.Body)
 	}
-	var session *http.Cookie
-	for _, cookie := range completed.Result().Cookies() {
-		if cookie.Name == "homelab_session" {
-			session = cookie
-		}
-	}
-	if session == nil || !session.HttpOnly || session.SameSite != http.SameSiteLaxMode {
-		t.Fatalf("session cookie=%+v", session)
-	}
+	noSessionCookie(t, completed)
 	me := httptest.NewRequest("GET", "/api/me", nil)
 	me.Host = "localhost:7080"
-	me.AddCookie(session)
+	me.Header.Set("Authorization", "Bearer "+strings.TrimPrefix(completed.Header().Get("Location"), "/home#session="))
 	result := httptest.NewRecorder()
 	h.ServeHTTP(result, me)
 	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), "owner@example.test") {
 		t.Fatalf("me=%d %s", result.Code, result.Body)
+	}
+	// A sign-in that an app asked for goes to the app hand-off and gets no companion session.
+	appReturn := "/auth/app?app=missing&env=prod&return=http%3A%2F%2Fx%2F"
+	started = httptest.NewRecorder()
+	start = httptest.NewRequest("GET", "/auth/start?return="+url.QueryEscape(appReturn), nil)
+	start.Host = "localhost:7080"
+	h.ServeHTTP(started, start)
+	values = map[string]string{}
+	for _, cookie := range started.Result().Cookies() {
+		values[cookie.Name] = cookie.Value
+	}
+	idToken = makeIDToken("owner", "owner@example.test", values[oidcNonceCookie])
+	callback = httptest.NewRequest("GET", "/auth/callback?state="+url.QueryEscape(values[oidcStateCookie])+"&code="+url.QueryEscape(authorizationCode), nil)
+	callback.Host = "localhost:7080"
+	for _, cookie := range started.Result().Cookies() {
+		callback.AddCookie(cookie)
+	}
+	handoff := httptest.NewRecorder()
+	h.ServeHTTP(handoff, callback)
+	if handoff.Code != http.StatusNotFound || strings.Contains(handoff.Header().Get("Location"), "session") {
+		t.Fatalf("app hand-off: status=%d location=%q body=%s", handoff.Code, handoff.Header().Get("Location"), handoff.Body)
+	}
+	appStart := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", appReturn, nil)
+	req.Host = "localhost:7080"
+	h.ServeHTTP(appStart, req)
+	if appStart.Code != http.StatusSeeOther || !strings.HasPrefix(appStart.Header().Get("Location"), "/auth/start?return="+url.QueryEscape(appReturn)) {
+		t.Fatalf("/auth/app: status=%d location=%q", appStart.Code, appStart.Header().Get("Location"))
 	}
 	started = httptest.NewRecorder()
 	start = httptest.NewRequest("GET", "/auth/start", nil)

@@ -207,21 +207,14 @@ func TestRecoveryCodeIsLoopbackOnlyRateLimitedAndSingleUse(t *testing.T) {
 	h := r.handler()
 	body, _ := json.Marshal(map[string]string{"code": code})
 	rec := post(h, "/api/recover", string(body), nil)
-	if rec.Code != http.StatusNoContent {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("recover: %d %s", rec.Code, rec.Body)
 	}
-	var cookie *http.Cookie
-	for _, c := range rec.Result().Cookies() {
-		if c.Name == "homelab_session" {
-			cookie = c
-		}
-	}
-	if cookie == nil {
-		t.Fatal("recovery didn't create a session")
-	}
+	noSessionCookie(t, rec)
+	token := bodyToken(t, rec)
 	req := httptest.NewRequest("GET", "/api/me", nil)
 	req.Host = "localhost:7080"
-	req.AddCookie(cookie)
+	req.Header.Set("Authorization", "Bearer "+token)
 	got := httptest.NewRecorder()
 	h.ServeHTTP(got, req)
 	if got.Code != http.StatusOK {
@@ -288,7 +281,7 @@ func TestHealthAndRecoveryStayAvailableWhenIdentityProviderFails(t *testing.T) {
 		t.Fatalf("health with unavailable identity provider: %d %s", got.Code, got.Body)
 	}
 	body, _ := json.Marshal(map[string]string{"code": code})
-	if got := post(h, "/api/recover", string(body), nil); got.Code != http.StatusNoContent {
+	if got := post(h, "/api/recover", string(body), nil); got.Code != http.StatusOK {
 		t.Fatalf("recovery with unavailable identity provider: %d %s", got.Code, got.Body)
 	}
 	token, err := randomURLToken(32)
@@ -346,6 +339,26 @@ func do(h http.Handler, method, path, body string, v *core.Viewer, hdr ...string
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
+}
+
+// noSessionCookie fails when a response sets the old companion cookie to a value.
+func noSessionCookie(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "homelab_session" && c.Value != "" {
+			t.Fatalf("response sets a homelab_session cookie: %v", c)
+		}
+	}
+}
+
+// bodyToken reads the session token from a sign-in response.
+func bodyToken(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var out struct{ Token string }
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || !strings.HasPrefix(out.Token, "hls_") {
+		t.Fatalf("sign-in body=%s", rec.Body)
+	}
+	return out.Token
 }
 
 func post(h http.Handler, path, body string, v *core.Viewer) *httptest.ResponseRecorder {
@@ -460,13 +473,16 @@ func TestRecoveryLinkCreatesOneOwnerSession(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("recovery status=%d body=%s", rec.Code, rec.Body)
 	}
-	cookie := rec.Result().Cookies()
-	if len(cookie) == 0 || cookie[0].Name != "homelab_session" || !cookie[0].HttpOnly {
-		t.Fatalf("session cookie=%v", cookie)
+	noSessionCookie(t, rec)
+	// The token is only in the fragment, never in the path or query.
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/#session=hls_") || strings.Count(loc, "hls_") != 1 {
+		t.Fatalf("recovery location=%q", loc)
 	}
+	session := strings.TrimPrefix(loc, "/#session=")
 	req = httptest.NewRequest("GET", "/api/me", nil)
 	req.Host = "localhost:7080"
-	req.AddCookie(cookie[0])
+	req.Header.Set("Authorization", "Bearer "+session)
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -883,5 +899,46 @@ func TestDeviceAndUpdate(t *testing.T) {
 	}
 	if rec := post(h, "/api/device/test/keep", "", &local); rec.Code == 202 {
 		t.Fatalf("keep without a test = %d", rec.Code)
+	}
+}
+
+func TestOldSessionCookieIsRefusedAndSignOutEndsTheToken(t *testing.T) {
+	r := newRig(t)
+	h := r.handler()
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(raw)
+	if err := r.store.PutSession(context.Background(), digest[:], "owner", time.Now(), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	token := sessionPrefix + base64.RawURLEncoding.EncodeToString(raw)
+	anon := &core.Viewer{Local: true}
+	cookie := strings.TrimPrefix(token, sessionPrefix)
+	// The same value as an old cookie, which older versions set, no longer signs anyone in.
+	if rec := do(h, "GET", "/api/me", "", anon, "Cookie", "homelab_session="+cookie); rec.Code == http.StatusOK {
+		t.Fatalf("old cookie accepted: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(h, "GET", "/api/me", "", anon, "Authorization", "Bearer "+token); rec.Code != http.StatusOK {
+		t.Fatalf("bearer refused: %d %s", rec.Code, rec.Body)
+	}
+	// A token without the session prefix is treated as an API key and refused.
+	if rec := do(h, "GET", "/api/me", "", anon, "Authorization", "Bearer "+cookie); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unprefixed bearer: %d", rec.Code)
+	}
+	rec := do(h, "POST", "/api/logout", "{}", anon, "X-Homelab-Request", "1", "Content-Type", "application/json", "Authorization", "Bearer "+token)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("logout: %d %s", rec.Code, rec.Body)
+	}
+	cleared := false
+	for _, c := range rec.Result().Cookies() {
+		cleared = cleared || (c.Name == "homelab_session" && c.MaxAge < 0)
+	}
+	if !cleared {
+		t.Fatal("logout didn't clear the old cookie")
+	}
+	if rec := do(h, "GET", "/api/me", "", anon, "Authorization", "Bearer "+token); rec.Code == http.StatusOK {
+		t.Fatalf("token still works after sign-out: %d", rec.Code)
 	}
 }

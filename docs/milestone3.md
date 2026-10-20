@@ -56,6 +56,8 @@ admin-only in this milestone.
 ## API additions
 
 All `/api` routes except bootstrap, setup, recovery, logout and invite redemption need a stored signed-in session.
+The companion sends its session token as `Authorization: Bearer hls_...` on every call. The token is not a cookie, so
+the browser never sends it to other ports on the same host (an app's own published port, for example). See "Companion session token" below.
 Changes need `X-Homelab-Request: 1` and JSON. Host checks remain in place. People/settings
 routes require owner or admin; app routes are checked against the requested app and action.
 
@@ -65,12 +67,12 @@ routes require owner or admin; app routes are checked against the requested app 
 | `POST /api/setup` | `{name,email}` | Pocket ID passkey link and one-time recovery code | Local computer, before an owner exists |
 | `POST /api/setup/passkey-link` | `{}` | Fresh initial-owner setup link until first sign-in | Local computer, while the owner is still invited |
 | `GET /auth/start` | Optional safe relative `return` | Redirect to Pocket ID authorization with PKCE, state and nonce | Local computer |
-| `GET /auth/callback` | OIDC callback query | Creates a server-side session and redirects back | Local computer |
+| `GET /auth/callback` | OIDC callback query | Creates a server-side session and redirects back with the token in the URL fragment (`#session=...`), or, for an app's sign-in, hands off to the app | Local computer |
 | `GET /api/me` | — | Name, email and roles | Signed-in person |
 | `POST /api/me/passkey-link` | `{}` | Fresh Pocket ID passkey link | Any signed-in person |
-| `POST /api/logout` | — | 204 and expires the companion cookie | Local computer; CSRF header |
-| `POST /api/recover` | `{code}` | 204 and one-time owner session | Local computer; rate-limited |
-| `GET /recover/{token}` | — | One-time owner session from a 15-minute link | Local computer |
+| `POST /api/logout` | — | 204; deletes the session and clears any old `homelab_session` cookie | Local computer; CSRF header |
+| `POST /api/recover` | `{code}` | `{token}`: a one-time owner session | Local computer; rate-limited |
+| `GET /recover/{token}` | — | Redirects to `/#session=<token>`: a one-time owner session from a 15-minute link | Local computer |
 | `GET /api/people` | — | People, roles, grants and status | Owner or admin |
 | `POST /api/people` | Name, optional email, roles and grants | Invite URL (201) | Owner or admin |
 | `PUT /api/people/{id}` | Updated name, roles and grants | Updated person | Owner or admin |
@@ -78,16 +80,28 @@ routes require owner or admin; app routes are checked against the requested app 
 | `DELETE /api/people/{id}` | — | Removal checklist | Owner or admin; owner cannot be removed |
 | `GET /invite/{token}` | — | Homelab passkey-registration screen | Invite holder, local computer |
 | `POST /api/invites/{token}/redeem` | `{}` | Returns a fresh Pocket ID one-time link while the invite is valid | Invite holder, local computer |
-| `GET /auth/app` | `app`, `env`, absolute `return` | Redirect to app callback with a 60-second code | Signed-in person with the app grant |
+| `GET /auth/app` | `app`, `env`, absolute `return` | Sends the person through passkey sign-in; the callback then redirects to the app callback with a 60-second code | Person with the app grant |
 | `GET /api/apps` | — | Role-filtered app list | Signed-in person |
 | `GET /api/projects` | — | Apps with build access | Owner/admin or builder |
 | `GET /api/apps/{id}` | — | App view filtered by its grant | Signed-in person with access to that app |
 | Existing app action routes | Existing milestone 1/2 request bodies | Deploy, promote, rollback, logs and secrets | Owner/admin or builder with `build` grant, as applicable |
 
-On an app’s first visit, Homelab sends the browser through `/auth/app`. The app proxy
+On an app’s first visit, Homelab sends the browser through `/auth/app` and passkey sign-in (the app port can't see the companion's sign-in). The app proxy
 exchanges the code once, sets an HttpOnly `homelab_app_<app>_<env>` cookie, and redirects to
 the original relative path. The proxy never forwards any `homelab_*` cookie or client-sent
 `X-Homelab-*` header.
+
+### Companion session token
+
+Sign-in gives the companion a random token. The companion keeps it in its own `localStorage` (browsers keep that
+separate for each port) and sends it as `Authorization: Bearer <token>`. Password and recovery-code sign-in
+return it as `{"token": "..."}`. Passkey sign-in and recovery links redirect to the companion with it in the
+URL fragment (`/#session=<token>`); fragments are never sent to a server. The companion stores it and removes it
+from the address bar. Tokens start with `hls_`; API keys start with `hlk_`.
+
+Homelab no longer sets a `homelab_session` cookie, because a cookie reaches every port on the host. Sessions
+from older versions stop working, so everyone signs in once more after updating. Sign-out deletes the session
+on the server and clears any old cookie.
 
 ## Pocket ID API checked
 
