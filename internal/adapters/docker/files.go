@@ -11,9 +11,10 @@ import (
 	"strings"
 )
 
-// helperImage is the small image that copies, moves and deletes data folders as root. It is
-// pinned by digest (busybox 1.37.0) and Docker downloads it the first time it is needed.
-const helperImage = "docker.io/library/busybox@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
+// helperImage is the small image that copies, moves and deletes data folders as root. It
+// is pinned by version tag (busybox 1.37.0), which is multi-arch, so it also runs on an
+// arm64 Mac. Docker downloads it the first time it is needed.
+const helperImage = "docker.io/library/busybox:1.37.0"
 
 // helper runs one command in a short-lived container as root, without a network, with the
 // given host folders mounted. mounts maps a container path to a host folder; a "ro:" prefix
