@@ -26,7 +26,6 @@ import (
 
 // Options configure the API.
 type Options struct {
-	Owners           []string // Tailscale logins allowed in; empty means any signed-in person
 	Version          string
 	Static           fs.FS // the companion site root (index.html at the top)
 	Logger           *slog.Logger
@@ -73,7 +72,6 @@ func (c *OIDCConfig) values() (string, string, string) {
 
 const (
 	maxBody       = 64 << 10
-	msgNotOwner   = "This Homelab only lets its owner in. Ask them to add your Tailscale login to owners in config.yaml."
 	msgInternal   = "Something went wrong inside Homelab. The details are in its log."
 	csrfHeader    = "X-Homelab-Request"
 	noAppPrefix   = "There's no app"
@@ -82,7 +80,6 @@ const (
 
 type server struct {
 	hub              *hub.Hub
-	owners           map[string]bool
 	ver              string
 	log              *slog.Logger
 	static           *static
@@ -105,16 +102,11 @@ func New(h *hub.Hub, opts Options) http.Handler {
 	if oidc == nil {
 		oidc = NewOIDCConfig(opts.OIDCIssuer, opts.OIDCClientID, opts.OIDCClientSecret)
 	}
-	s := &server{hub: h, owners: map[string]bool{}, ver: opts.Version, log: opts.Logger, store: opts.Store,
+	s := &server{hub: h, ver: opts.Version, log: opts.Logger, store: opts.Store,
 		oidc: oidc, httpClient: opts.HTTPClient, passwordFile: opts.PasswordFile}
 	s.recoveryAttempts = map[string]recoveryWindow{}
 	if s.log == nil {
 		s.log = slog.Default()
-	}
-	for _, o := range opts.Owners {
-		if o = strings.ToLower(strings.TrimSpace(o)); o != "" {
-			s.owners[o] = true
-		}
 	}
 	s.static = newStatic(opts.Static)
 
@@ -192,13 +184,6 @@ func New(h *hub.Hub, opts Options) http.Handler {
 				}
 			}
 		}
-		// Over the tailnet, Tailscale already knows who is asking (milestone 4).
-		if v, ok := core.ViewerFrom(r.Context()); ok && v.PersonID == "" && s.hub != nil {
-			if p, ok := s.hub.TailnetPerson(r.Context(), v); ok {
-				v.PersonID, v.Name = p.ID, p.Name
-				r = r.WithContext(core.WithViewer(r.Context(), v))
-			}
-		}
 		if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
 			hd.Set("Cache-Control", "no-store")
 			if r.URL.Path == "/api/bootstrap" || (r.URL.Path == "/api/setup" && r.Method == http.MethodPost) || (r.URL.Path == "/api/setup/passkey-link" && r.Method == http.MethodPost) || (r.URL.Path == "/api/recover" && r.Method == http.MethodPost) || (r.URL.Path == "/api/password-sign-in" && r.Method == http.MethodPost) || (r.URL.Path == "/api/logout" && r.Method == http.MethodPost) || (strings.HasPrefix(r.URL.Path, "/api/invites/") && strings.HasSuffix(r.URL.Path, "/redeem") && r.Method == http.MethodPost) {
@@ -215,7 +200,7 @@ func New(h *hub.Hub, opts Options) http.Handler {
 
 // allowed says whether the viewer may use Homelab.
 func (s *server) allowed(v core.Viewer) bool {
-	return !v.Tagged && v.PersonID != "" && s.store != nil
+	return v.PersonID != "" && s.store != nil
 }
 
 // loopbackHost says whether a request's Host header names this computer. Requests on the
@@ -462,15 +447,14 @@ func (s *server) people(w http.ResponseWriter, r *http.Request) {
 // personInput is what a client may set on a person. The id, identity id and status are
 // never taken from the client.
 type personInput struct {
-	Name           string            `json:"name"`
-	Email          string            `json:"email"`
-	Roles          []string          `json:"roles"`
-	Grants         map[string]string `json:"grants"`
-	TailscaleLogin string            `json:"tailscaleLogin"`
+	Name   string            `json:"name"`
+	Email  string            `json:"email"`
+	Roles  []string          `json:"roles"`
+	Grants map[string]string `json:"grants"`
 }
 
 func (in personInput) person(id string) core.Person {
-	return core.Person{ID: id, Name: in.Name, Email: in.Email, Roles: in.Roles, Grants: in.Grants, TailscaleLogin: in.TailscaleLogin}
+	return core.Person{ID: id, Name: in.Name, Email: in.Email, Roles: in.Roles, Grants: in.Grants}
 }
 
 func (s *server) invitePerson(w http.ResponseWriter, r *http.Request) {

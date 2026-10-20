@@ -1,5 +1,4 @@
-// Package local serves addresses on localhost ports, for trying Homelab out without
-// Tailscale. Each name gets its own port, assigned once and remembered in ports.json.
+// Package local serves addresses on localhost ports. Each name gets its own port, assigned once and remembered in ports.json.
 package local
 
 import (

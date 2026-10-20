@@ -2,13 +2,11 @@ package main
 
 import (
 	"bytes"
-	"encoding/xml"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -23,18 +21,18 @@ func TestParseConfigDefaults(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if c.Addresses != "local" || c.Listen != "127.0.0.1:7080" || !reflect.DeepEqual(c.Tailscale.Tags, []string{"tag:homelab"}) || len(c.Owners) != 0 {
+		if c.Addresses != "local" || c.Listen != "127.0.0.1:7080" {
 			t.Fatalf("defaults: %+v", c)
 		}
 	}
 }
 
 func TestParseConfigFull(t *testing.T) {
-	c, err := parseConfig([]byte("owners: [a@b.c]\naddresses: tailscale\ntailscale:\n  tags: [tag:x]\nlisten: 127.0.0.1:9000\nfolders: {media: /mnt/storage}\n"))
+	c, err := parseConfig([]byte("addresses: ip\nlisten: 127.0.0.1:9000\nfolders: {media: /mnt/storage}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Addresses != "tailscale" || c.Listen != "127.0.0.1:9000" || c.Owners[0] != "a@b.c" || c.Tailscale.Tags[0] != "tag:x" || c.Folders["media"] != "/mnt/storage" {
+	if c.Addresses != "ip" || c.Listen != "127.0.0.1:9000" || c.Folders["media"] != "/mnt/storage" {
 		t.Fatalf("%+v", c)
 	}
 }
@@ -47,10 +45,29 @@ func TestParseConfigStrict(t *testing.T) {
 	}
 }
 
-func TestTemplateConfigParses(t *testing.T) {
-	c, err := parseConfig([]byte(configTemplate))
-	if err != nil || c.Addresses != "local" {
+func TestDeviceConfigIsIP(t *testing.T) {
+	c, err := parseConfig([]byte(deviceConfig))
+	if err != nil || c.Addresses != "ip" || c.Listen != "0.0.0.0:7080" {
 		t.Fatalf("%v %+v", err, c)
+	}
+	if err := checkListen(c); err != nil {
+		t.Fatalf("homelabd run would refuse to start: %v", err)
+	}
+	if strings.Contains(deviceConfig, "listen:") {
+		t.Error("setup should not pin the listen address")
+	}
+}
+
+func TestTailscaleAddressesIsRefusedClearly(t *testing.T) {
+	_, err := parseConfig([]byte("addresses: tailscale\n"))
+	if err == nil || !strings.Contains(err.Error(), "addresses: ip") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestOldConfigKeysStillParse(t *testing.T) {
+	if _, err := parseConfig([]byte("owners: [a@b.c]\ntailscale:\n  tags: [tag:homelab]\n")); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -123,69 +140,6 @@ func TestPasswordCommand(t *testing.T) {
 	}
 	if st, _ := os.Stat(passwordFile(home)); st.Mode().Perm() != 0o600 {
 		t.Fatalf("mode = %v", st.Mode())
-	}
-}
-
-func TestLaunchdPlist(t *testing.T) {
-	out := launchdPlist(plistParams{Exe: "/opt/h&h/homelabd", Home: "/Users/l/.homelab", UserDir: "/Users/l"})
-	if err := xml.NewDecoder(strings.NewReader(out)).Decode(new(any)); err != nil {
-		t.Fatalf("not xml: %v", err)
-	}
-	for _, want := range []string{
-		"<string>net.homelab.homelabd</string>",
-		"<string>/opt/h&amp;h/homelabd</string>",
-		"<string>run</string>", "<string>--home</string>", "<string>/Users/l/.homelab</string>",
-		"<key>RunAtLoad</key>\n\t<true/>", "<key>KeepAlive</key>\n\t<true/>",
-		"<string>/Users/l/.homelab/logs/homelabd.log</string>",
-		"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/Users/l/.orbstack/bin",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("missing %q in\n%s", want, out)
-		}
-	}
-	if strings.Count(out, "homelabd.log") != 2 {
-		t.Error("stdout and stderr should both be logged")
-	}
-}
-
-func TestInitDoesNotOverwrite(t *testing.T) {
-	home := filepath.Join(t.TempDir(), "hh")
-	var out bytes.Buffer
-	if err := initHome(home, &out); err != nil {
-		t.Fatal(err)
-	}
-	mode := func(p string) os.FileMode {
-		st, err := os.Stat(filepath.Join(home, p))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return st.Mode().Perm()
-	}
-	if mode(".") != 0o700 || mode("secrets") != 0o700 {
-		t.Errorf("modes: %v %v", mode("."), mode("secrets"))
-	}
-	if _, err := os.Stat(filepath.Join(home, "secrets", "platform.env")); err == nil {
-		t.Error("init made a plain secrets file; secrets are set in the companion now")
-	}
-	if !strings.Contains(out.String(), "Settings") {
-		t.Errorf("next steps don't mention Settings: %s", out.String())
-	}
-	if _, err := loadConfig(home); err != nil {
-		t.Fatalf("starter config: %v", err)
-	}
-
-	// Edit the config, run init again: nothing changes.
-	cfg := filepath.Join(home, "config.yaml")
-	_ = os.WriteFile(cfg, []byte("addresses: tailscale\n"), 0o644)
-	out.Reset()
-	if err := initHome(home, &out); err != nil {
-		t.Fatal(err)
-	}
-	if b, _ := os.ReadFile(cfg); string(b) != "addresses: tailscale\n" {
-		t.Errorf("config overwritten: %s", b)
-	}
-	if strings.Contains(out.String(), "created") {
-		t.Errorf("second run created things: %s", out.String())
 	}
 }
 

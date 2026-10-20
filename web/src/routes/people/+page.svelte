@@ -20,10 +20,7 @@
 	let email = $state('');
 	let roles = $state<HouseholdRole[]>([]);
 	let grants = $state<Record<string, 'use'|'build'|''>>({});
-	let tailscaleLogin = $state('');
 	let inviteURL = $state('');
-	let tailscaleURL = $state('');
-	let tailscaleError = $state('');
 	let invitationFor = $state('');
 	let qrCanvas = $state<HTMLCanvasElement>();
 	let steps = $state<RemovalStep[]>([]);
@@ -36,7 +33,7 @@
 	onMount(load);
 
 	function openEditor(person: PersonView | null = null) {
-		editing = person; name = person?.name ?? ''; email = person?.email ?? ''; tailscaleLogin = person?.tailscaleLogin ?? '';
+		editing = person; name = person?.name ?? ''; email = person?.email ?? '';
 		roles = person ? [...person.roles] : ['member'];
 		grants = Object.fromEntries(apps.map((a) => [a.id, person?.grants[a.id] ?? '']));
 		error = ''; editor = true;
@@ -46,20 +43,20 @@
 		else roles = roles.filter((r) => r !== role);
 	}
 	function personInput(): PersonInput {
-		return { name: name.trim(), email: email.trim(), tailscaleLogin: editing ? tailscaleLogin.trim() : undefined, roles, grants: Object.fromEntries(Object.entries(grants).filter((entry): entry is [string, 'use'|'build'] => entry[1] !== '')) };
+		return { name: name.trim(), email: email.trim(), roles, grants: Object.fromEntries(Object.entries(grants).filter((entry): entry is [string, 'use'|'build'] => entry[1] !== '')) };
 	}
 	async function save(e: SubmitEvent) {
 		e.preventDefault(); saving = true; error = '';
 		try {
 			if (editing) await api.updatePerson(editing.id, personInput());
-			else { const result = await api.invitePerson(personInput()); inviteURL = result.url; tailscaleURL = result.tailscaleUrl ?? ''; tailscaleError = result.tailscaleError ?? ''; invitationFor = name.trim(); }
+			else { const result = await api.invitePerson(personInput()); inviteURL = result.url; invitationFor = name.trim(); }
 			editor = false; await load();
 		} catch (e) { error = messageOf(e); }
 		finally { saving = false; }
 	}
 	async function resend(person: PersonView) {
 		saving = true; error = '';
-		try { const result = await api.resendInvite(person.id); inviteURL = result.url; tailscaleURL = person.remoteInviteUrl ?? ''; tailscaleError = ''; invitationFor = person.name; await load(); }
+		try { const result = await api.resendInvite(person.id); inviteURL = result.url; invitationFor = person.name; await load(); }
 		catch (e) { error = messageOf(e); }
 		finally { saving = false; }
 	}
@@ -69,23 +66,15 @@
 		catch (e) { error = messageOf(e); }
 		finally { saving = false; }
 	}
-	function showTailscaleInvite(person: PersonView) {
-		inviteURL = ''; tailscaleURL = person.remoteInviteUrl ?? ''; tailscaleError = ''; invitationFor = person.name;
-	}
-	function closeInvite() { inviteURL = ''; tailscaleURL = ''; tailscaleError = ''; }
+	function closeInvite() { inviteURL = ''; }
 	async function copy(text: string) {
 		try { await navigator.clipboard.writeText(text); }
 		catch { error = 'Your browser could not copy the link. Select and copy it instead.'; }
 	}
 	$effect(() => {
-		const url = tailscaleURL || inviteURL; const canvas = qrCanvas;
+		const url = inviteURL; const canvas = qrCanvas;
 		if (url && canvas) void QRCode.toCanvas(canvas, url, { width: 200, margin: 1, errorCorrectionLevel: 'M' }).catch(() => { error = 'Homelab could not make the QR code. Copy the invite link instead.'; });
 	});
-	function tailscaleStatus(person: PersonView) {
-		if (person.connectedAt) return 'Connected through Tailscale';
-		if (person.remoteInviteUrl) return 'Hasn’t joined Tailscale yet';
-		return '';
-	}
 	function labelStatus(status: string) { return status === 'signed_in' ? 'Signed in' : status === 'invited' ? 'Invited' : status; }
 	function accessLabel(person: PersonView) { const entries = Object.entries(person.grants); return entries.length ? entries.map(([id, level]) => `${apps.find((a) => a.id === id)?.name ?? id} (${level})`).join(', ') : 'No app access'; }
 </script>
@@ -99,8 +88,8 @@
 	{#if !loaded}<p class="muted loading"><Spinner /> Loading people…</p>{:else if people.length === 0}<div class="card"><p>No one has been invited yet.</p></div>{/if}
 	{#each people as person (person.id)}
 		<article class="card person-card">
-			<div class="person-main"><div class="avatar" aria-hidden="true">{person.name.slice(0,1).toUpperCase()}</div><div class="person-copy"><h2>{person.name}</h2><p class="muted">{person.email || 'No email'} · {labelStatus(person.status)}</p><p class="small">{person.roles.join(', ')} · {accessLabel(person)}</p>{#if tailscaleStatus(person)}<p class="small">{tailscaleStatus(person)}</p>{/if}{#if person.lastSignIn}<p class="muted small">Last signed in {new Date(person.lastSignIn).toLocaleString()}</p>{/if}</div></div>
-			<div class="person-actions"><button class="btn small" type="button" onclick={() => openEditor(person)}>Edit access<span class="sr-only"> for {person.name}</span></button>{#if person.remoteInviteUrl}<button class="btn small" type="button" onclick={() => showTailscaleInvite(person)}>Tailscale invite</button>{/if}{#if person.status === 'invited'}<button class="btn small" type="button" disabled={saving} onclick={() => resend(person)}>Resend invite</button><button class="btn danger small" type="button" onclick={() => (pendingRemoval = person)}>Cancel invite</button>{:else if !person.roles.includes('owner')}<button class="btn danger small" type="button" onclick={() => (removing = person)}>Remove</button>{/if}</div>
+			<div class="person-main"><div class="avatar" aria-hidden="true">{person.name.slice(0,1).toUpperCase()}</div><div class="person-copy"><h2>{person.name}</h2><p class="muted">{person.email || 'No email'} · {labelStatus(person.status)}</p><p class="small">{person.roles.join(', ')} · {accessLabel(person)}</p>{#if person.lastSignIn}<p class="muted small">Last signed in {new Date(person.lastSignIn).toLocaleString()}</p>{/if}</div></div>
+			<div class="person-actions"><button class="btn small" type="button" onclick={() => openEditor(person)}>Edit access<span class="sr-only"> for {person.name}</span></button>{#if person.status === 'invited'}<button class="btn small" type="button" disabled={saving} onclick={() => resend(person)}>Resend invite</button><button class="btn danger small" type="button" onclick={() => (pendingRemoval = person)}>Cancel invite</button>{:else if !person.roles.includes('owner')}<button class="btn danger small" type="button" onclick={() => (removing = person)}>Remove</button>{/if}</div>
 		</article>
 	{/each}
 </div>
@@ -111,8 +100,7 @@
 			<form id="person-form" onsubmit={save}>
 				<label for="person-name">Name</label><input id="person-name" bind:value={name} autocomplete="name" required />
 				<label for="person-email">Email <span class="muted">(optional)</span></label><input id="person-email" type="email" bind:value={email} autocomplete="email" />
-				{#if editing}<label for="person-tailscale">Tailscale login</label><input id="person-tailscale" bind:value={tailscaleLogin} autocomplete="off" autocapitalize="off" spellcheck="false" /><p class="hint">How Homelab knows them when they connect from elsewhere. Copy it from the Tailscale admin console’s Users page if they signed in with a different account than their email.</p>{/if}
-				<fieldset><legend>Roles</legend>{#each ['owner','admin','builder','member'] as role}<label class="check"><input type="checkbox" checked={roles.includes(role)} disabled={role === 'owner' && (!editing || editing.roles.includes('owner'))} onchange={(e) => toggleRole(role, e.currentTarget.checked)} />{role}{#if role === 'owner'} <span class="muted">(cannot be assigned)</span>{/if}</label>{/each}</fieldset>
+					<fieldset><legend>Roles</legend>{#each ['owner','admin','builder','member'] as role}<label class="check"><input type="checkbox" checked={roles.includes(role)} disabled={role === 'owner' && (!editing || editing.roles.includes('owner'))} onchange={(e) => toggleRole(role, e.currentTarget.checked)} />{role}{#if role === 'owner'} <span class="muted">(cannot be assigned)</span>{/if}</label>{/each}</fieldset>
 				<fieldset><legend>App access</legend>{#if !apps.length}<p class="muted">Add an app before granting access.</p>{/if}{#each apps as app (app.id)}<label for="access-{app.id}">{app.name}</label><select id="access-{app.id}" bind:value={grants[app.id]}><option value="">No access</option><option value="use">Use prod</option><option value="build">Build and manage dev</option></select>{/each}</fieldset>
 				{#if editing?.roles.includes('owner')}<p class="hint">The owner role stays on this account.</p>{/if}
 				{#if error}<p class="notice bad" role="alert">{error}</p>{/if}
@@ -122,19 +110,10 @@
 	</Sheet>
 {/if}
 
-{#if inviteURL || tailscaleURL}
+{#if inviteURL}
 	<Sheet title="Invite {invitationFor}" onclose={closeInvite}>
 		{#snippet children()}
-			{#if tailscaleURL}
-				<p>Send {invitationFor} this Tailscale invite. They open it on their phone or computer, install the Tailscale app, and sign in with an account they already have, such as Google or Apple. After that they open Homelab from anywhere, with no passkey.</p>
-				<canvas bind:this={qrCanvas} aria-label="QR code for the Tailscale invite">QR code for the Tailscale invite.</canvas>
-				<label for="tailscale-link">Tailscale invite</label><input id="tailscale-link" readonly value={tailscaleURL} onclick={(e) => e.currentTarget.select()} />
-				<button class="btn small" type="button" onclick={() => copy(tailscaleURL)}>Copy Tailscale invite</button>
-			{/if}
-			{#if tailscaleError}<p class="notice bad" role="alert">{tailscaleError}</p>{/if}
-			{#if inviteURL}
-				{#if tailscaleURL}<details><summary>Signing in on this computer instead</summary>{@render localInvite()}</details>{:else}{@render localInvite()}{/if}
-			{/if}
+			{@render localInvite()}
 		{/snippet}
 		{#snippet footer()}<button class="btn primary" type="button" onclick={closeInvite}>Done</button>{/snippet}
 	</Sheet>
@@ -142,7 +121,7 @@
 
 {#snippet localInvite()}
 	<p>This one-time link works only on this computer, at localhost. It expires in seven days. They’ll use it to add a passkey.</p>
-	{#if !tailscaleURL}<canvas bind:this={qrCanvas} aria-label="QR code for this invite">QR code for the invite link.</canvas>{/if}
+	<canvas bind:this={qrCanvas} aria-label="QR code for this invite">QR code for the invite link.</canvas>
 	<label for="invite-link">Invite link</label><input id="invite-link" readonly value={inviteURL} onclick={(e) => e.currentTarget.select()} />
 	<button class="btn small" type="button" onclick={() => copy(inviteURL)}>Copy invite link</button>
 {/snippet}
@@ -151,7 +130,7 @@
 	{@const target = removing ?? pendingRemoval!}
 	<Sheet title={pendingRemoval ? `Cancel ${target.name}’s invite?` : `Remove ${target.name}?`} onclose={() => ((removing = null), (pendingRemoval = null))}>
 		{#snippet children()}
-			<p>This will remove their devices and account from the tailnet, disable their Pocket ID sign-in, end their Homelab and app sessions, remove app access and revoke outstanding invite links. Pocket ID may keep sessions that were already open; the checklist will show that step.</p>
+			<p>This will disable their Pocket ID sign-in, end their Homelab and app sessions, remove app access and revoke outstanding invite links. Pocket ID may keep sessions that were already open; the checklist will show that step.</p>
 			{#if error}<p class="notice bad" role="alert">{error}</p>{/if}
 		{/snippet}
 		{#snippet footer()}<button class="btn" type="button" onclick={() => ((removing = null), (pendingRemoval = null))}>Keep person</button><button class="btn danger" type="button" disabled={saving} onclick={() => remove(target)}>{saving ? 'Removing…' : pendingRemoval ? 'Cancel invite' : 'Remove person'}</button>{/snippet}

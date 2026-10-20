@@ -161,22 +161,16 @@ export interface PersonView {
 	roles: HouseholdRole[];
 	grants: Record<string, 'use' | 'build'>;
 	lastSignIn?: string;
-	/** The Tailscale login that signs this person in over the tailnet. */
-	tailscaleLogin?: string;
-	/** Their Tailscale invite, until one of their devices connects. */
-	remoteInviteUrl?: string;
-	connectedAt?: string;
 }
 export interface PersonInput {
 	name: string;
 	email: string;
 	roles: HouseholdRole[];
 	grants: Record<string, 'use' | 'build'>;
-	tailscaleLogin?: string;
 }
-export interface Invitation { id: string; url: string; tailscaleUrl?: string; tailscaleError?: string; }
+export interface Invitation { id: string; url: string; }
 export interface MeView { personId: string; login: string; name: string; local: boolean; roles: HouseholdRole[]; }
-export interface BootstrapView { needsSetup: boolean; signInReady: boolean; ownerNeedsPasskey?: boolean; remote?: boolean; login?: string; known?: boolean; /** addresses: ip, from another device: sign in with the password */ password?: boolean; }
+export interface BootstrapView { needsSetup: boolean; signInReady: boolean; ownerNeedsPasskey?: boolean; /** addresses: ip, from another device: sign in with the password */ password?: boolean; }
 export interface SetupResult { loginUrl: string; recoveryCode: string; }
 export interface PasskeyLink { url: string; }
 export interface RemovalStep { name: string; done: boolean; detail?: string; }

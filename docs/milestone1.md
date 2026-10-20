@@ -14,14 +14,13 @@ reasons live in the project's design docs; this file is what the code follows.
 | `internal/adapters/fake` | In-memory adapters for tests |
 | `internal/adapters/github` | Source, Builder and Registry for GitHub and ghcr.io |
 | `internal/adapters/docker` | Deployer, using Docker Compose (OrbStack on the Mac) |
-| `internal/adapters/tailscale` | Addresses as Tailscale nodes (`tsnet`), one per app environment |
-| `internal/adapters/local` | Addresses on 127.0.0.1 ports, for trying things without Tailscale |
+| `internal/adapters/local` | Addresses on 127.0.0.1 ports |
 | `internal/adapters/httphealth` | Health checks over HTTP |
 | `internal/adapters/filesecrets` | Secrets from files on the computer (milestone 1 only) |
 | `internal/api` | The HTTP JSON API the companion uses, and serving the companion |
 | `internal/companion` | The built companion, embedded into the binary |
 | `web/` | Companion source (SvelteKit, static output) |
-| `cmd/homelabd` | The program: config, wiring, `init`, `run`, `service install` |
+| `cmd/homelabd` | The program: config, wiring, `run` |
 
 The hub only depends on `core`, `manifest` and `state`. Adapters only depend on `core`.
 Nothing outside `cmd/homelabd` knows which adapters are in use.
@@ -43,7 +42,6 @@ Everything is under one folder, `~/.homelab` by default (`--home` to change it):
     .env                   settings and secrets for the containers (mode 0600)
     data/<name>/           the app's data folders, one copy per environment
   backups/<app>/prod/<time>-<commit>/   the app's own data copied before each promote (newest 5 kept)
-  tailscale/<node>/        tsnet state per address
   local/ports.json         local adapter's port assignments
   logs/homelabd.log        when run as a service
 ```
@@ -51,14 +49,9 @@ Everything is under one folder, `~/.homelab` by default (`--home` to change it):
 ## config.yaml
 
 ```yaml
-# Who may use the companion over Tailscale (their Tailscale login names).
-# On this computer itself (127.0.0.1) the companion is always open.
-owners: [labiba@example.com]
-# tailscale: each environment gets its own Tailscale address (needs TS_AUTHKEY).
 # local: addresses are http://127.0.0.1:<port>, for trying things out.
+# ip: other devices reach apps and the companion at the device's IP address.
 addresses: local
-tailscale:
-  tags: [tag:homelab]
 listen: 127.0.0.1:7080   # the companion on this computer
 ```
 

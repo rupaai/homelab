@@ -45,8 +45,7 @@ homelab-identity-v1\n<app>\n<env>\n<user>\n<name>\n<groups joined by ,>\n<unix s
 Apps get the public key as `HOMELAB_IDENTITY_KEY` (`ed25519:<base64>`), and also
 `HOMELAB_APP` and `HOMELAB_ENV`, which they use when verifying. Accept a signature only
 within 5 minutes of now. Milestone 2 knows one person: on this computer it's user
-`owner`, name `Owner`, groups `role:owner`; over Tailscale, an owner from config.yaml
-gets their login and `role:owner`. Anyone else gets no headers.
+`owner`, name `Owner`, groups `role:owner`. Anyone else gets no headers.
 
 ## Smoke tests
 

@@ -1,6 +1,6 @@
 // Package core holds the types every block shares and the contracts (interfaces) between
 // homelabd's core and its adapters. The core only ever talks to these interfaces, so any
-// adapter (GitHub, Docker Compose, Tailscale...) can be swapped without touching the rest.
+// adapter (GitHub, Docker Compose...) can be swapped without touching the rest.
 //
 // Rules for every adapter:
 //   - Methods are idempotent: calling them twice with the same input is safe.
@@ -76,7 +76,7 @@ type Deployer interface {
 }
 
 // Addresses gives each app environment (and the companion) its own name people can open
-// (Tailscale nodes now; a domain through Caddy later).
+// (local ports now; a domain through Caddy later).
 type Addresses interface {
 	// Ensure serves handler at name ("movies", "movies-dev", "homelab"). Calling it again
 	// with the same name swaps the handler in place. It returns without waiting for the
@@ -98,14 +98,14 @@ type HealthChecker interface {
 }
 
 // Secrets keeps secret values (S1-S9): an encrypted store inside Homelab. App secrets are
-// scoped to one app environment; platform credentials (GITHUB_TOKEN, TS_AUTHKEY) use app "".
+// scoped to one app environment; platform credentials (GITHUB_TOKEN) use app "".
 // Values are never returned to people, only to adapters that need them (Inject, Platform).
 type Secrets interface {
 	// Missing lists which of names have no value for app/env. Never returns values.
 	Missing(app, env string, names []string) ([]string, error)
 	// Inject returns the values for app/env, for the deploy adapter only.
 	Inject(app, env string, names []string) (map[string]string, error)
-	// Platform returns a Homelab credential such as GITHUB_TOKEN or TS_AUTHKEY.
+	// Platform returns a Homelab credential such as GITHUB_TOKEN.
 	Platform(name string) (string, bool)
 	// Set stores (or replaces) a value. app "" means a platform credential; env is then "".
 	Set(app, env, name, value, by string) error
@@ -173,25 +173,6 @@ type Identity interface {
 // Email sends optional household messages. The default implementation is a no-op.
 type Email interface {
 	Send(ctx context.Context, to, subject, body string) error
-}
-
-// RemoteAccess manages who can reach Homelab from anywhere (R1-R3): people on the tailnet,
-// their devices, the access rules, and keys for Homelab's own addresses.
-type RemoteAccess interface {
-	// Invite returns a link that lets the person join the tailnet.
-	Invite(ctx context.Context, email string) (RemoteInvite, error)
-	// CancelInvite withdraws an invite that hasn't been accepted.
-	CancelInvite(ctx context.Context, inviteID string) error
-	// SetPolicy writes Homelab's own part of the tailnet's access rules and keeps the rest.
-	SetPolicy(ctx context.Context, p AccessPolicy) error
-	// AuthKey mints a single-use key for one of Homelab's own addresses, with these tags.
-	AuthKey(ctx context.Context, tags []string) (string, error)
-	// Observe lists the tailnet's people and devices.
-	Observe(ctx context.Context) (RemoteState, error)
-	// RemoveDevices deletes every device that belongs to login.
-	RemoveDevices(ctx context.Context, login string) (int, error)
-	// RemoveUser takes login off the tailnet.
-	RemoveUser(ctx context.Context, login string) error
 }
 
 // Notifier delivers push notifications to people's devices (milestone 5, O4).

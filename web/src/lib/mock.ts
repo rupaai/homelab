@@ -27,7 +27,7 @@ const oldest = rel('1a77c0e', 'First version', 'Rupa', 60 * 24 * 6);
 function env(app: string, name: EnvName, o: Partial<EnvView>): EnvView {
 	return {
 		env: name,
-		address: `https://${app}${name === 'dev' ? '-dev' : ''}.tailnet.ts.net`,
+		address: `https://${app}${name === 'dev' ? '-dev' : ''}.example.test`,
 		addressName: `${app}-${name}`,
 		addressReady: true,
 		version: null,
@@ -140,14 +140,11 @@ const secretStore: SecretMap = {
 };
 const settingStore: SettingView[] = [
 	{ name: 'GITHUB_TOKEN', description: 'Lets Homelab read your repos and builds on GitHub. Make one at github.com/settings/tokens.', set: true, updatedAt: ago(60 * 24 * 12), updatedBy: 'rupaai', appliesAfterRestart: false },
-	{ name: 'TS_OAUTH_CLIENT_ID', description: 'Lets Homelab invite people to your tailnet, set who reaches what, and give each app its own Tailscale address. In the Tailscale admin console: Settings > Trust credentials > OAuth client.', set: false, appliesAfterRestart: true },
-	{ name: 'TS_OAUTH_CLIENT_SECRET', description: 'The secret of that OAuth client. Tailscale shows it once, when you create the client.', set: false, appliesAfterRestart: true },
-	{ name: 'TS_AUTHKEY', description: "Only if you don't set up the OAuth client: lets Homelab give apps Tailscale addresses, but not invite people or set access rules.", set: false, appliesAfterRestart: true }
 ];
 const household: PersonView[] = [
-	{ id: 'owner', name: 'Rupa', email: 'rupa@example.test', status: 'signed_in', roles: ['owner', 'admin'], grants: {}, tailscaleLogin: 'rupa@example.test', connectedAt: ago(60 * 24 * 3) },
-	{ id: 'sam', name: 'Sam', email: 'sam@example.test', status: 'signed_in', roles: ['member'], grants: { 'movie-night': 'use' }, lastSignIn: ago(15), tailscaleLogin: 'sam@example.test', connectedAt: ago(60 * 24) },
-	{ id: 'alex', name: 'Alex', email: 'alex@example.test', status: 'invited', roles: ['member'], grants: { 'movie-night': 'use' }, tailscaleLogin: 'alex@example.test', remoteInviteUrl: 'https://login.tailscale.com/uinv/mock' }
+	{ id: 'owner', name: 'Rupa', email: 'rupa@example.test', status: 'signed_in', roles: ['owner', 'admin'], grants: {} },
+	{ id: 'sam', name: 'Sam', email: 'sam@example.test', status: 'signed_in', roles: ['member'], grants: { 'movie-night': 'use' }, lastSignIn: ago(15) },
+	{ id: 'alex', name: 'Alex', email: 'alex@example.test', status: 'invited', roles: ['member'], grants: { 'movie-night': 'use' } }
 ];
 
 const find = (id: string) => {
@@ -192,11 +189,9 @@ export const mockApi: Api = {
 	people: () => delay(structuredClone(household)),
 	async invitePerson(person: PersonInput) {
 		const id = `person-${household.length + 1}`;
-		const login = person.email.trim().toLowerCase();
-		const tailscaleUrl = login ? 'https://login.tailscale.com/uinv/mock-' + id : undefined;
-		const entry: PersonView = { id, ...JSON.parse(JSON.stringify(person)) as PersonInput, status: 'invited', tailscaleLogin: login || undefined, remoteInviteUrl: tailscaleUrl };
+		const entry: PersonView = { id, ...JSON.parse(JSON.stringify(person)) as PersonInput, status: 'invited' };
 		household.push(entry);
-		return delay({ id, url: 'http://localhost:7080/mock-invite', tailscaleUrl, tailscaleError: login ? undefined : 'Add their email to invite them to Tailscale.' });
+		return delay({ id, url: 'http://localhost:7080/mock-invite' });
 	},
 	redeemInvite: async () => delay({ url: 'http://localhost:7081/mock-passkey-link' }),
 	async resendInvite(id: string) {
@@ -240,7 +235,7 @@ export const mockApi: Api = {
 		if (!entry) throw new ApiError("That person isn't in Homelab.", 404);
 		if (entry.roles.includes('owner')) throw new ApiError("The household owner can't be removed.", 400);
 		household.splice(household.indexOf(entry), 1);
-		return delay([{ name: 'Remove their devices from Tailscale', done: true }, { name: 'Remove them from the tailnet', done: true }, { name: 'Disable Pocket ID sign-in', done: true }, { name: 'End existing Pocket ID sessions', done: true, detail: 'Pocket ID keeps its own browser session, but the disabled account and removed Homelab sessions prevent further access.' }, { name: 'End Homelab and app sessions', done: true }, { name: 'Remove app access and invitation links', done: true }, { name: "Update the tailnet's access rules", done: true }]);
+		return delay([{ name: 'Disable Pocket ID sign-in', done: true }, { name: 'End existing Pocket ID sessions', done: true, detail: 'Pocket ID keeps its own browser session, but the disabled account and removed Homelab sessions prevent further access.' }, { name: 'End Homelab and app sessions', done: true }, { name: 'Remove app access and invitation links', done: true }]);
 	},
 	apps: () => delay(structuredClone(apps)),
 	projects: () => delay(structuredClone(apps)),

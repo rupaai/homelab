@@ -11,8 +11,7 @@
 	import '../app.css';
 
 	let { children } = $props();
-	let authState = $state<'loading'|'setup'|'setupDone'|'recoveryDone'|'inviteDone'|'inviteError'|'signedOut'|'notInvited'|'password'|'ready'|'error'>('loading');
-	let remoteLogin = $state('');
+	let authState = $state<'loading'|'setup'|'setupDone'|'recoveryDone'|'inviteDone'|'inviteError'|'signedOut'|'password'|'ready'|'error'>('loading');
 	let me = $state<MeView | null>(null);
 	let setupName = $state('');
 	let setupEmail = $state('');
@@ -69,7 +68,6 @@
 		try {
 			const status = await api.bootstrap();
 			ownerNeedsPasskey = status.ownerNeedsPasskey ?? false;
-			if (status.remote && !status.known) { remoteLogin = status.login ?? ''; authState = 'notInvited'; return; }
 			if (status.needsSetup) { authState = 'setup'; return; }
 			passwordReady = status.signInReady;
 			passwordMode = !!status.password;
@@ -168,8 +166,6 @@
 			<div class="auth-card"><h1>Set up your passkey</h1><p>Your invite is ready. Register a passkey with Pocket ID to finish setting up your Homelab account.</p><PasskeyRegistration url={invitePasskeyUrl} continueLabel="Continue to sign in" onContinue={continueFromInvite} onRefresh={refreshInvitePasskeyLink} refreshDisabled={busy} />{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}</div>
 		{:else if authState === 'inviteError'}
 			<div class="auth-card"><h1>This invite can’t be used</h1><p class="notice bad" role="alert">{authError}</p><p>Ask the Homelab owner to send a new invite, then open it on the Homelab computer.</p></div>
-		{:else if authState === 'notInvited'}
-			<div class="auth-card"><h1>You’re not in this household yet</h1><p>Homelab doesn’t know this device{#if remoteLogin} (signed in as <strong>{remoteLogin}</strong>){/if}.</p><p>Ask the owner to invite you, or to add this login to your profile under People.</p><button class="btn" type="button" onclick={() => location.reload()}>Try again</button></div>
 		{:else if authState === 'password'}
 			<div class="auth-card"><h1>Sign in to Homelab</h1>{#if passwordReady}<form onsubmit={passwordSignIn}><label for="password">Password</label><input id="password" type="password" bind:value={password} autocomplete="current-password" required />{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}<button class="btn primary" type="submit" disabled={busy}>{busy ? 'Checking…' : 'Sign in'}</button></form>{:else}<p>No password is set yet. On the device, run:</p><p><code>sudo -u homelab /var/lib/homelab/bin/homelabd password --home /var/lib/homelab</code></p><button class="btn" type="button" onclick={() => location.reload()}>Try again</button>{/if}</div>
 		{:else if authState === 'signedOut'}

@@ -1,5 +1,5 @@
 // Package fake has in-memory adapters for tests: every contract in package core, with no
-// Docker, GitHub or Tailscale needed.
+// Docker or GitHub needed.
 package fake
 
 import (

@@ -209,12 +209,6 @@ type Setting struct {
 var Settings = []Setting{
 	{Name: "GITHUB_TOKEN", Description: "Lets Homelab read your repos, builds and images. A classic GitHub token " +
 		"(Settings > Developer settings > Tokens (classic)) with the read:packages scope, plus repo for private repos."},
-	{Name: "TS_OAUTH_CLIENT_ID", AppliesAfterRestart: true, Description: "Lets Homelab invite people to your tailnet, set who reaches what, " +
-		"and give each app its own Tailscale address (only with addresses: tailscale). In the Tailscale admin console: " +
-		"Settings > Trust credentials > OAuth client, with the scopes devices:core, auth_keys, policy_file and users, and the tag tag:homelab."},
-	{Name: "TS_OAUTH_CLIENT_SECRET", AppliesAfterRestart: true, Description: "The secret of that OAuth client. Tailscale shows it once, when you create the client."},
-	{Name: "TS_AUTHKEY", AppliesAfterRestart: true, Description: "Only if you don't set up the OAuth client: lets Homelab give apps Tailscale addresses, " +
-		"but not invite people or set access rules. In the Tailscale admin console: Settings > Keys > Generate auth key, reusable and tagged tag:homelab."},
 }
 
 // SettingView is a platform credential as the companion shows it.

@@ -31,8 +31,9 @@ subscription endpoints, so Homelab can't be made to post to its own network.
 
 ## Notifications on a phone
 
-Web push needs a secure origin. On the Mac, `http://localhost:7080` counts. On a phone, open the
-companion at its Tailscale address (`https://homelab.<tailnet>.ts.net`, milestone 4). On
+Web push needs a secure origin. On the Mac, `http://localhost:7080` counts. On a phone, the
+companion needs an https address. With `addresses: ip` it is plain http, so notifications
+don't work there. On
 iPhone, first add it to the Home Screen (Share, then Add to Home Screen) and open it from
 there. Then go to **Me → Notifications → Turn on for this device**, then **Send a test**.
 

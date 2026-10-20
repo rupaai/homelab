@@ -309,8 +309,8 @@ func TestHealthAndRecoveryStayAvailableWhenIdentityProviderFails(t *testing.T) {
 	}
 }
 
-func (r *rig) handler(owners ...string) http.Handler {
-	return asLocal(New(r.h, Options{Owners: owners, Version: "test", Static: testSite(), Logger: nil, Store: r.store}))
+func (r *rig) handler() http.Handler {
+	return asLocal(New(r.h, Options{Version: "test", Static: testSite(), Logger: nil, Store: r.store}))
 }
 
 // asLocal marks requests that carry no viewer as arriving over the loopback connection, as
@@ -356,26 +356,21 @@ func TestAuth(t *testing.T) {
 	r := newRig(t)
 	owner := &core.Viewer{Login: "Labiba@Example.com", PersonID: "owner"}
 	stranger := &core.Viewer{Login: "eve@example.com"}
-	tagged := &core.Viewer{Login: "tagged-devices", Tagged: true}
 	anon := &core.Viewer{}
 	cases := []struct {
-		name   string
-		owners []string
-		v      *core.Viewer
-		want   int
+		name string
+		v    *core.Viewer
+		want int
 	}{
-		{"local", []string{"labiba@example.com"}, &local, 200},
-		{"loopback alone", []string{"labiba@example.com"}, &core.Viewer{Local: true}, 403},
-		{"owner session", []string{"labiba@example.com"}, owner, 200},
-		{"stranger", []string{"labiba@example.com"}, stranger, 403},
-		{"tagged node", []string{"labiba@example.com"}, tagged, 403},
-		{"no viewer", []string{"labiba@example.com"}, nil, 403},
-		{"empty owners, signed-in person", nil, &core.Viewer{PersonID: "owner"}, 200},
-		{"empty owners, tagged", nil, tagged, 403},
-		{"empty owners, anonymous", nil, anon, 403},
+		{"local", &local, 200},
+		{"loopback alone", &core.Viewer{Local: true}, 403},
+		{"signed-in person", owner, 200},
+		{"stranger", stranger, 403},
+		{"no viewer", nil, 403},
+		{"anonymous", anon, 403},
 	}
 	for _, c := range cases {
-		rec := do(r.handler(c.owners...), "GET", "/api/apps", "", c.v)
+		rec := do(r.handler(), "GET", "/api/apps", "", c.v)
 		if rec.Code != c.want {
 			t.Errorf("%s: %d, want %d (%s)", c.name, rec.Code, c.want, rec.Body)
 		}
@@ -384,11 +379,11 @@ func TestAuth(t *testing.T) {
 		}
 	}
 	// healthz is open, even with no viewer.
-	if rec := do(r.handler("a@b.c"), "GET", "/healthz", "", nil); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"version":"test"`) {
+	if rec := do(r.handler(), "GET", "/healthz", "", nil); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"version":"test"`) {
 		t.Errorf("healthz: %d %s", rec.Code, rec.Body)
 	}
 	// So is the companion itself (it shows its own sign-in message from the API).
-	if rec := do(r.handler("a@b.c"), "GET", "/", "", nil); rec.Code != 200 {
+	if rec := do(r.handler(), "GET", "/", "", nil); rec.Code != 200 {
 		t.Errorf("static: %d", rec.Code)
 	}
 }
@@ -517,8 +512,8 @@ func TestCSRFAndBody(t *testing.T) {
 		t.Errorf("empty: %d", rec.Code)
 	}
 	// Stranger with the header is still refused.
-	if rec := post(h, "/api/apps", body, &core.Viewer{Tagged: true}); rec.Code != 403 {
-		t.Errorf("tagged: %d", rec.Code)
+	if rec := post(h, "/api/apps", body, &core.Viewer{}); rec.Code != 403 {
+		t.Errorf("stranger: %d", rec.Code)
 	}
 }
 
@@ -696,7 +691,7 @@ func TestInviteRedemptionReturnsPasskeyRegistrationLink(t *testing.T) {
 func TestLoopbackHost(t *testing.T) {
 	for host, want := range map[string]bool{
 		"127.0.0.1:7080": true, "localhost:7080": true, "[::1]:7080": true, "127.0.0.1": true,
-		"evil.example:7080": false, "homelab.tail1.ts.net": false, "192.168.1.5:7080": false,
+		"evil.example:7080": false, "192.168.1.5:7080": false,
 	} {
 		if got := loopbackHost(host); got != want {
 			t.Errorf("loopbackHost(%q) = %v, want %v", host, got, want)
@@ -764,7 +759,7 @@ func TestMilestone2Endpoints(t *testing.T) {
 		t.Fatalf("unknown setting: %d", rec.Code)
 	}
 	rec = do(h, "GET", "/api/settings/secrets", "", &local)
-	if rec.Code != 200 || strings.Contains(rec.Body.String(), "ghp_x") || !strings.Contains(rec.Body.String(), `"appliesAfterRestart":true`) {
+	if rec.Code != 200 || strings.Contains(rec.Body.String(), "ghp_x") || strings.Contains(rec.Body.String(), "TS_") {
 		t.Fatalf("settings: %d %s", rec.Code, rec.Body)
 	}
 
@@ -815,44 +810,6 @@ func TestPasskeyLinksAreReissuedAfterAnEarlierLinkIsUsed(t *testing.T) {
 			}
 		}
 	})
-}
-
-func TestTailnetLoginIsTheSignIn(t *testing.T) {
-	r := newRig(t)
-	ctx := context.Background()
-	if err := r.store.SavePerson(ctx, core.Person{ID: "sam", Name: "Sam", Email: "sam@example.test", Status: "invited", Roles: []string{"member"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.store.SetTailscaleLogin(ctx, "sam", "sam@gmail.test"); err != nil {
-		t.Fatal(err)
-	}
-	h := r.handler()
-	sam := &core.Viewer{Login: "sam@gmail.test", Name: "Sam"}
-	if rec := do(h, "GET", "/api/me", "", sam); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"login":"sam@example.test"`) {
-		t.Fatalf("me = %d %s", rec.Code, rec.Body)
-	}
-	if p, _ := r.store.Person(ctx, "sam"); p.Status != "signed_in" {
-		t.Fatalf("first visit didn't count as sign-in: %+v", p)
-	}
-	for _, path := range []string{"/api/people", "/api/settings/secrets", "/api/projects"} {
-		if rec := do(h, "GET", path, "", sam); rec.Code != http.StatusForbidden {
-			t.Errorf("%s = %d, want 403", path, rec.Code)
-		}
-	}
-	stranger := &core.Viewer{Login: "who@gmail.test"}
-	if rec := do(h, "GET", "/api/me", "", stranger); rec.Code != http.StatusForbidden {
-		t.Fatalf("stranger me = %d", rec.Code)
-	}
-	if rec := do(h, "GET", "/api/bootstrap", "", stranger); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"known":false`) || !strings.Contains(rec.Body.String(), `"remote":true`) {
-		t.Fatalf("stranger bootstrap = %d %s", rec.Code, rec.Body)
-	}
-	tagged := &core.Viewer{Login: "sam@gmail.test", Tagged: true}
-	if rec := do(h, "GET", "/api/me", "", tagged); rec.Code != http.StatusForbidden {
-		t.Fatalf("tagged node me = %d", rec.Code)
-	}
-	if rec := do(h, "POST", "/api/logout", "", sam); rec.Code == 200 {
-		t.Fatalf("logout without the companion header = %d", rec.Code)
-	}
 }
 
 func TestPushResourcesAndBuilderActivity(t *testing.T) {
