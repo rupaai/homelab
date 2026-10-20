@@ -124,12 +124,31 @@ func (d *Deployer) Prepare(ctx context.Context, spec core.EnvSpec) error {
 			return err
 		}
 		if have {
-			return nil
+			return d.prepareServices(ctx, spec)
 		}
 	}
 	d.log.Info("downloading image", "app", spec.App, "env", spec.Env, "image", ref)
 	if err := d.api.pull(ctx, ref, spec.Auth); err != nil {
 		return err
+	}
+	return d.prepareServices(ctx, spec)
+}
+
+// prepareServices downloads the services' images that aren't here yet. Their tags are
+// fixed, so an image that is here is the right one. They come from public registries.
+func (d *Deployer) prepareServices(ctx context.Context, spec core.EnvSpec) error {
+	for _, s := range spec.Services {
+		have, err := d.api.hasImage(ctx, s.Image)
+		if err != nil {
+			return err
+		}
+		if have {
+			continue
+		}
+		d.log.Info("downloading image", "app", spec.App, "env", spec.Env, "service", s.Name, "image", s.Image)
+		if err := d.api.pull(ctx, s.Image, core.RegistryAuth{}); err != nil {
+			return fmt.Errorf("%s: %w", s.Name, err)
+		}
 	}
 	return nil
 }

@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -160,5 +161,55 @@ func TestLastLinesAndTail(t *testing.T) {
 	tb.Write([]byte("defg"))
 	if string(tb.Bytes()) != "cdefg" {
 		t.Errorf("got %q", tb.Bytes())
+	}
+}
+
+func TestComposeYAMLServices(t *testing.T) {
+	old := renderGroup
+	defer func() { renderGroup = old }()
+	renderGroup = func() string { return "993" }
+
+	s := testSpec()
+	s.Ports = []string{"6881-6891:6881-6891/udp"}
+	s.Services = []core.Service{
+		{Name: "jellyfin", Image: "jellyfin/jellyfin:10.11.11", Ports: []string{"8096:8096"}, Memory: "4g", GPU: true,
+			Mounts: []core.Mount{{HostPath: "/data/jellyfin-config", ContainerPath: "/config"}}},
+		{Name: "prowlarr", Image: "lscr.io/linuxserver/prowlarr:2.6", Vars: map[string]string{"PUID": "1000"}},
+	}
+	b, err := composeYAML(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f composeFile
+	if err := json.Unmarshal(b, &f); err != nil {
+		t.Fatal(err)
+	}
+	app, jf, pr := f.Services["app"], f.Services["jellyfin"], f.Services["prowlarr"]
+	if len(app.Ports) != 2 || app.Ports[1] != "127.0.0.1:6881-6891:6881-6891/udp" {
+		t.Errorf("app ports = %v", app.Ports)
+	}
+	if jf.Image != "jellyfin/jellyfin:10.11.11" || jf.Ports[0] != "127.0.0.1:8096:8096" || jf.MemLimit != "4g" ||
+		jf.Volumes[0].Target != "/config" || jf.Devices[0] != "/dev/dri:/dev/dri" || jf.GroupAdd[0] != "993" {
+		t.Errorf("jellyfin = %+v", jf)
+	}
+	if jf.Labels[labelApp] != "movies" || jf.Labels[labelService] != "jellyfin" || jf.Labels[labelDigest] != "" || len(jf.EnvFile) != 0 {
+		t.Errorf("jellyfin labels and settings = %+v", jf)
+	}
+	if pr.Environment["PUID"] != "1000" || len(pr.Devices) != 0 {
+		t.Errorf("prowlarr = %+v", pr)
+	}
+
+	s.OpenPorts = true
+	renderGroup = func() string { return "" }
+	b, _ = composeYAML(s)
+	f = composeFile{}
+	json.Unmarshal(b, &f)
+	if got := f.Services["jellyfin"]; got.Ports[0] != "8096:8096" || len(got.Devices) != 0 {
+		t.Errorf("open ports, no graphics card: %+v", got)
+	}
+
+	s.Services = append(s.Services, core.Service{Name: "app", Image: "x:1"})
+	if _, err := composeYAML(s); err == nil {
+		t.Error("a service named app should be refused")
 	}
 }
