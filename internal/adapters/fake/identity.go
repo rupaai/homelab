@@ -18,7 +18,9 @@ type Identity struct {
 	LoginLinkTTL time.Duration
 	// LoginLinkCalls counts one-time links issued; each call is a new provider token.
 	LoginLinkCalls int
-	Fail           bool
+	// EnsureCalls counts calls to Ensure.
+	EnsureCalls int
+	Fail        bool
 }
 
 func NewIdentity() *Identity {
@@ -27,6 +29,7 @@ func NewIdentity() *Identity {
 func (i *Identity) Ensure(_ context.Context, p core.Person, groups []string) (string, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	i.EnsureCalls++
 	if i.Fail {
 		return "", errors.New("identity provider is unavailable")
 	}

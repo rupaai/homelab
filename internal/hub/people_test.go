@@ -173,3 +173,27 @@ func TestRemovePersonEndsSessionsAndProtectsOwner(t *testing.T) {
 func structApp() state.App {
 	return state.App{ID: "movies", Name: "Movies", Repo: "a/b", Manifest: []byte("id: movies"), Promotion: "manual"}
 }
+
+func TestReconcilePeopleSkipsUnchangedPerson(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if _, err := r.hub.SetupOwner(ctx, core.Person{Name: "Owner", Email: "owner@example.test"}, "recovery-hash"); err != nil {
+		t.Fatal(err)
+	}
+	r.hub.reconcilePeople(ctx)
+	calls := r.identity.EnsureCalls
+	r.hub.reconcilePeople(ctx)
+	r.hub.reconcilePeople(ctx)
+	if r.identity.EnsureCalls != calls {
+		t.Fatalf("Ensure was called %d more times for an unchanged person", r.identity.EnsureCalls-calls)
+	}
+	// A changed account is still put right.
+	people, _ := r.store.People(ctx)
+	u := r.identity.Users[providerID(people[0])]
+	u.Name = "Someone else"
+	r.identity.Users[u.ID] = u
+	r.hub.reconcilePeople(ctx)
+	if r.identity.EnsureCalls != calls+1 || r.identity.Users[u.ID].Name != "Owner" {
+		t.Fatalf("changed account not restored: calls %d, %+v", r.identity.EnsureCalls, r.identity.Users[u.ID])
+	}
+}
