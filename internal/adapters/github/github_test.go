@@ -206,7 +206,7 @@ func TestErrors(t *testing.T) {
 	}), "")
 	ctx := context.Background()
 	_, err := c.Commit(ctx, "o/r", "a")
-	if err == nil || !strings.Contains(err.Error(), "GitHub said 401: the token in secrets/platform.env is missing or wrong") {
+	if err == nil || !strings.Contains(err.Error(), "GitHub said 401: the GitHub token in Settings is missing or wrong") {
 		t.Errorf("401: %v", err)
 	}
 	_, err = c.Commit(ctx, "o/r", "b")
@@ -330,7 +330,7 @@ func TestResolveBadToken(t *testing.T) {
 	defer srv.Close()
 	c := registryClient(srv, "bad")
 	_, err := c.Resolve(context.Background(), "ghcr.io/o/app", "t")
-	if err == nil || !strings.Contains(err.Error(), "secrets/platform.env") {
+	if err == nil || !strings.Contains(err.Error(), "GitHub token in Settings") {
 		t.Fatalf("got %v", err)
 	}
 }

@@ -159,3 +159,23 @@ func TestDeleteApp(t *testing.T) {
 		t.Fatal("music values removed")
 	}
 }
+
+func TestLoadPlatformSeparatesUnsetFromUnreadable(t *testing.T) {
+	s := open(t, t.TempDir())
+	if v, err := s.LoadPlatform("KEY"); v != "" || err != nil {
+		t.Fatalf("unset = %q, %v", v, err)
+	}
+	_ = s.Set("", "", "KEY", "value", "a")
+	s.mu.Lock()
+	s.cache = map[string]string{}
+	s.mu.Unlock()
+	if _, err := s.db.Exec(`UPDATE secrets SET sealed = x'00112233' WHERE name = 'KEY'`); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := s.LoadPlatform("KEY"); err == nil || v != "" {
+		t.Fatalf("unreadable = %q, %v", v, err)
+	}
+	if _, ok := s.Platform("KEY"); ok {
+		t.Fatal("Platform reports an unreadable value as set")
+	}
+}

@@ -120,7 +120,7 @@ While a test runs the card offers **Go back** and **Keep this version**. Go back
 `bin/homelabd` at the version from before and restarts. When that version starts, before it
 opens any data, it puts the saved copy back (`selfupdate.FinishTest`). The same happens when
 the update guard goes back on its own. Keep (once the test version has run 2 minutes)
-deletes the saved copy. A normal update during a test also ends it, keeping the data.
+deletes the saved copy. A normal update is refused during a test: go back or keep the test version first.
 
 Apps keep running through all of this, and their data, Pocket ID's data and Tailscale's
 state are not copied: only Homelab's own databases go back.
