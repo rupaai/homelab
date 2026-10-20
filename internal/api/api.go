@@ -91,7 +91,6 @@ type server struct {
 	httpClient       *http.Client
 	authMu           sync.Mutex
 	recoveryAttempts map[string]recoveryWindow
-	keyFails         *keyLimiter
 	keyMux           *http.ServeMux
 	passwordFile     string
 }
@@ -124,7 +123,6 @@ func newServer(h *hub.Hub, opts Options) *server {
 		}
 	}
 	s.static = newStatic(opts.Static)
-	s.keyFails = &keyLimiter{seen: map[string]recoveryWindow{}}
 	s.keyMux = s.keyRoutes()
 	return s
 }
@@ -178,9 +176,6 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("GET /api/resources", s.resources)
 	mux.HandleFunc("GET /api/device", s.device)
 	mux.HandleFunc("POST /api/device/update", s.updateHomelab)
-	mux.HandleFunc("GET /api/users/me", s.usersMe)
-	mux.HandleFunc("GET /api/users", s.usersList)
-	mux.HandleFunc("GET /api/users/stats", s.usersStats)
 	mux.HandleFunc("GET /api/keys", s.listKeys)
 	mux.HandleFunc("POST /api/keys", s.createKey)
 	mux.HandleFunc("DELETE /api/keys/{id}", s.revokeKey)
@@ -332,12 +327,6 @@ func apiAction(r *http.Request) (string, string) {
 	}
 	if parts[1] == "people" && len(parts) == 3 && r.Method == http.MethodDelete {
 		return hub.ActionRemoveUser, parts[2]
-	}
-	if parts[1] == "users" {
-		if len(parts) == 3 && parts[2] == "me" {
-			return hub.ActionSelf, ""
-		}
-		return hub.ActionPeople, ""
 	}
 	if parts[1] == "me" || parts[1] == "push" {
 		return hub.ActionSelf, ""

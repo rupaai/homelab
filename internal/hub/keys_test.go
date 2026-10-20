@@ -56,10 +56,8 @@ func TestCreateAdminKeyRules(t *testing.T) {
 		{"control char in name", admin, "a\nb", []string{"users:read"}, nil},
 		{"no scopes", admin, "k", nil, nil},
 		{"unknown scope", admin, "k", []string{"root:write"}, nil},
-		{"bad scope shape", admin, "k", []string{"files:photos"}, nil},
-		{"bad mode", admin, "k", []string{"files:photos:delete"}, nil},
-		{"db for unknown app", admin, "k", []string{"db:ghost:read"}, nil},
-		{"data for unknown app", admin, "k", []string{"data:ghost:write"}, nil},
+		{"later scope", admin, "k", []string{"files:photos:read"}, nil},
+		{"users write", admin, "k", []string{"users:write"}, nil},
 		{"past expiry", admin, "k", []string{"users:read"}, &past},
 	}
 	for _, c := range cases {
@@ -71,8 +69,8 @@ func TestCreateAdminKeyRules(t *testing.T) {
 	if keys, _ := r.store.APIKeys(ctx, KeyKindAdmin); len(keys) != 0 {
 		t.Fatalf("refused requests left keys behind: %+v", keys)
 	}
-	// Fine: files for any name, db for the existing app, a future expiry.
-	tok, k, err := r.hub.CreateAdminKey(ctx, " photo service ", []string{"files:photos:read", "db:movies:write"}, &future, admin)
+	// Fine: users:read with a future expiry.
+	tok, k, err := r.hub.CreateAdminKey(ctx, " photo service ", []string{"users:read"}, &future, admin)
 	if err != nil || tok == "" || k.Name != "photo service" || k.Expires == nil {
 		t.Fatalf("create: %q %+v %v", tok, k, err)
 	}
@@ -81,11 +79,11 @@ func TestCreateAdminKeyRules(t *testing.T) {
 func TestCreateAdminKeyDedupesSortsAndAuthenticates(t *testing.T) {
 	ctx := context.Background()
 	r, admin := keyRig(t)
-	tok, k, err := r.hub.CreateAdminKey(ctx, "svc", []string{"users:read", "files:photos:write", "users:read", " files:a:read "}, nil, admin)
+	tok, k, err := r.hub.CreateAdminKey(ctx, "svc", []string{"users:read", " users:read "}, nil, admin)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"files:a:read", "files:photos:write", "users:read"}
+	want := []string{"users:read"}
 	if !reflect.DeepEqual(k.Scopes, want) {
 		t.Fatalf("scopes=%v want %v", k.Scopes, want)
 	}
@@ -213,47 +211,44 @@ func TestAdminKeyStopsWhenCreatorLosesAdminOrIsDeleted(t *testing.T) {
 }
 
 func TestCallerAllows(t *testing.T) {
-	c := Caller{Scopes: []string{"files:a:write", "files:b:read", ScopeUsersRead}}
-	for scope, want := range map[string]bool{
-		"files:a:write": true,
-		"files:a:read":  true, // write implies read
-		"files:b:read":  true,
-		"files:b:write": false, // read doesn't imply write
-		"files:c:read":  false,
-		"users:read":    true,
-		"users:write":   false,
-		"":              false,
-	} {
-		if got := c.Allows(scope); got != want {
-			t.Errorf("Allows(%q)=%v want %v", scope, got, want)
-		}
+	c := Caller{Scopes: []string{ScopeUsersRead}}
+	if !c.Allows("users:read") || c.Allows("users:write") || c.Allows("") {
+		t.Error("Allows doesn't match exactly")
 	}
-	if (Caller{Scopes: []string{"db:x:write"}}).Allows("data:x:read") {
-		t.Error("a db scope allowed data")
+	if (Caller{}).Allows("users:read") {
+		t.Error("a key with no scopes allowed users:read")
 	}
 	if got := (Caller{Kind: KeyKindApp, App: "movies", Env: "dev"}).Label(); got != "app key movies/dev" {
 		t.Errorf("label=%q", got)
 	}
 }
 
-func TestRevokeKeyOnlyAdminKeys(t *testing.T) {
+func TestRevokeAppKeyGivesANewOneOnNextDeploy(t *testing.T) {
 	ctx := context.Background()
 	r, admin := keyRig(t)
 	if err := r.hub.RevokeKey(ctx, "nope", admin); !isUserErr(err) {
 		t.Fatalf("unknown id: %v", err)
 	}
-	if _, err := r.hub.appKey(ctx, "movies", core.Dev); err != nil {
-		t.Fatal(err)
-	}
+	old := movieSpec(t, r, core.Dev).Vars["HOMELAB_TOKEN"]
 	keys, _ := r.store.APIKeys(ctx, KeyKindApp)
 	if len(keys) != 1 {
 		t.Fatalf("app keys=%+v", keys)
 	}
-	if err := r.hub.RevokeKey(ctx, keys[0].ID, admin); !isUserErr(err) {
-		t.Fatalf("app key revoked by hand: %v", err)
+	if err := r.hub.RevokeKey(ctx, keys[0].ID, admin); err != nil {
+		t.Fatalf("revoke app key: %v", err)
 	}
-	if k, _ := r.store.APIKeyByID(ctx, keys[0].ID); k.Revoked != nil {
-		t.Fatal("app key was revoked")
+	if err := r.hub.RevokeKey(ctx, keys[0].ID, admin); !isUserErr(err) {
+		t.Fatalf("revoked twice: %v", err)
+	}
+	if _, err := r.hub.Authenticate(ctx, old); !errors.Is(err, ErrBadKey) {
+		t.Fatalf("revoked app key still works: %v", err)
+	}
+	fresh := movieSpec(t, r, core.Dev).Vars["HOMELAB_TOKEN"]
+	if fresh == "" || fresh == old {
+		t.Fatalf("next deploy token=%q", fresh)
+	}
+	if c, err := r.hub.Authenticate(ctx, fresh); err != nil || c.App != "movies" {
+		t.Fatalf("new key: %+v %v", c, err)
 	}
 }
 
@@ -269,7 +264,7 @@ func TestAPIKeysListNeverHoldsTheKey(t *testing.T) {
 	if v := got[KeyKindAdmin][0]; v.ID != k.ID || v.CreatedByName != "Ada" {
 		t.Fatalf("view=%+v", v)
 	}
-	if !reflect.DeepEqual(got[KeyKindApp][0].Scopes, appKeyScopes("movies")) {
+	if !reflect.DeepEqual(got[KeyKindApp][0].Scopes, appKeyScopes()) {
 		t.Fatalf("app scopes=%v", got[KeyKindApp][0].Scopes)
 	}
 	_ = tok
@@ -314,7 +309,7 @@ func TestAppKeyIsInjectedAndStable(t *testing.T) {
 		t.Fatal("prod shares dev's token")
 	}
 	c, err := r.hub.Authenticate(ctx, tok)
-	if err != nil || c.Kind != KeyKindApp || c.App != "movies" || c.Env != core.Dev || !c.Allows(ScopeUsersRead) || !c.Allows("db:movies:read") || c.Allows("db:music:read") {
+	if err != nil || c.Kind != KeyKindApp || c.App != "movies" || c.Env != core.Dev || !reflect.DeepEqual(c.Scopes, []string{ScopeUsersRead}) {
 		t.Fatalf("caller=%+v err=%v", c, err)
 	}
 	if got := c.Label(); got != "app key movies/dev" {
@@ -460,54 +455,12 @@ func TestUsersListsOnlyPeopleWithAccess(t *testing.T) {
 	if _, err := r.hub.Users(ctx, "ghost"); !isUserErr(err) {
 		t.Fatalf("unknown app: %v", err)
 	}
-	if _, err := r.hub.Stats(ctx, "ghost"); !isUserErr(err) {
-		t.Fatalf("stats unknown app: %v", err)
-	}
 	u, err := r.hub.UserByID(ctx, "builder", "movies")
 	if err != nil || u.Access != "build" {
 		t.Fatalf("%+v %v", u, err)
 	}
 	if _, err := r.hub.UserByID(ctx, "ghost", ""); !errors.Is(err, core.ErrNotFound) {
 		t.Fatalf("unknown person: %v", err)
-	}
-}
-
-func TestStatsCountsTotalRolesActiveAndApps(t *testing.T) {
-	ctx := context.Background()
-	r, _ := keyRig(t)
-	r.advance(0)
-	for _, p := range []core.Person{
-		{ID: "builder", Name: "Bu", Status: "signed_in", Roles: []string{"member"}, Grants: map[string]string{"movies": "build"}},
-		{ID: "boss", Name: "Boss", Status: "signed_in", Roles: []string{"owner", "admin"}},
-	} {
-		if err := r.store.SavePerson(ctx, p); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Seeded: admin, member, builder, boss. Two were seen in the last week.
-	now := r.now()
-	if err := r.store.MarkTailnetSignIn(ctx, "builder", now.Add(-time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.store.PutSession(ctx, []byte("s"), "boss", now.Add(-48*time.Hour), now.Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.store.MarkTailnetSignIn(ctx, "member", now.Add(-30*24*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	st, err := r.hub.Stats(ctx, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st.Total != 4 || st.Active7d != 2 || st.ByRole["member"] != 2 || st.ByRole["admin"] != 2 || st.ByRole["owner"] != 1 {
-		t.Fatalf("stats=%+v", st)
-	}
-	if !reflect.DeepEqual(st.Apps, map[string]int{"movies": 3}) { // admin, boss, builder
-		t.Fatalf("apps=%v", st.Apps)
-	}
-	one, err := r.hub.Stats(ctx, "movies")
-	if err != nil || one.Total != 3 || one.Active7d != 2 || one.ByRole["member"] != 1 || !reflect.DeepEqual(one.Apps, map[string]int{"movies": 3}) {
-		t.Fatalf("movies stats=%+v %v", one, err)
 	}
 }
 

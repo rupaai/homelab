@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -69,6 +69,11 @@ type composeService struct {
 	Logging     composeLogging    `json:"logging"`
 	Labels      map[string]string `json:"labels"`
 }
+
+// addHostGateway gives the app container the name host.docker.internal for Docker's bridge
+// address, where Homelab's app door listens. Linux needs it; on the Mac Docker already has
+// that name. A variable so tests can pretend.
+var addHostGateway = runtime.GOOS == "linux"
 
 // renderGroup is the group that may use the graphics card, as a number, or "" when the
 // device has none. A variable so tests can pretend.
@@ -146,12 +151,8 @@ func composeYAML(spec core.EnvSpec) ([]byte, error) {
 			labelDigest: dollars(spec.Release.Digest),
 		},
 	}
-	if spec.HostIP != "" {
-		ip := net.ParseIP(spec.HostIP)
-		if ip == nil || ip.To4() == nil {
-			return nil, fmt.Errorf("%s/%s: host address %q isn't an IPv4 address", spec.App, spec.Env, spec.HostIP)
-		}
-		svc.ExtraHosts = []string{"host.docker.internal:" + ip.String()}
+	if addHostGateway {
+		svc.ExtraHosts = []string{"host.docker.internal:host-gateway"}
 	}
 	var err error
 	if svc.Volumes, err = mounts(spec.Mounts); err != nil {

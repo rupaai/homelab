@@ -104,7 +104,6 @@ type EnvSpec struct {
 	// OpenPorts publishes Ports on every network (addresses: ip); otherwise on 127.0.0.1 only.
 	OpenPorts bool
 	Services  []Service // more containers that run next to the app, e.g. a media server
-	HostIP    string    // if set, the app container reaches this address as host.docker.internal (the app door)
 }
 
 // Service is one more container of an app environment. The app reaches it by its name,

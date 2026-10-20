@@ -13,26 +13,21 @@ There are two kinds.
 - `HOMELAB_TOKEN`: the key.
 - `HOMELAB_API_URL`: where to use it, `http://host.docker.internal:7085`.
 
-An app key acts for its own app and environment only. It can read the people of its app, and (later) its own database, data and files. It's replaced when the app is removed and added again. It only works at `HOMELAB_API_URL`, not on the companion's address.
+An app key acts for its own app and environment only. It can read the people of its app. Later services decide what else it may touch from the app and environment it belongs to, so a dev key never gets prod's data. It only works at `HOMELAB_API_URL`, not on the companion's address.
 
-**Admin keys.** For a server outside Homelab, such as a photo service on another computer. An admin makes one in the companion under **Settings → API keys**, picks what it may do, and copies it once. It works on the companion's own address. It stops working when it's revoked, when it expires, or when the person who made it is no longer an admin.
+An admin can revoke an app key under **Settings → API keys**, for example if it leaked. The app gets a new one the next time it's deployed.
+
+**Admin keys.** For a server outside Homelab, such as a photo service on another computer. An admin makes one in the companion under **Settings → API keys**, names it, and copies it once. It works on the companion's own address. It stops working when it's revoked, when it expires, or when the person who made it is no longer an admin.
 
 ### Scopes
 
-| Scope | Lets the key |
-|---|---|
-| `users:read` | read people |
-| `files:<folder>:read` / `:write` | read / save files in a folder (coming) |
-| `db:<app>:read` / `:write` | read / change an app's database (coming) |
-| `data:<app>:read` / `:write` | read / change an app's data (coming) |
-
-Write includes read.
+The only scope so far is `users:read`: read people. Files, databases and data add their own scopes when they arrive.
 
 ### The app door
 
 Apps call Homelab on their own door, separate from the companion. The door takes app keys only: no sign-in, no cookies, no companion.
 
-- **Linux:** the door listens on Docker's bridge address (usually `172.17.0.1`). Apps reach it as `host.docker.internal`. The home network can't.
+- **Linux:** the door listens on Docker's bridge address (usually `172.17.0.1`). Apps reach it as `host.docker.internal`. It isn't meant for the home network: another computer could only reach it by adding a route by hand, and even then it needs an app key.
 - **Mac:** Docker runs in a small virtual machine that already forwards `host.docker.internal` to the Mac. The door listens on `127.0.0.1:7085`.
 
 Change the port with `app_api_port: 7085` in `config.yaml`.
@@ -43,16 +38,14 @@ Apps still can't reach each other: each app environment keeps its own private ne
 
 - Send the key as `Authorization: Bearer <key>`.
 - Cookies and `X-Homelab-*` headers on a key call are dropped.
-- 20 wrong keys from one address in 10 minutes blocks that address for a while.
 - Every key call goes in the activity log. If a key makes the same read again and again, it's logged once every 10 minutes. Every change is always logged.
 
 ## Users API
 
 | Call | Gives |
 |---|---|
-| `GET /api/users/me` | who is calling: a person, an app (`{"kind":"app","app","env"}`), or a key and the person who made it |
-| `GET /api/users?app=<id>` | the people with access to an app, with `access`: `admin`, `build` or `use`. Without `app`, everyone (admins and admin keys only) |
-| `GET /api/users/stats` | `{"total", "by_role", "active_7d", "apps"}`. `apps` is how many people can use each app |
+| `GET /api/users/me` | who is calling: an app (`{"kind":"app","app","env"}`), or an admin key and the person who made it |
+| `GET /api/users?app=<id>` | the people with access to an app, with `access`: `admin`, `build` or `use`. Without `app`, everyone (admin keys only) |
 
 An app key always gets its own app, and may leave `app` out.
 

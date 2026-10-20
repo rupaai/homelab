@@ -248,20 +248,22 @@ func TestEnvRunning(t *testing.T) {
 	}
 }
 
-func TestComposeYAMLHostIP(t *testing.T) {
-	spec := core.EnvSpec{App: "movies", Env: "prod", Release: core.Release{Image: "ghcr.io/a/b", Tag: "t"}, Port: 8000, HostPort: 17001}
-	b, err := composeYAML(spec)
-	if err != nil || strings.Contains(string(b), "extra_hosts") {
-		t.Fatalf("no host IP: %v %s", err, b)
-	}
-	spec.HostIP = "172.17.0.1"
-	if b, err = composeYAML(spec); err != nil || !strings.Contains(string(b), `"host.docker.internal:172.17.0.1"`) {
-		t.Fatalf("host IP: %v %s", err, b)
-	}
-	for _, bad := range []string{"::1", "nope", "172.17.0.1:80"} {
-		spec.HostIP = bad
-		if _, err := composeYAML(spec); err == nil {
-			t.Errorf("host IP %q accepted", bad)
+func TestComposeYAMLHostGateway(t *testing.T) {
+	old := addHostGateway
+	defer func() { addHostGateway = old }()
+	for _, on := range []bool{false, true} {
+		addHostGateway = on
+		b, err := composeYAML(testSpec())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var f composeFile
+		if err := json.Unmarshal(b, &f); err != nil {
+			t.Fatal(err)
+		}
+		got := f.Services["app"].ExtraHosts
+		if on != (len(got) == 1 && got[0] == "host.docker.internal:host-gateway") || (!on && len(got) != 0) {
+			t.Errorf("addHostGateway=%v: extra_hosts %v", on, got)
 		}
 	}
 }

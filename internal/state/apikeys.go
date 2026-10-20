@@ -144,25 +144,3 @@ func (s *Store) TouchAPIKey(ctx context.Context, id string, at time.Time) error 
 	_, err := s.db.ExecContext(ctx, `UPDATE api_keys SET last_used_at=? WHERE id=?`, at.UnixMilli(), id)
 	return err
 }
-
-// ActivePeople counts the people seen since a time: a companion or app session in use, or
-// a sign-in.
-func (s *Store) ActivePeople(ctx context.Context, since time.Time) (map[string]bool, error) {
-	at := since.UnixMilli()
-	rows, err := s.db.QueryContext(ctx, `SELECT person_id FROM sessions WHERE last_seen_at>=?
-		UNION SELECT person_id FROM app_sessions WHERE last_seen_at>=?
-		UNION SELECT id FROM people WHERE last_sign_in>=?`, at, at, at)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]bool{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out[id] = true
-	}
-	return out, rows.Err()
-}

@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/rupaai/homelab/internal/core"
@@ -21,11 +20,7 @@ import (
 //     computer). Never on the app door.
 //   - App keys work only on the app door (Door), which serves nothing else.
 
-const (
-	keyFailLimit  = 20               // failed key attempts allowed per address...
-	keyFailWindow = 10 * time.Minute // ...in this long
-	msgBadKey     = "That API key isn't valid."
-)
+const msgBadKey = "That API key isn't valid."
 
 type callerKey struct{}
 
@@ -45,37 +40,6 @@ func bearer(r *http.Request) (string, bool) {
 		return "", false
 	}
 	return strings.TrimSpace(h[7:]), true
-}
-
-// keyLimiter counts failed key attempts per address.
-type keyLimiter struct {
-	mu   sync.Mutex
-	seen map[string]recoveryWindow
-}
-
-func (l *keyLimiter) blocked(ip string, now time.Time) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	e := l.seen[ip]
-	if now.Sub(e.started) > keyFailWindow {
-		delete(l.seen, ip)
-		return false
-	}
-	return e.count >= keyFailLimit
-}
-
-func (l *keyLimiter) fail(ip string, now time.Time) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if len(l.seen) > 10000 { // never grows without bound
-		l.seen = map[string]recoveryWindow{}
-	}
-	e := l.seen[ip]
-	if now.Sub(e.started) > keyFailWindow {
-		e = recoveryWindow{started: now}
-	}
-	e.count++
-	l.seen[ip] = e
 }
 
 func remoteIP(r *http.Request) string {
@@ -100,7 +64,6 @@ func (s *server) keyRoutes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/users/me", s.usersMe)
 	mux.HandleFunc("GET /api/users", s.usersList)
-	mux.HandleFunc("GET /api/users/stats", s.usersStats)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "API keys can't use that part of Homelab.")
 	})
@@ -113,17 +76,12 @@ func (s *server) serveKey(w http.ResponseWriter, r *http.Request, door bool) {
 	stripCallerHeaders(r)
 	token, _ := bearer(r)
 	r.Header.Del("Authorization")
-	ip, now := remoteIP(r), time.Now()
-	if s.keyFails.blocked(ip, now) {
-		writeErr(w, http.StatusTooManyRequests, "Too many wrong API keys from here. Wait a few minutes.")
-		return
-	}
+	ip := remoteIP(r)
 	c, err := s.hub.Authenticate(r.Context(), token)
 	if err != nil {
 		if !errors.Is(err, hub.ErrBadKey) {
 			s.log.Error("api key check", "err", err)
 		}
-		s.keyFails.fail(ip, now)
 		s.log.Warn("api key refused", "from", ip, "door", door)
 		w.Header().Set("WWW-Authenticate", `Bearer realm="homelab"`)
 		writeErr(w, http.StatusUnauthorized, msgBadKey)
@@ -167,38 +125,26 @@ func Door(h *hub.Hub, opts Options) http.Handler {
 // ---- Users API ----
 
 // usersApp works out which app a users request is about. An app key only ever sees its
-// own app; anyone else may ask about any app, or (app "") everyone.
-func (s *server) usersApp(w http.ResponseWriter, r *http.Request) (string, hub.Caller, bool, bool) {
+// own app; an admin key may ask about any app, or (app "") everyone.
+func (s *server) usersApp(w http.ResponseWriter, r *http.Request) (string, hub.Caller, bool) {
 	app := r.URL.Query().Get("app")
-	c, isKey := callerFrom(r.Context())
-	if !isKey {
-		return app, c, false, true
-	}
+	c, _ := callerFrom(r.Context())
 	if !c.Allows(hub.ScopeUsersRead) {
 		writeErr(w, http.StatusForbidden, "This key can't read people. It needs the users:read scope.")
-		return "", c, true, false
+		return "", c, false
 	}
 	if c.Kind == hub.KeyKindApp {
 		if app != "" && app != c.App {
 			writeErr(w, http.StatusForbidden, "An app's key only sees the people of its own app.")
-			return "", c, true, false
+			return "", c, false
 		}
 		app = c.App
 	}
-	return app, c, true, true
+	return app, c, true
 }
 
 func (s *server) usersMe(w http.ResponseWriter, r *http.Request) {
-	c, isKey := callerFrom(r.Context())
-	if !isKey {
-		u, err := s.hub.UserByID(r.Context(), viewer(r).PersonID, "")
-		if err != nil {
-			s.fail(w, r, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"kind": "person", "person": u})
-		return
-	}
+	c, _ := callerFrom(r.Context())
 	s.hub.LogKeyUse(r.Context(), c, "Asked who it is", false)
 	if c.Kind == hub.KeyKindApp {
 		writeJSON(w, http.StatusOK, map[string]any{"kind": "app", "app": c.App, "env": c.Env, "scopes": c.Scopes})
@@ -213,7 +159,7 @@ func (s *server) usersMe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) usersList(w http.ResponseWriter, r *http.Request) {
-	app, c, isKey, ok := s.usersApp(w, r)
+	app, c, ok := s.usersApp(w, r)
 	if !ok {
 		return
 	}
@@ -222,30 +168,12 @@ func (s *server) usersList(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	if isKey {
-		what := "Listed everyone"
-		if app != "" {
-			what = "Listed the people of " + app
-		}
-		s.hub.LogKeyUse(r.Context(), c, what, false)
+	what := "Listed everyone"
+	if app != "" {
+		what = "Listed the people of " + app
 	}
+	s.hub.LogKeyUse(r.Context(), c, what, false)
 	writeJSON(w, http.StatusOK, list)
-}
-
-func (s *server) usersStats(w http.ResponseWriter, r *http.Request) {
-	app, c, isKey, ok := s.usersApp(w, r)
-	if !ok {
-		return
-	}
-	st, err := s.hub.Stats(r.Context(), app)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	if isKey {
-		s.hub.LogKeyUse(r.Context(), c, "Read people counts", false)
-	}
-	writeJSON(w, http.StatusOK, st)
 }
 
 // ---- Managing keys (companion, admins) ----

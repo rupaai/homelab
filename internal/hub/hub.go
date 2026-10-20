@@ -46,8 +46,7 @@ type Config struct {
 	Owners         []string          // Tailscale logins of the owners, from config.yaml
 	Identity       *identity.Signer  // signs the identity headers apps get (A2); nil sends none
 	PushPublicKey  string            // VAPID public key browsers subscribe with (O4)
-	AppAPIURL      string            // where apps reach the Homelab API (the app door); "" means apps get no URL
-	AppHostIP      string            // the app door's address, given to containers as host.docker.internal; "" means Docker's own
+	AppAPIURL      string            // where apps reach the Homelab API (the app door), e.g. http://host.docker.internal:7085
 	OpenApps       bool              // addresses: ip; anyone who reaches an app's port may use it, without sign-in
 	Folders        map[string]string // the device's shared folders apps may ask for (config.yaml folders:), e.g. media: /mnt/storage
 	Now            func() time.Time
@@ -477,7 +476,7 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 	}
 	spec := core.EnvSpec{
 		App: a.ID, Env: env, Release: rel, Port: m.Port, HostPort: h.hostPort(a.Slot, env),
-		Memory: m.Memory, Mounts: mounts, Vars: vars, Auth: auth, OpenPorts: h.cfg.OpenApps, HostIP: h.cfg.AppHostIP,
+		Memory: m.Memory, Mounts: mounts, Vars: vars, Auth: auth, OpenPorts: h.cfg.OpenApps,
 	}
 	// Ports are fixed numbers on the device, so only one environment can have them: prod.
 	if env == core.Prod {

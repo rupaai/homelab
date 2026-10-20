@@ -59,7 +59,7 @@ func (r *rig) appKey(t *testing.T, app, env string) (string, state.APIKey) {
 	tok := "hlk_" + base64.RawURLEncoding.EncodeToString(b)
 	sum := sha256.Sum256([]byte(tok))
 	k := state.APIKey{ID: app + "-" + env, Hash: sum[:], Prefix: tok[:8], Name: app + " " + env, Kind: hub.KeyKindApp, App: app, Env: env,
-		Scopes: []string{"users:read", "db:" + app + ":write"}, CreatedAt: time.Now()}
+		Scopes: []string{"users:read"}, CreatedAt: time.Now()}
 	if err := r.store.PutAPIKey(ctx, k); err != nil {
 		t.Fatal(err)
 	}
@@ -128,11 +128,6 @@ func TestAdminKeyReadsUsersWithoutCSRFHeader(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &me); rec.Code != 200 || err != nil || me.Kind != "key" || me.Key != "svc" || me.Person.ID != "owner" {
 			t.Fatalf("me: %d %s", rec.Code, rec.Body)
 		}
-		rec = keyReq(h, "GET", "/api/users/stats", tok, "", v)
-		var st hub.UserStats
-		if err := json.Unmarshal(rec.Body.Bytes(), &st); rec.Code != 200 || err != nil || st.Total != 4 {
-			t.Fatalf("stats: %d %s", rec.Code, rec.Body)
-		}
 	}
 	// ?app= narrows to an app's people.
 	r.appKey(t, "movies", "dev")
@@ -183,15 +178,19 @@ func TestKeyOnlyReachesKeyRoutes(t *testing.T) {
 
 func TestKeyScopeIsRequiredForUsers(t *testing.T) {
 	r := newRig(t)
-	h := r.handler()
-	tok, _ := r.adminKey(t, "files:x:read")
-	for _, p := range []string{"/api/users", "/api/users/stats"} {
-		if rec := keyReq(h, "GET", p, tok, "", &local); rec.Code != 403 {
-			t.Fatalf("%s: %d %s", p, rec.Code, rec.Body)
-		}
+	door := Door(r.h, Options{Version: "test", Static: testSite(), Store: r.store})
+	r.ensureApp(t, "movies")
+	tok := "hlk_" + strings.Repeat("S", 43)
+	sum := sha256.Sum256([]byte(tok))
+	k := state.APIKey{ID: "noscope", Hash: sum[:], Prefix: tok[:8], Name: "movies dev", Kind: hub.KeyKindApp, App: "movies", Env: "dev", CreatedAt: time.Now()}
+	if err := r.store.PutAPIKey(context.Background(), k); err != nil {
+		t.Fatal(err)
+	}
+	if rec := keyReq(door, "GET", "/api/users", tok, "", nil); rec.Code != 403 {
+		t.Fatalf("users without scope: %d %s", rec.Code, rec.Body)
 	}
 	// Asking who it is needs no scope.
-	if rec := keyReq(h, "GET", "/api/users/me", tok, "", &local); rec.Code != 200 {
+	if rec := keyReq(door, "GET", "/api/users/me", tok, "", nil); rec.Code != 200 {
 		t.Fatalf("me: %d %s", rec.Code, rec.Body)
 	}
 }
@@ -219,77 +218,47 @@ func TestBadKeyIs401WithChallenge(t *testing.T) {
 	}
 }
 
-func TestBadKeysAreRateLimitedPerAddress(t *testing.T) {
-	r := newRig(t)
-	h := r.handler()
-	good, _ := r.adminKey(t, "users:read")
-	bad := "hlk_" + strings.Repeat("B", 43)
-	const evil = "203.0.113.9:5000"
-	for i := 0; i < 20; i++ {
-		if rec := keyReq(h, "GET", "/api/users", bad, evil, &local); rec.Code != 401 {
-			t.Fatalf("attempt %d: %d", i+1, rec.Code)
-		}
-	}
-	// The port doesn't matter, and now even the good key is refused from there.
-	rec := keyReq(h, "GET", "/api/users", good, "203.0.113.9:6000", &local)
-	if rec.Code != 429 {
-		t.Fatalf("good key after 20 failures: %d %s", rec.Code, rec.Body)
-	}
-	if rec.Header().Get("WWW-Authenticate") != "" {
-		t.Error("a 429 shouldn't be a 401 challenge")
-	}
-	if rec := keyReq(h, "GET", "/api/users", good, "203.0.113.10:5000", &local); rec.Code != 200 {
-		t.Fatalf("another address: %d %s", rec.Code, rec.Body)
-	}
-	// Good keys never count against an address.
-	for i := 0; i < 25; i++ {
-		if rec := keyReq(h, "GET", "/api/users/me", good, "198.51.100.1:1", &local); rec.Code != 200 {
-			t.Fatalf("good request %d: %d", i, rec.Code)
-		}
-	}
-}
-
 func TestCookiesAndHomelabHeadersAreIgnoredOnKeyRequests(t *testing.T) {
 	r := newRig(t)
 	r.people(t)
-	h := r.handler()
-	ctx := context.Background()
-	// A real session for the member.
-	raw := make([]byte, 32)
-	rand.Read(raw)
-	digest := sha256.Sum256(raw)
-	if err := r.store.PutSession(ctx, digest[:], "member", time.Now(), time.Now().Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	cookie := "homelab_session=" + base64.RawURLEncoding.EncodeToString(raw)
-
-	// The cookie is good and the key is bad: still 401, and no viewer is taken from it.
-	rec := keyReq(h, "GET", "/api/users/me", "hlk_"+strings.Repeat("C", 43), "", nil, "Cookie", cookie)
-	if rec.Code != 401 {
-		t.Fatalf("cookie + bad key: %d %s", rec.Code, rec.Body)
-	}
-	if rec := keyReq(h, "GET", "/api/users/me", "hlk_"+strings.Repeat("C", 43), "", &local, "X-Homelab-Request", "1", "X-Homelab-Person", "owner"); rec.Code != 401 {
-		t.Fatalf("headers + bad key: %d", rec.Code)
-	}
-
-	// With a good admin key, the answer is about the key and its maker, not the cookie's person.
 	tok, _ := r.adminKey(t, "users:read")
-	rec = keyReq(h, "GET", "/api/users/me", tok, "", &local, "Cookie", cookie, "X-Homelab-Person", "member")
-	var me struct {
-		Kind   string
-		Person struct{ ID string }
+	// Swap the key routes for one that records what reaches it.
+	s := newServer(r.h, Options{Version: "test", Static: testSite(), Store: r.store})
+	var got http.Header
+	var caller hub.Caller
+	var viewer core.Viewer
+	s.keyMux = http.NewServeMux()
+	s.keyMux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
+		got = req.Header.Clone()
+		caller, _ = callerFrom(req.Context())
+		viewer, _ = core.ViewerFrom(req.Context())
+		w.WriteHeader(http.StatusNoContent)
+	})
+	h := s.handler()
+
+	member := core.Viewer{Login: "mo@example.test", PersonID: "member"}
+	rec := keyReq(h, "GET", "/api/users/me", tok, "", &member,
+		"Cookie", "homelab_session=abc", "X-Homelab-Request", "1", "X-Homelab-Person", "member", "x-homelab-role", "owner", "Accept", "application/json")
+	if rec.Code != http.StatusNoContent || got == nil {
+		t.Fatalf("the key routes weren't reached: %d %s", rec.Code, rec.Body)
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &me); rec.Code != 200 || err != nil || me.Kind != "key" || me.Person.ID != "owner" {
-		t.Fatalf("me: %d %s", rec.Code, rec.Body)
-	}
-	// No bearer means the cookie works as before.
-	rec = keyReq(h, "GET", "/api/users/me", "", "", nil, "Cookie", cookie)
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"kind":"person"`) {
-		// the session cookie is honoured only when a viewer exists on the request
-		rec = keyReq(h, "GET", "/api/users/me", "", "", &core.Viewer{Local: true}, "Cookie", cookie)
-		if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"id":"member"`) {
-			t.Fatalf("cookie without a key: %d %s", rec.Code, rec.Body)
+	for name := range got {
+		if l := strings.ToLower(name); l == "cookie" || l == "authorization" || strings.HasPrefix(l, "x-homelab-") {
+			t.Errorf("header %s reached the key routes", name)
 		}
+	}
+	if got.Get("Accept") != "application/json" {
+		t.Errorf("other headers were dropped too: %v", got)
+	}
+	if caller.PersonID != "owner" || viewer.PersonID != "" || viewer.Login != "" {
+		t.Errorf("caller=%+v viewer=%+v: the request kept the listener's person", caller, viewer)
+	}
+
+	// A bad key is refused even with headers that look like a person.
+	got = nil
+	rec = keyReq(h, "GET", "/api/users/me", "hlk_"+strings.Repeat("C", 43), "", &local, "Cookie", "homelab_session=abc", "X-Homelab-Person", "owner")
+	if rec.Code != 401 || got != nil {
+		t.Fatalf("bad key: %d reached=%v", rec.Code, got != nil)
 	}
 }
 
@@ -328,14 +297,6 @@ func TestDoor(t *testing.T) {
 	if rec := keyReq(door, "GET", "/api/users?app=music", moviesTok, "", nil); rec.Code != 403 {
 		t.Fatalf("other app: %d %s", rec.Code, rec.Body)
 	}
-	rec = keyReq(door, "GET", "/api/users/stats", moviesTok, "", nil)
-	var st hub.UserStats
-	if err := json.Unmarshal(rec.Body.Bytes(), &st); rec.Code != 200 || err != nil || st.Total != 2 || len(st.Apps) != 1 || st.Apps["movies"] != 2 {
-		t.Fatalf("stats: %d %s", rec.Code, rec.Body)
-	}
-	if rec := keyReq(door, "GET", "/api/users/stats?app=music", moviesTok, "", nil); rec.Code != 403 {
-		t.Fatalf("stats other app: %d", rec.Code)
-	}
 	rec = keyReq(door, "GET", "/api/users/me", moviesTok, "", nil)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"kind":"app"`) || !strings.Contains(rec.Body.String(), `"app":"movies"`) {
 		t.Fatalf("me: %d %s", rec.Code, rec.Body)
@@ -346,13 +307,6 @@ func TestDoor(t *testing.T) {
 			t.Errorf("door %s: %d", p, rec.Code)
 		}
 	}
-	// And it is rate limited like the main handler.
-	for i := 0; i < 20; i++ {
-		keyReq(door, "GET", "/api/users", "hlk_"+strings.Repeat("E", 43), "203.0.113.50:1", nil)
-	}
-	if rec := keyReq(door, "GET", "/api/users", moviesTok, "203.0.113.50:2", nil); rec.Code != 429 {
-		t.Fatalf("door limiter: %d", rec.Code)
-	}
 }
 
 func TestManageKeys(t *testing.T) {
@@ -361,7 +315,7 @@ func TestManageKeys(t *testing.T) {
 	h := r.handler()
 	member := &core.Viewer{Login: "mo@example.test", PersonID: "member"}
 
-	body := `{"name":"photo service","scopes":["users:read","users:read","files:photos:write"]}`
+	body := `{"name":"photo service","scopes":["users:read"," users:read "]}`
 	rec := post(h, "/api/keys", body, &local)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body)
@@ -377,7 +331,7 @@ func TestManageKeys(t *testing.T) {
 		}
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &made); err != nil || !strings.HasPrefix(made.Key, "hlk_") || made.Info.ID == "" ||
-		made.Info.Name != "photo service" || made.Info.Kind != "admin" || strings.Join(made.Info.Scopes, ",") != "files:photos:write,users:read" {
+		made.Info.Name != "photo service" || made.Info.Kind != "admin" || strings.Join(made.Info.Scopes, ",") != "users:read" {
 		t.Fatalf("created: %v %s", err, rec.Body)
 	}
 	if strings.Contains(rec.Body.String(), "hash") {
@@ -400,7 +354,7 @@ func TestManageKeys(t *testing.T) {
 	}
 
 	// The key works...
-	if rec := keyReq(h, "GET", "/api/users/stats", made.Key, "", &local); rec.Code != 200 {
+	if rec := keyReq(h, "GET", "/api/users/me", made.Key, "", &local); rec.Code != 200 {
 		t.Fatalf("new key: %d %s", rec.Code, rec.Body)
 	}
 
@@ -414,7 +368,7 @@ func TestManageKeys(t *testing.T) {
 	if rec := do(h, "DELETE", "/api/keys/"+made.Info.ID, "", member, "X-Homelab-Request", "1"); rec.Code != 403 {
 		t.Fatalf("member revoke: %d", rec.Code)
 	}
-	if rec := keyReq(h, "GET", "/api/users/stats", made.Key, "", &local); rec.Code != 200 {
+	if rec := keyReq(h, "GET", "/api/users/me", made.Key, "", &local); rec.Code != 200 {
 		t.Fatalf("key after refused revoke: %d", rec.Code)
 	}
 
@@ -426,7 +380,7 @@ func TestManageKeys(t *testing.T) {
 	if rec := do(h, "DELETE", "/api/keys/"+made.Info.ID, "", &local, "X-Homelab-Request", "1"); rec.Code != 204 {
 		t.Fatalf("revoke: %d %s", rec.Code, rec.Body)
 	}
-	if rec := keyReq(h, "GET", "/api/users/stats", made.Key, "", &local); rec.Code != 401 {
+	if rec := keyReq(h, "GET", "/api/users/me", made.Key, "", &local); rec.Code != 401 {
 		t.Fatalf("revoked key: %d", rec.Code)
 	}
 	rec = do(h, "GET", "/api/keys", "", &local)
@@ -437,16 +391,16 @@ func TestManageKeys(t *testing.T) {
 		t.Fatalf("revoke twice: %d %s", rec.Code, rec.Body)
 	}
 
-	// An app's own key can't be revoked by hand.
+	// An app's own key can be revoked too (it gets a new one on its next deploy).
 	_, ak := r.appKey(t, "movies", "dev")
-	if rec := do(h, "DELETE", "/api/keys/"+ak.ID, "", &local, "X-Homelab-Request", "1"); rec.Code != 400 {
+	if rec := do(h, "DELETE", "/api/keys/"+ak.ID, "", &local, "X-Homelab-Request", "1"); rec.Code != 204 {
 		t.Fatalf("revoke app key: %d %s", rec.Code, rec.Body)
 	}
-	if k, _ := r.store.APIKeyByID(context.Background(), ak.ID); k.Revoked != nil {
-		t.Fatal("app key was revoked")
+	if k, _ := r.store.APIKeyByID(context.Background(), ak.ID); k.Revoked == nil {
+		t.Fatal("app key wasn't revoked")
 	}
 	// Bad requests are 400s with a message.
-	for _, b := range []string{`{"name":"","scopes":["users:read"]}`, `{"name":"x","scopes":[]}`, `{"name":"x","scopes":["nope"]}`, `{"name":"x","scopes":["db:ghost:read"]}`, `{"name":"x","scopes":["users:read"],"expires":"2001-01-01T00:00:00Z"}`} {
+	for _, b := range []string{`{"name":"","scopes":["users:read"]}`, `{"name":"x","scopes":[]}`, `{"name":"x","scopes":["nope"]}`, `{"name":"x","scopes":["files:photos:read"]}`, `{"name":"x","scopes":["users:read"],"expires":"2001-01-01T00:00:00Z"}`} {
 		if rec := post(h, "/api/keys", b, &local); rec.Code != 400 {
 			t.Errorf("%s: %d %s", b, rec.Code, rec.Body)
 		}

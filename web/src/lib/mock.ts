@@ -145,12 +145,12 @@ const settingStore: SettingView[] = [
 	{ name: 'TS_AUTHKEY', description: "Only if you don't set up the OAuth client: lets Homelab give apps Tailscale addresses, but not invite people or set access rules.", set: false, appliesAfterRestart: true }
 ];
 const keyStore: KeyView[] = [
-	{ id: 'k1', prefix: 'hlk_Photo', name: 'Photo service', kind: 'admin', scopes: ['users:read', 'files:photos:read', 'files:photos:write'], createdBy: 'owner', createdByName: 'Rupa', createdAt: ago(60 * 24 * 20), lastUsed: ago(12) },
-	{ id: 'k2', prefix: 'hlk_Stat', name: 'Stats dashboard', kind: 'admin', scopes: ['db:movies:read', 'data:movies:read', 'data:movies:write'], createdBy: 'owner', createdByName: 'Rupa', createdAt: ago(60 * 24 * 4), expires: new Date(Date.now() + 30 * 864e5).toISOString() }
+	{ id: 'k1', prefix: 'hlk_Photo', name: 'Photo service', kind: 'admin', scopes: ['users:read'], createdBy: 'owner', createdByName: 'Rupa', createdAt: ago(60 * 24 * 20), lastUsed: ago(12) },
+	{ id: 'k2', prefix: 'hlk_Stat', name: 'Stats dashboard', kind: 'admin', scopes: ['users:read'], createdBy: 'owner', createdByName: 'Rupa', createdAt: ago(60 * 24 * 4), expires: new Date(Date.now() + 30 * 864e5).toISOString() }
 ];
 const appKeys: KeyView[] = [
-	{ id: 'a1', prefix: 'hlk_MvPr', name: 'movies prod', kind: 'app', app: 'movie-night', env: 'prod', scopes: [], createdAt: ago(60 * 24 * 30), lastUsed: ago(3) },
-	{ id: 'a2', prefix: 'hlk_MvDv', name: 'movies dev', kind: 'app', app: 'movie-night', env: 'dev', scopes: [], createdAt: ago(60 * 24 * 30) }
+	{ id: 'a1', prefix: 'hlk_MvPr', name: 'movies prod', kind: 'app', app: 'movie-night', env: 'prod', scopes: ['users:read'], createdAt: ago(60 * 24 * 30), lastUsed: ago(3) },
+	{ id: 'a2', prefix: 'hlk_MvDv', name: 'movies dev', kind: 'app', app: 'movie-night', env: 'dev', scopes: ['users:read'], createdAt: ago(60 * 24 * 30) }
 ];
 const household: PersonView[] = [
 	{ id: 'owner', name: 'Rupa', email: 'rupa@example.test', status: 'signed_in', roles: ['owner', 'admin'], grants: {}, tailscaleLogin: 'rupa@example.test', connectedAt: ago(60 * 24 * 3) },

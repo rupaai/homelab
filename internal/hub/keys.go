@@ -4,11 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -25,8 +24,12 @@ import (
 //     HOMELAB_TOKEN. They only work on the app door (see cmd/homelabd) and act for that
 //     app environment only.
 //   - admin keys: made by an admin in the companion for a server outside Homelab. They
-//     only work on the companion's own addresses (Tailscale, or this computer), and stop
-//     working when the person who made one is no longer an admin.
+//     work wherever the companion is reached (this computer, the home network, Tailscale),
+//     never on the app door, and stop working when the person who made one is no longer
+//     an admin.
+//
+// Each later service adds its own scope. An app key acts for its own app and environment
+// (Caller.App and Caller.Env); services decide what that allows, not scope strings.
 const (
 	KeyKindApp   = "app"
 	KeyKindAdmin = "admin"
@@ -55,10 +58,6 @@ const (
 	ScopeUsersRead = "users:read"
 )
 
-var (
-	scopeNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
-)
-
 // Caller is who is calling with an API key.
 type Caller struct {
 	KeyID    string
@@ -79,42 +78,18 @@ func (c Caller) Label() string {
 
 // Allows says whether the caller has a scope. A write scope includes reading.
 func (c Caller) Allows(scope string) bool {
-	for _, s := range c.Scopes {
-		if s == scope {
-			return true
-		}
-		if strings.HasSuffix(scope, ":read") && s == strings.TrimSuffix(scope, ":read")+":write" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(c.Scopes, scope)
 }
 
-// checkScope validates one scope an admin asked for: users:read, or
-// files|db|data:<name>:read|write. db and data name an app that must exist.
-func (h *Hub) checkScope(ctx context.Context, s string) error {
-	if s == ScopeUsersRead {
-		return nil
+// checkScope validates one scope an admin asked for. Only users:read exists so far.
+func checkScope(s string) error {
+	if s != ScopeUsersRead {
+		return userErr("%q isn't a scope Homelab knows. The only one so far is users:read.", s)
 	}
-	parts := strings.Split(s, ":")
-	if len(parts) != 3 || (parts[2] != "read" && parts[2] != "write") || !scopeNameRe.MatchString(parts[1]) {
-		return userErr("%q isn't a scope Homelab knows. Use users:read, or files, db or data with a name and read or write, for example files:photos:write.", s)
-	}
-	switch parts[0] {
-	case "files":
-		return nil
-	case "db", "data":
-		if _, err := h.store.App(ctx, parts[1]); err != nil {
-			return userErr("Scope %q: there's no app %q.", s, parts[1])
-		}
-		return nil
-	}
-	return userErr("%q isn't a scope Homelab knows. Use users:read, or files, db or data with a name and read or write, for example files:photos:write.", s)
+	return nil
 }
 
-func appKeyScopes(app string) []string {
-	return []string{ScopeUsersRead, "db:" + app + ":write", "data:" + app + ":write"}
-}
+func appKeyScopes() []string { return []string{ScopeUsersRead} }
 
 func hashKey(token string) []byte {
 	d := sha256.Sum256([]byte(token))
@@ -167,7 +142,7 @@ func (h *Hub) CreateAdminKey(ctx context.Context, name string, scopes []string, 
 	var clean []string
 	for _, s := range scopes {
 		s = strings.TrimSpace(s)
-		if err := h.checkScope(ctx, s); err != nil {
+		if err := checkScope(s); err != nil {
 			return "", state.APIKey{}, err
 		}
 		if !seen[s] {
@@ -222,18 +197,22 @@ func (h *Hub) APIKeys(ctx context.Context) (map[string][]KeyView, error) {
 	return out, nil
 }
 
-// RevokeKey stops an admin key working. App keys belong to their app and are replaced
-// with it; they can't be revoked by hand.
+// RevokeKey stops a key working. An app's own key is replaced with a new one the next time
+// that environment is deployed (Deploy again to get it at once).
 func (h *Hub) RevokeKey(ctx context.Context, id string, by core.Viewer) error {
 	k, err := h.store.APIKeyByID(ctx, id)
-	if err != nil || k.Kind != KeyKindAdmin || k.Revoked != nil {
+	if err != nil || k.Revoked != nil {
 		return userErr("There's no API key %q.", id)
 	}
 	if err := h.store.RevokeAPIKey(ctx, id); err != nil {
 		return err
 	}
 	h.forgetKey(id)
-	h.logEvent(ctx, state.Event{Actor: by.Label(), Action: "key.revoked", Detail: fmt.Sprintf("Revoked the API key %q", k.Name)})
+	detail := fmt.Sprintf("Revoked the API key %q", k.Name)
+	if k.Kind == KeyKindApp {
+		detail += ". The app gets a new one when it's deployed again"
+	}
+	h.logEvent(ctx, state.Event{Actor: by.Label(), App: k.App, Env: k.Env, Action: "key.revoked", Detail: detail})
 	return nil
 }
 
@@ -262,7 +241,7 @@ func (h *Hub) appKey(ctx context.Context, app, env string) (string, error) {
 		return "", fmt.Errorf("save the app's API key: %w", err)
 	}
 	k := state.APIKey{ID: id, Hash: hashKey(token), Prefix: keyPrefixOf(token), Name: app + " " + env, Kind: KeyKindApp,
-		App: app, Env: env, Scopes: appKeyScopes(app), CreatedAt: h.cfg.Now()}
+		App: app, Env: env, Scopes: appKeyScopes(), CreatedAt: h.cfg.Now()}
 	if err := h.store.PutAPIKey(ctx, k); err != nil {
 		return "", err
 	}
@@ -288,8 +267,7 @@ func (h *Hub) Authenticate(ctx context.Context, token string) (Caller, error) {
 		}
 		return Caller{}, ErrBadKey
 	}
-	// The lookup is by hash already; this keeps the comparison constant-time anyway.
-	if subtle.ConstantTimeCompare(k.Hash, hash) != 1 || k.Revoked != nil {
+	if k.Revoked != nil {
 		return Caller{}, ErrBadKey
 	}
 	now := h.cfg.Now()
@@ -304,9 +282,7 @@ func (h *Hub) Authenticate(ctx context.Context, token string) (Caller, error) {
 			return Caller{}, ErrBadKey
 		}
 	case KeyKindApp:
-		if _, err := h.store.App(ctx, k.App); err != nil {
-			return Caller{}, ErrBadKey
-		}
+		// Removing an app deletes its keys (ON DELETE CASCADE).
 	default:
 		return Caller{}, ErrBadKey
 	}
@@ -419,64 +395,6 @@ func (h *Hub) Users(ctx context.Context, app string) ([]UserView, error) {
 		out = append(out, userView(p, app))
 	}
 	return out, nil
-}
-
-// UserStats counts people. With app set, only the people with access to that app count.
-type UserStats struct {
-	Total    int            `json:"total"`
-	ByRole   map[string]int `json:"by_role"`
-	Active7d int            `json:"active_7d"`
-	Apps     map[string]int `json:"apps"` // people with access, per app
-}
-
-// Stats counts people, for everyone or for one app.
-func (h *Hub) Stats(ctx context.Context, app string) (UserStats, error) {
-	if app != "" {
-		if _, err := h.store.App(ctx, app); err != nil {
-			return UserStats{}, userErr("There's no app %q.", app)
-		}
-	}
-	people, err := h.store.People(ctx)
-	if err != nil {
-		return UserStats{}, err
-	}
-	apps := []string{app}
-	if app == "" {
-		list, err := h.store.Apps(ctx)
-		if err != nil {
-			return UserStats{}, err
-		}
-		apps = apps[:0]
-		for _, a := range list {
-			apps = append(apps, a.ID)
-		}
-	}
-	active, err := h.store.ActivePeople(ctx, h.cfg.Now().Add(-7*24*time.Hour))
-	if err != nil {
-		return UserStats{}, err
-	}
-	st := UserStats{ByRole: map[string]int{}, Apps: map[string]int{}}
-	for _, a := range apps {
-		st.Apps[a] = 0
-	}
-	for _, p := range people {
-		if app != "" && appAccess(p, app) == "" {
-			continue
-		}
-		st.Total++
-		for _, r := range p.Roles {
-			st.ByRole[r]++
-		}
-		if active[p.ID] {
-			st.Active7d++
-		}
-		for _, a := range apps {
-			if appAccess(p, a) != "" {
-				st.Apps[a]++
-			}
-		}
-	}
-	return st, nil
 }
 
 // reservedSecret says whether a secret name is Homelab's own (HOMELAB_*).
