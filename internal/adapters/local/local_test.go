@@ -120,3 +120,30 @@ func TestListenFailureReported(t *testing.T) {
 		t.Fatalf("%+v", h)
 	}
 }
+
+func TestTwoTakenPortsAreSkipped(t *testing.T) {
+	skipIfBusy(t, testBase+10, testBase+11, testBase+12)
+	var held []net.Listener
+	for _, p := range []int{testBase + 10, testBase + 11} {
+		ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(p))
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, ln)
+	}
+	defer func() {
+		for _, ln := range held {
+			ln.Close()
+		}
+	}()
+	a, err := New(Options{BasePort: testBase + 10, CompanionPort: testCompanion + 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	a.Ensure(context.Background(), "movies", http.NotFoundHandler())
+	got := a.Observe()["movies"]
+	if got.Error != "" || got.URL == "" {
+		t.Fatalf("a new address should skip both taken ports: %+v", got)
+	}
+}

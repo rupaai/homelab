@@ -41,7 +41,7 @@ type oidcDiscovery struct {
 }
 
 func (s *server) authStart(w http.ResponseWriter, r *http.Request) {
-	if !loopbackHost(r.Host) {
+	if !onThisComputer(r) {
 		http.Error(w, "Open Homelab at http://localhost:7080 on this computer.", http.StatusForbidden)
 		return
 	}
@@ -85,7 +85,7 @@ func (s *server) authStart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) authCallback(w http.ResponseWriter, r *http.Request) {
-	if !loopbackHost(r.Host) {
+	if !onThisComputer(r) {
 		http.Error(w, "Open Homelab on this computer.", http.StatusForbidden)
 		return
 	}
@@ -152,14 +152,24 @@ func (s *server) authCallback(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.RevokeInvites(r.Context(), p.ID); err != nil {
 		s.log.Error("revoke accepted invites failed", "err", err)
 	}
-	if err := s.issueSession(w, r, p.ID); err != nil {
+	_ = s.store.Log(r.Context(), stateEvent(p.Email, "person.signed_in", "Signed in with a passkey"))
+	returnTo = sanitizeReturn(returnTo)
+	// An app asked for this sign-in: hand the person straight to the app. The browser has no
+	// companion session to show on a normal page load, and the app doesn't need one.
+	if strings.HasPrefix(returnTo, "/auth/app?") {
+		if u, err := url.Parse(returnTo); err == nil {
+			s.appHandoff(w, r, p.ID, u.Query())
+			return
+		}
+	}
+	sessionToken, err := s.issueSession(r.Context(), p.ID)
+	if err != nil {
 		s.log.Error("create session failed", "err", err)
 		http.Error(w, msgInternal, http.StatusInternalServerError)
 		return
 	}
-	_ = s.store.Log(r.Context(), stateEvent(p.Email, "person.signed_in", "Signed in with a passkey"))
-	returnTo = sanitizeReturn(returnTo)
-	http.Redirect(w, r, returnTo, http.StatusSeeOther)
+	// Only the fragment carries the token: browsers never send it to any server.
+	http.Redirect(w, r, returnTo+sessionFragment+sessionToken, http.StatusSeeOther)
 }
 
 func (s *server) discover(ctx context.Context, issuer string) (oidcDiscovery, error) {
@@ -207,18 +217,37 @@ func randomURLToken(n int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-func (s *server) issueSession(w http.ResponseWriter, r *http.Request, personID string) error {
+// Companion sessions are random tokens the companion keeps in its own localStorage and sends
+// as "Authorization: Bearer". They are never cookies: a cookie would also reach every other
+// port on this host, such as the apps' own published ports. sessionPrefix tells them apart
+// from API keys.
+const (
+	sessionPrefix   = "hls_"
+	sessionFragment = "#session="
+)
+
+// issueSession stores a new 30-day session and returns its token.
+func (s *server) issueSession(ctx context.Context, personID string) (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
-		return err
+		return "", err
 	}
 	now := time.Now()
 	digest := sha256.Sum256(raw)
-	if err := s.store.PutSession(r.Context(), digest[:], personID, now, now.Add(30*24*time.Hour)); err != nil {
-		return err
+	if err := s.store.PutSession(ctx, digest[:], personID, now, now.Add(30*24*time.Hour)); err != nil {
+		return "", err
 	}
-	http.SetCookie(w, &http.Cookie{Name: "homelab_session", Value: base64.RawURLEncoding.EncodeToString(raw), Path: "/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode, MaxAge: 30 * 24 * 60 * 60})
-	return nil
+	return sessionPrefix + base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+// sessionDigest returns the stored hash of a session token.
+func sessionDigest(token string) ([]byte, bool) {
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(token, sessionPrefix))
+	if err != nil || len(raw) != 32 || !strings.HasPrefix(token, sessionPrefix) {
+		return nil, false
+	}
+	digest := sha256.Sum256(raw)
+	return digest[:], true
 }
 
 func stateEvent(actor, action, detail string) state.Event {

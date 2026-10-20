@@ -93,3 +93,33 @@ func TestDevice(t *testing.T) {
 		t.Errorf("totals should be above zero: %+v", u)
 	}
 }
+
+func TestAppsReadsOnlyHomelabContainers(t *testing.T) {
+	var calls [][]string
+	r := New(Options{Runner: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		calls = append(calls, args)
+		if args[0] == "ps" {
+			return []byte(psOut), nil
+		}
+		return []byte(statsOut), nil
+	}})
+	if _, err := r.Apps(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ps, stats := strings.Join(calls[0], " "), calls[1]
+	if !strings.Contains(ps, "--filter label=homelab.app") {
+		t.Errorf("ps isn't limited to Homelab's containers: %s", ps)
+	}
+	if len(stats) != 4+3 || strings.Contains(strings.Join(stats, " "), "unrelated") {
+		t.Errorf("stats args = %v", stats)
+	}
+	// Nothing running: stats is not called at all.
+	calls = nil
+	r = New(Options{Runner: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		calls = append(calls, args)
+		return nil, nil
+	}})
+	if got, err := r.Apps(context.Background()); err != nil || len(got) != 0 || len(calls) != 1 {
+		t.Errorf("empty: %v %v %d calls", got, err, len(calls))
+	}
+}

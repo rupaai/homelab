@@ -1,5 +1,5 @@
 // Package fake has in-memory adapters for tests: every contract in package core, with no
-// Docker, GitHub or Tailscale needed.
+// Docker or GitHub needed.
 package fake
 
 import (
@@ -139,12 +139,13 @@ func (r *Registry) PullAuth(context.Context, string) (core.RegistryAuth, error) 
 // Deployer is a fake container runtime. Running environments are kept in memory, and an
 // optional Serve hook lets tests stand a real HTTP server up on the host port.
 type Deployer struct {
-	mu      sync.Mutex
-	Envs    map[string]core.Running // "app/env"
-	Specs   map[string]core.EnvSpec
-	FailFor map[string]error // digest -> error from Deploy
-	Calls   []string
-	LogTail string // added to every Logs answer
+	mu       sync.Mutex
+	Envs     map[string]core.Running // "app/env"
+	Specs    map[string]core.EnvSpec
+	FailFor  map[string]error // digest -> error from Deploy
+	Calls    []string
+	LogTail  string // added to every Logs answer
+	FilesErr error  // what CheckFiles returns
 }
 
 func NewDeployer() *Deployer {
@@ -183,6 +184,30 @@ func (d *Deployer) Stop(_ context.Context, app, env string) error {
 	return nil
 }
 
+// StopApp stops the app's container; the fake has no separate services, so the
+// environment is stopped the same way as by Stop.
+func (d *Deployer) StopApp(_ context.Context, app, env string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.Calls = append(d.Calls, "stop-app "+app+"/"+env)
+	k := app + "/" + env
+	if r, ok := d.Envs[k]; ok {
+		r.State = core.StateExited
+		d.Envs[k] = r
+	}
+	return nil
+}
+
+// RemoveOldImages records the call as "remove-old-images <image> keep=<digests>".
+func (d *Deployer) RemoveOldImages(_ context.Context, image string, keep []string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	sorted := append([]string(nil), keep...)
+	sort.Strings(sorted)
+	d.Calls = append(d.Calls, "remove-old-images "+image+" keep="+strings.Join(sorted, ","))
+	return nil
+}
+
 // Wipe forgets every container, as if the computer had been reset.
 func (d *Deployer) Wipe() {
 	d.mu.Lock()
@@ -196,6 +221,16 @@ func (d *Deployer) SetState(app, env, state, detail string) {
 	defer d.mu.Unlock()
 	r := d.Envs[app+"/"+env]
 	r.State, r.Detail = state, detail
+	d.Envs[app+"/"+env] = r
+}
+
+// SetServiceDown makes Observe report that a service next to the app stopped. The app's own
+// state stays as it is.
+func (d *Deployer) SetServiceDown(app, env, detail string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	r := d.Envs[app+"/"+env]
+	r.Incomplete, r.Detail = true, detail
 	d.Envs[app+"/"+env] = r
 }
 
@@ -243,7 +278,7 @@ func (a *Addresses) Observe() map[string]core.Address {
 	defer a.mu.Unlock()
 	out := map[string]core.Address{}
 	for n := range a.Handlers {
-		out[n] = core.Address{Name: n, URL: "https://" + n + ".example.ts.net", Ready: true}
+		out[n] = core.Address{Name: n, URL: "https://" + n + ".example.test", Ready: true}
 	}
 	return out
 }
@@ -376,6 +411,11 @@ func (s *Secrets) Platform(name string) (string, bool) {
 	defer s.mu.Unlock()
 	v, ok := s.PlatformValues[name]
 	return v, ok
+}
+
+func (s *Secrets) LoadPlatform(name string) (string, error) {
+	v, _ := s.Platform(name)
+	return v, nil
 }
 
 // Compile-time checks that the fakes satisfy the contracts.

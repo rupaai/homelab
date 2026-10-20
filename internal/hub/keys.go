@@ -24,7 +24,7 @@ import (
 //     HOMELAB_TOKEN. They only work on the app door (see cmd/homelabd) and act for that
 //     app environment only.
 //   - admin keys: made by an admin in the companion for a server outside Homelab. They
-//     work wherever the companion is reached (this computer, the home network, Tailscale),
+//     work wherever the companion is reached (this computer or the home network),
 //     never on the app door, and stop working when the person who made one is no longer
 //     an admin.
 //

@@ -135,6 +135,9 @@ type Running struct {
 	State     string    `json:"state"`
 	StartedAt time.Time `json:"startedAt"`
 	Detail    string    `json:"detail"` // e.g. "exited with code 1"
+	// Incomplete is set when a service next to the app stopped or never started. State is
+	// still the app's, so health and alerts follow the app; only the reconciler looks at this.
+	Incomplete bool `json:"incomplete,omitempty"`
 }
 
 // Address is one name served by the Addresses adapter.
@@ -167,7 +170,6 @@ type Viewer struct {
 	Name     string // display name
 	Local    bool   // connected from this machine (127.0.0.1)
 	Network  bool   // came over the plain network (addresses: ip); signs in with the password
-	Tagged   bool   // a tagged Tailscale node (a server, not a person)
 	PersonID string
 }
 
@@ -181,11 +183,6 @@ type Person struct {
 	Roles      []string          `json:"roles"`
 	Grants     map[string]string `json:"grants"`
 	LastSignIn *time.Time        `json:"lastSignIn,omitempty"`
-	// Remote access (milestone 4).
-	TailscaleLogin  string     `json:"tailscaleLogin,omitempty"`
-	RemoteInviteID  string     `json:"-"`
-	RemoteInviteURL string     `json:"remoteInviteUrl,omitempty"`
-	ConnectedAt     *time.Time `json:"connectedAt,omitempty"`
 }
 
 // IdentityUser is a person observed at the configured identity provider.
@@ -225,50 +222,6 @@ func ViewerFrom(ctx context.Context) (Viewer, bool) {
 
 // Actor for things Homelab does by itself.
 const ActorHomelab = "homelab"
-
-// RemoteInvite is a pending invitation to join the tailnet.
-type RemoteInvite struct {
-	ID  string `json:"id"`
-	URL string `json:"url"`
-}
-
-// AccessPolicy is the tailnet's rules, in Homelab's terms. Groups map a group name (without
-// the "group:" prefix) to logins; Grants say which groups reach which tags.
-type AccessPolicy struct {
-	Groups    map[string][]string `json:"groups"`
-	TagOwners []string            `json:"tagOwners"` // every tag Homelab uses
-	Grants    []AccessGrant       `json:"grants"`
-}
-
-// AccessGrant lets the members of Groups reach every node carrying one of Tags.
-type AccessGrant struct {
-	Groups []string `json:"groups"`
-	Tags   []string `json:"tags"`
-}
-
-// RemoteState is what the tailnet looks like now.
-type RemoteState struct {
-	Users   []RemoteUser   `json:"users"`
-	Devices []RemoteDevice `json:"devices"`
-	Invites []RemoteInvite `json:"invites"`
-}
-
-// RemoteUser is a person on the tailnet.
-type RemoteUser struct {
-	ID    string `json:"id"`
-	Login string `json:"login"`
-	Name  string `json:"name"`
-}
-
-// RemoteDevice is one device on the tailnet.
-type RemoteDevice struct {
-	ID       string     `json:"id"`
-	Name     string     `json:"name"`
-	Login    string     `json:"login"` // owner; empty for tagged devices
-	Tags     []string   `json:"tags"`
-	LastSeen *time.Time `json:"lastSeen,omitempty"`
-	Online   bool       `json:"online"`
-}
 
 // ErrGone means a push subscription no longer exists at the push service.
 var ErrGone = errors.New("push subscription is gone")

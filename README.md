@@ -2,20 +2,19 @@
 
 A self-hosted home platform: push code, see it running in dev, promote the exact same
 build to prod, and roll back with a tap. One program, `homelabd`, keeps the desired state
-in SQLite and a reconciler makes Docker, GitHub and Tailscale match it.
+in SQLite and a reconciler makes Docker and GitHub match it.
 
 Milestones so far: 1, the deploy loop on a Mac ([docs/milestone1.md](docs/milestone1.md)), and
 2, apps with no setup: encrypted secrets set in the companion, auto-promote with automatic
 rollback, signed identity headers and a mirror of every app's code
 ([docs/milestone2.md](docs/milestone2.md)); 3, people and sign-in
-([docs/milestone3.md](docs/milestone3.md)); 4, access from anywhere
-([docs/milestone4.md](docs/milestone4.md)); 5, know what's happening
+([docs/milestone3.md](docs/milestone3.md)); 4, access from anywhere (removed; [docs/milestone4.md](docs/milestone4.md)); 5, know what's happening
 ([docs/milestone5.md](docs/milestone5.md)); and 6, running on a Linux device at home with
 self-update ([docs/milestone6.md](docs/milestone6.md)).
 
 ## Build
 
-Needs Go 1.27+, Node 22+ and Docker (OrbStack on the Mac).
+Needs Go 1.27+, Node 22+ and Docker (OrbStack on a Mac, which is only for developing Homelab).
 
 ```sh
 make build          # bin/homelabd, with the companion web app inside
@@ -26,9 +25,8 @@ make test-docker    # end-to-end test of the Docker adapter (needs Docker runnin
 ## Run
 
 ```sh
-bin/homelabd init                 # creates ~/.homelab with config.yaml and secrets/
+mkdir -p ~/.homelab && touch ~/.homelab/config.yaml   # an empty config means addresses: local
 bin/homelabd run                  # companion at http://localhost:7080
-bin/homelabd service install      # optional: start at login (prints one launchctl command)
 ```
 
 The companion starts at `http://localhost:7080`. On first run it asks you to create the
@@ -44,9 +42,11 @@ start and renamed to `*.imported`.
 ## On a Linux device
 
 Every merge to `main` publishes a release with `homelabd-linux-amd64`. Copy it to the device
-and run `sudo ./homelabd-linux-amd64 setup` (add `--import FILE` to bring a Mac's Homelab,
-made with `homelabd export`). After that it updates itself from the companion's Resources
-screen. See [docs/milestone6.md](docs/milestone6.md).
+and run `sudo ./homelabd-linux-amd64 setup`. It writes `addresses: ip`, so other devices open
+`http://<the device's IP>:7080` and sign in with the password you set with
+`sudo -u homelab /var/lib/homelab/bin/homelabd password --home /var/lib/homelab`. After that it
+updates itself from the companion's Resources screen. Setup refuses an older program unless you
+add `--force`. See [docs/milestone6.md](docs/milestone6.md).
 
 ## Adding an app
 

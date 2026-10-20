@@ -43,7 +43,6 @@ type Config struct {
 	WatchFor       time.Duration     // how long prod is watched after a promote (C7); default 10m
 	MirrorEvery    time.Duration     // how often repos are mirrored (G2); default 10m
 	SmokeTimeout   time.Duration     // longest a smoke test may run; default 5m
-	Owners         []string          // Tailscale logins of the owners, from config.yaml
 	Identity       *identity.Signer  // signs the identity headers apps get (A2); nil sends none
 	PushPublicKey  string            // VAPID public key browsers subscribe with (O4)
 	AppAPIURL      string            // where apps reach the Homelab API (the app door), e.g. http://host.docker.internal:7085
@@ -66,12 +65,11 @@ type Adapters struct {
 	Mirror    core.Mirror      // may be nil: no mirrors
 	Identity  core.Identity
 	Email     core.Email
-	Remote    core.RemoteAccess // may be nil: local addresses, nobody joins from elsewhere
-	Notifier  core.Notifier     // may be nil: no push notifications
-	Resources core.Resources    // may be nil: no resource view or disk alert
-	System    core.System       // may be nil: no device card (milestone 6)
-	Updater   core.Updater      // may be nil: Homelab doesn't update itself (milestone 6)
-	Services  core.Services     // may be nil: no files, databases or data (platform services)
+	Notifier  core.Notifier  // may be nil: no push notifications
+	Resources core.Resources // may be nil: no resource view or disk alert
+	System    core.System    // may be nil: no device card (milestone 6)
+	Updater   core.Updater   // may be nil: Homelab doesn't update itself (milestone 6)
+	Services  core.Services  // may be nil: no files, databases or data (platform services)
 }
 
 // Hub is the core. Create it with New and run it with Run.
@@ -93,11 +91,8 @@ type Hub struct {
 	smoked    map[string]string     // app -> dev commit whose smoke test passed
 	autoNote  map[string]autoState  // app -> what auto-promote is doing, for people
 
-	remotePolicy     string    // the tailnet rules last sent
-	remotePolicyAt   time.Time // when they were sent
-	remoteObservedAt time.Time // when the tailnet was last looked at
-	diskCheckedAt    time.Time // when the disk was last checked for the full-disk alert
-	kick             chan struct{}
+	diskCheckedAt time.Time // when the disk was last checked for the full-disk alert
+	kick          chan struct{}
 
 	keyMu      sync.Mutex
 	keyTouched map[string]time.Time // key id -> last "last used" written
@@ -278,7 +273,6 @@ func (h *Hub) dataDir(app, env string) string {
 // Reconcile makes every environment match its desired state, once.
 func (h *Hub) Reconcile(ctx context.Context) {
 	h.reconcilePeople(ctx)
-	h.reconcileRemote(ctx)
 	apps, err := h.store.Apps(ctx)
 	if err != nil {
 		h.log.Error("reconcile: read state", "err", err)
@@ -289,10 +283,6 @@ func (h *Hub) Reconcile(ctx context.Context) {
 		h.log.Error("reconcile: observe", "err", err)
 		return
 	}
-	byKey := map[envKey]core.Running{}
-	for _, r := range running {
-		byKey[envKey{r.App, r.Env}] = r
-	}
 	known := map[string]bool{}
 	for _, a := range apps {
 		known[a.ID] = true
@@ -300,23 +290,54 @@ func (h *Hub) Reconcile(ctx context.Context) {
 		if !lock.TryLock() {
 			continue // an action is working on this app; it reconciles it itself
 		}
+		// Look only now, with the lock held: an earlier look may predate an action's end.
+		envs, err := h.observeApp(ctx, a.ID)
+		if err != nil {
+			lock.Unlock()
+			h.log.Error("reconcile: observe", "err", err)
+			continue
+		}
 		for _, env := range []string{core.Dev, core.Prod} {
-			var r *core.Running
-			if x, ok := byKey[envKey{a.ID, env}]; ok {
-				r = &x
-			}
-			h.reconcileEnv(ctx, a, env, r)
+			h.reconcileEnv(ctx, a, env, envs[env])
 		}
 		lock.Unlock()
 	}
 	// Environments of apps that are no longer registered: stop them, keep their data.
-	for k := range byKey {
-		if !known[k.app] {
-			if err := h.ad.Deployer.Stop(ctx, k.app, k.env); err == nil {
-				h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: k.app, Env: k.env, Action: "env.stopped", Detail: "Stopped, because the app isn't registered any more"})
+	for i := range running {
+		r := &running[i]
+		if !known[r.App] {
+			if stopped, _ := h.stopIfRunning(ctx, r.App, r.Env, r); stopped {
+				h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: r.App, Env: r.Env, Action: "env.stopped", Detail: "Stopped, because the app isn't registered any more"})
 			}
 		}
 	}
+}
+
+// observeApp reports what runs for one app, by environment.
+func (h *Hub) observeApp(ctx context.Context, app string) (map[string]*core.Running, error) {
+	running, err := h.ad.Deployer.Observe(ctx)
+	if err != nil {
+		return nil, err
+	}
+	envs := map[string]*core.Running{}
+	for i := range running {
+		if running[i].App == app {
+			envs[running[i].Env] = &running[i]
+		}
+	}
+	return envs, nil
+}
+
+// stopIfRunning stops an environment's containers unless they are known to be stopped
+// already (r is what was observed, or nil if unknown). It says whether it stopped them.
+func (h *Hub) stopIfRunning(ctx context.Context, app, env string, r *core.Running) (bool, error) {
+	if r != nil && r.State == core.StateExited {
+		return false, nil
+	}
+	if err := h.ad.Deployer.Stop(ctx, app, env); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (h *Hub) reconcilePeople(ctx context.Context) {
@@ -340,9 +361,16 @@ func (h *Hub) reconcilePeople(ctx context.Context) {
 	for _, person := range people {
 		want := personGroups(person)
 		user, found := byID[providerID(person)]
-		if !found || !identityMatches(user, person, want) {
-			h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, Action: "person.identity_changed", Detail: "Restored sign-in account settings for " + person.Name})
+		if found && identityMatches(user, person, want) {
+			// Nothing to restore: don't call the sign-in service.
+			if user.ID != person.IdentityID {
+				if err := h.store.RecordIdentityID(ctx, person.ID, user.ID); err != nil {
+					h.log.Warn("people reconcile: save sign-in account id", "person", person.ID, "err", err)
+				}
+			}
+			continue
 		}
+		h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, Action: "person.identity_changed", Detail: "Restored sign-in account settings for " + person.Name})
 		identityID, err := h.ad.Identity.Ensure(ctx, person, want)
 		if err != nil {
 			h.log.Warn("people reconcile: update sign-in account", "person", person.ID, "err", err)
@@ -388,12 +416,12 @@ func (h *Hub) reconcileEnv(ctx context.Context, a state.App, env string, r *core
 	name := manifest.AddressName(a.ID, env)
 	if e.Want == nil {
 		if r != nil {
-			_ = h.ad.Deployer.Stop(ctx, a.ID, env)
+			_, _ = h.stopIfRunning(ctx, a.ID, env, r)
 		}
 		h.removeAddress(ctx, name)
 		return
 	}
-	needsDeploy := r == nil || r.Digest != e.Want.Digest || r.State == core.StateExited
+	needsDeploy := r == nil || r.Digest != e.Want.Digest || r.State == core.StateExited || r.Incomplete
 	if needsDeploy {
 		h.mu.Lock()
 		s := h.st(a.ID, env)
@@ -403,6 +431,8 @@ func (h *Hub) reconcileEnv(ctx context.Context, a state.App, env string, r *core
 			why := "it wasn't running"
 			if r != nil && r.Digest != e.Want.Digest {
 				why = "a different version was running"
+			} else if r != nil && r.State != core.StateExited {
+				why = r.Detail // a service next to the app had stopped
 			} else if r != nil {
 				why = "it had stopped"
 			}
@@ -412,6 +442,12 @@ func (h *Hub) reconcileEnv(ctx context.Context, a state.App, env string, r *core
 				h.deployFailed(ctx, a.ID, env, err, true)
 			} else {
 				h.deployOK(a.ID, env)
+				if r != nil && r.Digest == e.Want.Digest {
+					// A restart: if it stops again right away, wait a minute before the next one.
+					h.mu.Lock()
+					h.st(a.ID, env).nextAttempt = h.cfg.Now().Add(time.Minute)
+					h.mu.Unlock()
+				}
 				h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: a.ID, Env: env, Action: "deploy.done", Detail: e.Want.Short() + " is running"})
 			}
 		}
@@ -511,7 +547,16 @@ func (h *Hub) mounts(app, env string, data, folders []manifest.Data) ([]core.Mou
 		mounts = append(mounts, core.Mount{HostPath: dir, ContainerPath: d.Path})
 	}
 	for _, f := range folders {
-		dir, ok := h.cfg.Folders[f.Name]
+		// Prod gets the device's folder; dev gets "<name>-dev" if the device has one, and
+		// otherwise none, so dev can't change prod's files.
+		name := f.Name
+		if env != core.Prod {
+			name += "-" + env
+		}
+		dir, ok := h.cfg.Folders[name]
+		if !ok && env != core.Prod {
+			continue
+		}
 		if !ok {
 			return nil, fmt.Errorf("it needs the shared folder %q; add it to config.yaml under folders:, e.g. \"folders: {%s: /mnt/storage}\", and restart Homelab", f.Name, f.Name)
 		}
@@ -610,7 +655,7 @@ func (h *Hub) appProxy(port int, app, appName, env string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if h.cfg.OpenApps {
 			// addresses: ip: the app is open to whoever reaches its port, and gets no person.
-			// The companion's cookies reach this port too (same host), so they are dropped.
+			// Homelab's own cookies reach this port too (same host), so they are dropped.
 			h.serveAs(w, r, core.Person{}, serve)
 			return
 		}
@@ -618,33 +663,13 @@ func (h *Hub) appProxy(port int, app, appName, env string) http.Handler {
 			h.appCallback(w, r, app, env)
 			return
 		}
-		if v, _ := core.ViewerFrom(r.Context()); !v.Local {
-			// Over the tailnet the login is the sign-in; there is no localhost to send them to.
-			person, ok := h.TailnetPerson(r.Context(), v)
-			if !ok {
-				h.proxyNotInvited(w)
-				return
-			}
-			if !Can(person, ActionApps, app) || (env == core.Dev && !Can(person, ActionProjects, app)) {
-				h.proxyForbidden(w)
-				return
-			}
-			h.serveAs(w, r, person, serve)
-			return
-		}
 		person, ok := h.appSessionPerson(r, app, env)
 		if !ok {
-			if companion, signed := h.personFromRequest(r); signed && (!Can(companion, ActionApps, app) || (env == core.Dev && !Can(companion, ActionProjects, app))) {
-				h.proxyForbidden(w)
-				return
-			}
+			// The companion's sign-in is not visible on this port. Send the person through the
+			// companion, which checks the app grant and hands them back with a code.
 			returnURL := "http://" + r.Host + r.URL.RequestURI()
 			query := url.Values{"app": {app}, "env": {env}, "return": {returnURL}}
-			if _, signed := h.personFromRequest(r); signed {
-				http.Redirect(w, r, "http://localhost:7080/auth/app?"+query.Encode(), http.StatusSeeOther)
-			} else {
-				http.Redirect(w, r, "http://localhost:7080/auth/start?return="+url.QueryEscape("/auth/app?"+query.Encode()), http.StatusSeeOther)
-			}
+			http.Redirect(w, r, "http://localhost:7080/auth/app?"+query.Encode(), http.StatusSeeOther)
 			return
 		}
 		if !Can(person, ActionApps, app) || (env == core.Dev && !Can(person, ActionProjects, app)) {
@@ -669,14 +694,6 @@ func (h *Hub) serveAs(w http.ResponseWriter, r *http.Request, person core.Person
 	}
 	r = r.WithContext(core.WithViewer(r.Context(), core.Viewer{PersonID: person.ID, Login: person.Email, Name: person.Name}))
 	serve(w, r)
-}
-
-func (h *Hub) proxyNotInvited(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusForbidden)
-	_, _ = w.Write([]byte(`<!doctype html><meta name="viewport" content="width=device-width"><title>Not invited yet</title>` +
-		`<body style="font-family:system-ui;padding:2rem;max-width:30rem;margin:auto"><h1>You're not in this household yet</h1>` +
-		`<p>Your Tailscale account isn't linked to anyone in Homelab. Ask the owner to invite you, or to add your Tailscale login to your profile.</p>`))
 }
 
 func forwardedCookies(headers []string) string {
@@ -777,20 +794,6 @@ func (h *Hub) appCallback(w http.ResponseWriter, r *http.Request, app, env strin
 	http.Redirect(w, r, path, http.StatusSeeOther)
 }
 
-func (h *Hub) personFromRequest(r *http.Request) (core.Person, bool) {
-	c, err := r.Cookie("homelab_session")
-	if err != nil {
-		return core.Person{}, false
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(c.Value)
-	if err != nil || len(raw) != 32 {
-		return core.Person{}, false
-	}
-	hash := sha256.Sum256(raw)
-	p, err := h.store.SessionPerson(r.Context(), hash[:], h.cfg.Now(), 7*24*time.Hour)
-	return p, err == nil && p.Status == "signed_in"
-}
-
 // person is the signed-in household member an app receives.
 func (h *Hub) person(v core.Viewer) *identity.Person {
 	if v.PersonID != "" {
@@ -808,7 +811,7 @@ func (h *Hub) person(v core.Viewer) *identity.Person {
 		sort.Strings(groups)
 		return &identity.Person{User: firstNonEmpty(p.Email, p.ID), Name: p.Name, Groups: groups}
 	}
-	// A local connection, Tailscale login or owner allow-list entry isn't a household session.
+	// A local connection isn't a household session.
 	// The API session and app-session cookies provide real identities in milestone 3.
 	return nil
 }
@@ -825,29 +828,36 @@ func (h *Hub) CheckHealth(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	running, err := h.ad.Deployer.Observe(ctx)
-	if err != nil {
+	for _, a := range apps {
+		h.checkApp(ctx, a)
+	}
+}
+
+// checkApp probes one app's environments. It skips an app an action is working on.
+func (h *Hub) checkApp(ctx context.Context, a state.App) {
+	lock := h.appLock(a.ID)
+	if !lock.TryLock() {
 		return
 	}
-	byKey := map[envKey]core.Running{}
-	for _, r := range running {
-		byKey[envKey{r.App, r.Env}] = r
-	}
-	for _, a := range apps {
+	// Look only now, with the lock held, so a deploy that just finished isn't seen half done.
+	envs, err := h.observeApp(ctx, a.ID)
+	var prod *core.Release
+	var status string
+	if err == nil {
 		for _, env := range []string{core.Dev, core.Prod} {
 			e, err := h.store.Env(ctx, a.ID, env)
 			if err != nil || e.Want == nil {
 				continue
 			}
-			var r *core.Running
-			if x, ok := byKey[envKey{a.ID, env}]; ok {
-				r = &x
-			}
-			status := h.checkEnv(ctx, a, env, e.Want, r)
+			s := h.checkEnv(ctx, a, env, e.Want, envs[env])
 			if env == core.Prod {
-				h.watchStep(ctx, a, e.Want, status)
+				prod, status = e.Want, s
 			}
 		}
+	}
+	lock.Unlock() // watchStep may need the lock to roll back
+	if prod != nil {
+		h.watchStep(ctx, a, prod, status)
 	}
 }
 
@@ -873,6 +883,9 @@ func (h *Hub) checkEnv(ctx context.Context, a state.App, env string, want *core.
 		cancel()
 		if res.OK {
 			status, detail = core.Healthy, fmt.Sprintf("Health check passed in %d ms", res.Latency.Milliseconds())
+			if r.Incomplete {
+				detail += " (" + r.Detail + ")"
+			}
 		} else {
 			status, detail = core.Degraded, "Running, but its health check fails: "+res.Detail
 		}
@@ -939,92 +952,66 @@ func firstNonEmpty(s ...string) string {
 
 // ---- Data copies before promote ----
 
-// backupData copies an environment's data folder while its app is stopped, so the copy is
-// consistent (SQLite files included), and keeps the newest KeepBackups copies.
-func (h *Hub) backupData(app, env, label string) (string, error) {
-	src := h.dataDir(app, env)
-	if _, err := os.Stat(src); errors.Is(err, os.ErrNotExist) {
+// backupData copies the app's own data folders (names) of an environment while its app is
+// stopped, so the copy is consistent (SQLite files included), and keeps the newest
+// KeepBackups copies. Service data (Jellyfin's config, say) isn't copied. The copies are made
+// by a helper container, so files that belong to other users are kept as they are.
+func (h *Hub) backupData(ctx context.Context, app, env, label string, names []string) (string, error) {
+	var have []string
+	for _, n := range names {
+		if _, err := os.Stat(filepath.Join(h.dataDir(app, env), n)); err == nil {
+			have = append(have, n)
+		}
+	}
+	if len(have) == 0 {
 		return "", nil // nothing to copy yet
 	}
 	root := filepath.Join(h.cfg.DataDir, "backups", app, env)
 	dst := filepath.Join(root, h.cfg.Now().UTC().Format("20060102-150405")+"-"+label)
-	if err := copyTree(src, dst); err != nil {
-		os.RemoveAll(dst)
+	if err := os.MkdirAll(dst, 0o700); err != nil {
 		return "", err
 	}
-	entries, _ := os.ReadDir(root)
-	var names []string
-	for _, e := range entries {
-		if e.IsDir() {
-			names = append(names, e.Name())
+	for _, n := range have {
+		if err := h.ad.Deployer.Copy(ctx, filepath.Join(h.dataDir(app, env), n), filepath.Join(dst, n)); err != nil {
+			h.ad.Deployer.Remove(ctx, dst)
+			return "", err
 		}
 	}
-	sort.Strings(names)
-	for len(names) > h.cfg.KeepBackups {
-		os.RemoveAll(filepath.Join(root, names[0]))
-		names = names[1:]
+	entries, _ := os.ReadDir(root)
+	var dirs []string
+	for _, e := range entries {
+		if e.IsDir() {
+			dirs = append(dirs, e.Name())
+		}
+	}
+	sort.Strings(dirs)
+	for len(dirs) > h.cfg.KeepBackups {
+		h.ad.Deployer.Remove(ctx, filepath.Join(root, dirs[0]))
+		dirs = dirs[1:]
 	}
 	return dst, nil
 }
 
-// restoreData replaces an environment's data with a copy made by backupData. The data it
-// replaces is moved next to the copies (named after label) rather than deleted. The app
+// restoreData replaces the data folders found in a copy made by backupData. The folders it
+// replaces are moved next to the copies (named after label) rather than deleted. The app
 // must be stopped.
-func (h *Hub) restoreData(app, env, from, label string) (kept string, err error) {
-	dir := h.dataDir(app, env)
+func (h *Hub) restoreData(ctx context.Context, app, env, from, label string) (kept string, err error) {
+	entries, err := os.ReadDir(from)
+	if err != nil {
+		return "", err
+	}
 	kept = filepath.Join(h.cfg.DataDir, "backups", app, env, h.cfg.Now().UTC().Format("20060102-150405")+"-replaced-by-restore-"+label)
-	if err := os.MkdirAll(filepath.Dir(kept), 0o700); err != nil {
+	if err := os.MkdirAll(kept, 0o700); err != nil {
 		return "", err
 	}
-	if err := os.Rename(dir, kept); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", err
-	}
-	if err := copyTree(from, dir); err != nil {
-		return kept, err
+	for _, e := range entries {
+		dir := filepath.Join(h.dataDir(app, env), e.Name())
+		if err := h.ad.Deployer.Move(ctx, dir, filepath.Join(kept, e.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return kept, err
+		}
+		if err := h.ad.Deployer.Copy(ctx, filepath.Join(from, e.Name()), dir); err != nil {
+			return kept, err
+		}
 	}
 	return kept, nil
-}
-
-func copyTree(src, dst string) error {
-	return filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(src, p)
-		target := filepath.Join(dst, rel)
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		switch {
-		case d.IsDir():
-			return os.MkdirAll(target, info.Mode().Perm()|0o700)
-		case info.Mode()&os.ModeSymlink != 0:
-			l, err := os.Readlink(p)
-			if err != nil {
-				return err
-			}
-			return os.Symlink(l, target)
-		case info.Mode().IsRegular():
-			return copyFile(p, target, info.Mode().Perm())
-		}
-		return nil // sockets and the like aren't data
-	})
-}
-
-func copyFile(src, dst string, perm os.FileMode) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
-	if err != nil {
-		return err
-	}
-	if _, err := out.ReadFrom(in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
 }

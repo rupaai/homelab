@@ -4,9 +4,7 @@ package api
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -26,7 +24,6 @@ import (
 
 // Options configure the API.
 type Options struct {
-	Owners           []string // Tailscale logins allowed in; empty means any signed-in person
 	Version          string
 	Static           fs.FS // the companion site root (index.html at the top)
 	Logger           *slog.Logger
@@ -75,7 +72,6 @@ func (c *OIDCConfig) values() (string, string, string) {
 
 const (
 	maxBody       = 64 << 10
-	msgNotOwner   = "This Homelab only lets its owner in. Ask them to add your Tailscale login to owners in config.yaml."
 	msgInternal   = "Something went wrong inside Homelab. The details are in its log."
 	csrfHeader    = "X-Homelab-Request"
 	noAppPrefix   = "There's no app"
@@ -84,7 +80,6 @@ const (
 
 type server struct {
 	hub              *hub.Hub
-	owners           map[string]bool
 	ver              string
 	log              *slog.Logger
 	static           *static
@@ -114,16 +109,11 @@ func newServer(h *hub.Hub, opts Options) *server {
 	if oidc == nil {
 		oidc = NewOIDCConfig(opts.OIDCIssuer, opts.OIDCClientID, opts.OIDCClientSecret)
 	}
-	s := &server{hub: h, owners: map[string]bool{}, ver: opts.Version, log: opts.Logger, store: opts.Store,
+	s := &server{hub: h, ver: opts.Version, log: opts.Logger, store: opts.Store,
 		oidc: oidc, httpClient: opts.HTTPClient, passwordFile: opts.PasswordFile, services: opts.Services}
 	s.recoveryAttempts = map[string]recoveryWindow{}
 	if s.log == nil {
 		s.log = slog.Default()
-	}
-	for _, o := range opts.Owners {
-		if o = strings.ToLower(strings.TrimSpace(o)); o != "" {
-			s.owners[o] = true
-		}
 	}
 	s.static = newStatic(opts.Static)
 	s.keyMux = s.keyRoutes()
@@ -203,24 +193,16 @@ func (s *server) handler() http.Handler {
 		hd.Set("X-Frame-Options", "DENY")
 		hd.Set("Content-Security-Policy", csp)
 		// A call with an API key never uses the session or the companion (platform services).
-		if _, ok := bearer(r); ok && (r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/")) {
+		// A companion session token is also sent as a Bearer token, but starts with sessionPrefix.
+		token, hasToken := bearer(r)
+		if hasToken && !strings.HasPrefix(token, sessionPrefix) && (r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/")) {
 			s.serveKey(w, r, false)
 			return
 		}
-		if c, err := r.Cookie("homelab_session"); err == nil && s.store != nil {
-			if raw, err := base64.RawURLEncoding.DecodeString(c.Value); err == nil && len(raw) == 32 {
-				digest := sha256.Sum256(raw)
-				if p, err := s.store.SessionPerson(r.Context(), digest[:], time.Now(), 7*24*time.Hour); err == nil {
-					v, _ := core.ViewerFrom(r.Context())
-					v.PersonID, v.Login, v.Name = p.ID, p.Email, p.Name
-					r = r.WithContext(core.WithViewer(r.Context(), v))
-				}
-			}
-		}
-		// Over the tailnet, Tailscale already knows who is asking (milestone 4).
-		if v, ok := core.ViewerFrom(r.Context()); ok && v.PersonID == "" && s.hub != nil {
-			if p, ok := s.hub.TailnetPerson(r.Context(), v); ok {
-				v.PersonID, v.Name = p.ID, p.Name
+		if digest, ok := sessionDigest(token); ok && s.store != nil {
+			if p, err := s.store.SessionPerson(r.Context(), digest, time.Now(), 7*24*time.Hour); err == nil {
+				v, _ := core.ViewerFrom(r.Context())
+				v.PersonID, v.Login, v.Name = p.ID, p.Email, p.Name
 				r = r.WithContext(core.WithViewer(r.Context(), v))
 			}
 		}
@@ -240,7 +222,7 @@ func (s *server) handler() http.Handler {
 
 // allowed says whether the viewer may use Homelab.
 func (s *server) allowed(v core.Viewer) bool {
-	return !v.Tagged && v.PersonID != "" && s.store != nil
+	return v.PersonID != "" && s.store != nil
 }
 
 // loopbackHost says whether a request's Host header names this computer. Requests on the
@@ -256,6 +238,29 @@ func loopbackHost(hostport string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// onThisComputer says whether a "this computer only" request really is: it must arrive over
+// a loopback connection (the viewer's Local flag, set from RemoteAddr) and name this computer
+// in its Host header. The Host header alone is chosen by the client.
+func onThisComputer(r *http.Request) bool {
+	v, _ := core.ViewerFrom(r.Context())
+	return v.Local && loopbackHost(r.Host)
+}
+
+// publicPost holds the rules for every POST that skips guard: the companion's header, a JSON
+// body and a size limit. Keep them in one place so those endpoints can't drift apart.
+func publicPost(w http.ResponseWriter, r *http.Request) bool {
+	if r.Header.Get(csrfHeader) != "1" {
+		writeErr(w, http.StatusForbidden, "That request didn't come from the Homelab companion.")
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]), "application/json") {
+		writeErr(w, http.StatusUnsupportedMediaType, "Send JSON with Content-Type: application/json.")
+		return false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+	return true
 }
 
 // guard applies the owner check and, for changes, the CSRF header and body rules.
@@ -423,7 +428,7 @@ func (s *server) me(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"login": p.Email, "name": p.Name, "local": v.Local, "roles": p.Roles, "tailscale": !v.Local && !v.Tagged})
+	writeJSON(w, http.StatusOK, map[string]any{"login": p.Email, "name": p.Name, "local": v.Local, "roles": p.Roles})
 }
 
 func (s *server) passkeyLink(w http.ResponseWriter, r *http.Request) {
@@ -440,16 +445,15 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "Open the companion at http://localhost:7080 on this computer.")
 		return
 	}
-	if r.Header.Get(csrfHeader) != "1" {
-		writeErr(w, http.StatusForbidden, "That request didn't come from the Homelab companion.")
+	if !publicPost(w, r) {
 		return
 	}
-	if c, err := r.Cookie("homelab_session"); err == nil {
-		if raw, e := base64.RawURLEncoding.DecodeString(c.Value); e == nil {
-			digest := sha256.Sum256(raw)
-			_ = s.store.DeleteSession(r.Context(), digest[:])
+	if token, _ := bearer(r); token != "" {
+		if digest, ok := sessionDigest(token); ok {
+			_ = s.store.DeleteSession(r.Context(), digest)
 		}
 	}
+	// Older versions kept the session in a cookie. Clear it so those browsers drop it.
 	http.SetCookie(w, &http.Cookie{Name: "homelab_session", Value: "", Path: "/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode, MaxAge: -1})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -461,12 +465,26 @@ func (s *server) people(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, p)
 }
+
+// personInput is what a client may set on a person. The id, identity id and status are
+// never taken from the client.
+type personInput struct {
+	Name   string            `json:"name"`
+	Email  string            `json:"email"`
+	Roles  []string          `json:"roles"`
+	Grants map[string]string `json:"grants"`
+}
+
+func (in personInput) person(id string) core.Person {
+	return core.Person{ID: id, Name: in.Name, Email: in.Email, Roles: in.Roles, Grants: in.Grants}
+}
+
 func (s *server) invitePerson(w http.ResponseWriter, r *http.Request) {
-	var p core.Person
-	if !decode(w, r, &p, true) {
+	var in personInput
+	if !decode(w, r, &in, true) {
 		return
 	}
-	inv, err := s.hub.InvitePerson(actionCtx(r), p)
+	inv, err := s.hub.InvitePerson(actionCtx(r), in.person(""))
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -474,11 +492,11 @@ func (s *server) invitePerson(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, inv)
 }
 func (s *server) updatePerson(w http.ResponseWriter, r *http.Request) {
-	var p core.Person
-	if !decode(w, r, &p, true) {
+	var in personInput
+	if !decode(w, r, &in, true) {
 		return
 	}
-	p.ID = r.PathValue("id")
+	p := in.person(r.PathValue("id"))
 	if err := s.hub.UpdatePerson(actionCtx(r), p); err != nil {
 		s.fail(w, r, err)
 		return
@@ -502,16 +520,11 @@ func (s *server) resendInvite(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"url": link})
 }
 func (s *server) redeemInvite(w http.ResponseWriter, r *http.Request) {
-	if !loopbackHost(r.Host) {
+	if !onThisComputer(r) {
 		writeErr(w, http.StatusForbidden, "Open this invite on the Homelab computer.")
 		return
 	}
-	if r.Header.Get(csrfHeader) != "1" {
-		writeErr(w, http.StatusForbidden, "That request didn't come from the Homelab companion.")
-		return
-	}
-	if ct := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]); !strings.EqualFold(ct, "application/json") {
-		writeErr(w, http.StatusUnsupportedMediaType, "Send JSON with Content-Type: application/json.")
+	if !publicPost(w, r) {
 		return
 	}
 	var body struct{}
@@ -527,7 +540,7 @@ func (s *server) redeemInvite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) recoverLink(w http.ResponseWriter, r *http.Request) {
-	if !loopbackHost(r.Host) {
+	if !onThisComputer(r) {
 		http.Error(w, "Open this recovery link on the Homelab computer.", http.StatusForbidden)
 		return
 	}
@@ -543,21 +556,13 @@ func (s *server) recoverLink(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "This recovery link is no longer valid.", http.StatusGone)
 		return
 	}
-	var session [32]byte
-	if _, err = rand.Read(session[:]); err != nil {
+	token, err := s.issueSession(r.Context(), id)
+	if err != nil {
 		http.Error(w, msgInternal, http.StatusInternalServerError)
 		return
 	}
-	raw := base64.RawURLEncoding.EncodeToString(session[:])
-	hash := sha256.Sum256(session[:])
-	now := time.Now()
-	if err = s.store.PutSession(r.Context(), hash[:], id, now, now.Add(30*24*time.Hour)); err != nil {
-		http.Error(w, msgInternal, http.StatusInternalServerError)
-		return
-	}
-	http.SetCookie(w, &http.Cookie{Name: "homelab_session", Value: raw, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil || strings.EqualFold(r.URL.Scheme, "https"), MaxAge: 30 * 24 * 60 * 60})
 	_ = s.store.Log(r.Context(), state.Event{Actor: p.Email, Action: "recovery.link.used", Detail: "Signed in with a one-time recovery link"})
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, "/"+sessionFragment+token, http.StatusSeeOther)
 }
 
 func (s *server) listApps(w http.ResponseWriter, r *http.Request) {

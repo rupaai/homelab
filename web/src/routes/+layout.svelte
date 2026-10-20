@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { onSessionLost } from '#lib/session.ts';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { api } from '#lib/api.ts';
+	import { takeFragmentToken } from '#lib/token.ts';
 	import { appsStore } from '#lib/apps.svelte.ts';
 	import { ApiError, messageOf } from '#lib/errors.ts';
 	import PasskeyRegistration from '#lib/components/PasskeyRegistration.svelte';
@@ -10,8 +12,7 @@
 	import '../app.css';
 
 	let { children } = $props();
-	let authState = $state<'loading'|'setup'|'setupDone'|'recoveryDone'|'inviteDone'|'inviteError'|'signedOut'|'notInvited'|'password'|'ready'|'error'>('loading');
-	let remoteLogin = $state('');
+	let authState = $state<'loading'|'setup'|'setupDone'|'recoveryDone'|'inviteDone'|'inviteError'|'signedOut'|'password'|'ready'|'error'>('loading');
 	let me = $state<MeView | null>(null);
 	let setupName = $state('');
 	let setupEmail = $state('');
@@ -19,6 +20,7 @@
 	let recoveryCode = $state('');
 	let password = $state('');
 	let passwordReady = $state(true);
+	let passwordMode = false;
 	let authError = $state('');
 	let busy = $state(false);
 	let recoverySaved = $state(false);
@@ -42,7 +44,17 @@
 		return items;
 	});
 
-	onMount(async () => {
+	onMount(() => {
+		// A session that ends while the app is open (a Home Screen app can stay open for days).
+		const stop = onSessionLost(() => {
+			if (authState === 'ready') { me = null; authState = passwordMode ? 'password' : 'signedOut'; }
+		});
+		start();
+		return stop;
+	});
+
+	async function start() {
+		takeFragmentToken();
 		const invite = page.url.pathname.match(/^\/invite\/([^/]+)\/?$/);
 		if (invite) {
 			inviteToken = invite[1];
@@ -58,15 +70,15 @@
 		try {
 			const status = await api.bootstrap();
 			ownerNeedsPasskey = status.ownerNeedsPasskey ?? false;
-			if (status.remote && !status.known) { remoteLogin = status.login ?? ''; authState = 'notInvited'; return; }
 			if (status.needsSetup) { authState = 'setup'; return; }
 			passwordReady = status.signInReady;
+			passwordMode = !!status.password;
 			try {
 				me = await api.me(); authState = 'ready';
 				if (!me.roles.some((r) => ['owner', 'admin', 'builder'].includes(r)) && page.url.pathname === '/') await goto('/home', { replaceState: true });
-			} catch (e) { authState = e instanceof ApiError && e.status === 403 ? (status.password ? 'password' : 'signedOut') : 'error'; }
+			} catch (e) { authState = e instanceof ApiError && e.status === 403 ? (passwordMode ? 'password' : 'signedOut') : 'error'; }
 		} catch { authState = 'error'; }
-	});
+	}
 
 	async function setup(e: SubmitEvent) {
 		e.preventDefault(); busy = true; authError = '';
@@ -156,8 +168,6 @@
 			<div class="auth-card"><h1>Set up your passkey</h1><p>Your invite is ready. Register a passkey with Pocket ID to finish setting up your Homelab account.</p><PasskeyRegistration url={invitePasskeyUrl} continueLabel="Continue to sign in" onContinue={continueFromInvite} onRefresh={refreshInvitePasskeyLink} refreshDisabled={busy} />{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}</div>
 		{:else if authState === 'inviteError'}
 			<div class="auth-card"><h1>This invite can’t be used</h1><p class="notice bad" role="alert">{authError}</p><p>Ask the Homelab owner to send a new invite, then open it on the Homelab computer.</p></div>
-		{:else if authState === 'notInvited'}
-			<div class="auth-card"><h1>You’re not in this household yet</h1><p>You’re connected through Tailscale{#if remoteLogin} as <strong>{remoteLogin}</strong>{/if}, but no one in Homelab has that login.</p><p>Ask the owner to invite you, or to add this login to your profile under People.</p><button class="btn" type="button" onclick={() => location.reload()}>Try again</button></div>
 		{:else if authState === 'password'}
 			<div class="auth-card"><h1>Sign in to Homelab</h1>{#if passwordReady}<form onsubmit={passwordSignIn}><label for="password">Password</label><input id="password" type="password" bind:value={password} autocomplete="current-password" required />{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}<button class="btn primary" type="submit" disabled={busy}>{busy ? 'Checking…' : 'Sign in'}</button></form>{:else}<p>No password is set yet. On the device, run:</p><p><code>sudo -u homelab /var/lib/homelab/bin/homelabd password --home /var/lib/homelab</code></p><button class="btn" type="button" onclick={() => location.reload()}>Try again</button>{/if}</div>
 		{:else if authState === 'signedOut'}

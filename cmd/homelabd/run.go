@@ -7,7 +7,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -17,12 +16,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/rupaai/homelab/internal/adapters/docker"
-	"github.com/rupaai/homelab/internal/adapters/filesecrets"
 	"github.com/rupaai/homelab/internal/adapters/github"
 	"github.com/rupaai/homelab/internal/adapters/gitmirror"
 	"github.com/rupaai/homelab/internal/adapters/httphealth"
@@ -34,8 +31,6 @@ import (
 	"github.com/rupaai/homelab/internal/adapters/services"
 	"github.com/rupaai/homelab/internal/adapters/sysinfo"
 	"github.com/rupaai/homelab/internal/adapters/sysres"
-	"github.com/rupaai/homelab/internal/adapters/tailscale"
-	"github.com/rupaai/homelab/internal/adapters/tsapi"
 	"github.com/rupaai/homelab/internal/adapters/webpush"
 	"github.com/rupaai/homelab/internal/api"
 	"github.com/rupaai/homelab/internal/companion"
@@ -86,9 +81,6 @@ func cmdRun(args []string) error {
 	if err := checkListen(cfg); err != nil {
 		return err
 	}
-	if err := checkNotMoved(home); err != nil {
-		return err
-	}
 	if selfupdate.Managed(home) {
 		// Before opening any data: after a test version, put back the data from before it.
 		if msg, err := selfupdate.FinishTest(home, time.Now()); err != nil {
@@ -125,9 +117,6 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("Homelab sign-in key: %w", err)
 	}
-	if err := importSecretFiles(secretsDir, secrets, os.Stdout); err != nil {
-		return fmt.Errorf("import secrets files: %w", err)
-	}
 	signer, err := identitySigner(secrets)
 	if err != nil {
 		return fmt.Errorf("identity key: %w", err)
@@ -139,36 +128,14 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	}
 	defer store.Close()
 
-	var addrs core.Addresses
-	var remote core.RemoteAccess
-	switch cfg.Addresses {
-	case "tailscale":
-		key, _ := secrets.Platform("TS_AUTHKEY")
-		opts := tailscale.Options{StateDir: filepath.Join(home, "tailscale"), AuthKey: key, Tags: cfg.Tailscale.Tags, Logger: log}
-		if client, err := tailscaleClient(secrets); err != nil {
-			log.Warn("Tailscale OAuth client is not set: people can't be invited to the tailnet and its access rules aren't managed. Set it in the companion under Settings", "err", err)
-		} else {
-			remote = client
-			// Each address joins with its own tag, so the access rules can tell them apart (milestone 4).
-			opts.TagsFor = func(name string) []string { return []string{hub.AddressTag(name)} }
-			opts.MintKey = client.AuthKey
-		}
-		a, err := tailscale.New(opts)
-		if err != nil {
-			return fmt.Errorf("tailscale: %w", err)
-		}
-		addrs = a
-	default:
-		// With addresses: ip the app ports are open to other devices too; otherwise only this computer.
-		bind := ""
-		if cfg.Addresses == "ip" {
-			bind = "0.0.0.0"
-		}
-		a, err := local.New(local.Options{Dir: filepath.Join(home, "local"), Bind: bind, CompanionPort: localCompanionPort, Logger: log})
-		if err != nil {
-			return fmt.Errorf("local addresses: %w", err)
-		}
-		addrs = a
+	// With addresses: ip the app ports are open to other devices too; otherwise only this computer.
+	bind := ""
+	if cfg.Addresses == "ip" {
+		bind = "0.0.0.0"
+	}
+	addrs, err := local.New(local.Options{Dir: filepath.Join(home, "local"), Bind: bind, CompanionPort: localCompanionPort, Logger: log})
+	if err != nil {
+		return fmt.Errorf("local addresses: %w", err)
 	}
 	defer addrs.Close()
 
@@ -211,17 +178,17 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 		return err
 	}
 	appAPIURL := "http://host.docker.internal:" + strconv.Itoa(cfg.AppAPIPort)
-	h := hub.New(hub.Config{DataDir: home, Logger: log, Owners: cfg.Owners, Identity: signer, PushPublicKey: pushPublic,
+	h := hub.New(hub.Config{DataDir: home, Logger: log, Identity: signer, PushPublicKey: pushPublic,
 		AppAPIURL: appAPIURL, OpenApps: cfg.Addresses == "ip", Folders: cfg.Folders}, store, hub.Adapters{
 		Source: gh, Builder: gh, Registry: gh, Deployer: deployer,
 		Addresses: addrs, Health: httphealth.New(nil), Secrets: secrets,
-		Smoke: deployer, Mirror: mirror, Identity: idp, Email: noop.Email{}, Remote: remote,
+		Smoke: deployer, Mirror: mirror, Identity: idp, Email: noop.Email{},
 		Notifier: notifier, Resources: resources, System: sysinfo.New(sysinfo.Options{}), Updater: updater,
 		Services: svc,
 	})
 
 	oidcConfig := api.NewOIDCConfig("", "", "")
-	apiHandler := api.New(h, api.Options{Owners: cfg.Owners, Version: version, Static: companion.Site(), Logger: log, Store: store,
+	apiHandler := api.New(h, api.Options{Version: version, Static: companion.Site(), Logger: log, Store: store,
 		OIDCConfig: oidcConfig, PasswordFile: passwordFile(home), Services: svc})
 
 	ln, err := net.Listen("tcp", cfg.Listen)
@@ -261,13 +228,6 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	}
 	go configurePocketID(ctx, deployer, idp, apiKey, encryptionKey, oidcSecret, oidcConfig, log, home)
 
-	if cfg.Addresses == "tailscale" {
-		if err := h.ServeCompanion(ctx, apiHandler); err != nil {
-			return fmt.Errorf("serve the companion on Tailscale: %w", err)
-		}
-		go announceTailscale(ctx, addrs)
-	}
-
 	if selfupdate.Managed(home) {
 		go confirmUpdate(ctx, home, h, log)
 	}
@@ -291,8 +251,15 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	stopServices()
 	<-svcDone
 	<-hubDone
+	// Let a promote or rollback that is running finish, so it isn't cut off halfway.
+	idleCtx, idleCancel := context.WithTimeout(context.Background(), actionWait)
+	defer idleCancel()
+	h.WaitIdle(idleCtx)
 	return result
 }
+
+// actionWait is how long a shutdown waits for running actions before it gives up.
+const actionWait = 2 * time.Minute
 
 // confirmUpdate marks a just-installed version as good once it has kept running a while.
 func confirmUpdate(ctx context.Context, home string, h *hub.Hub, log *slog.Logger) {
@@ -369,17 +336,14 @@ func configurePocketID(ctx context.Context, deployer *docker.Deployer, idp *pock
 	}
 }
 
-// tailscaleClient is the Tailscale API client from the OAuth client set in Settings.
-func tailscaleClient(secrets core.Secrets) (*tsapi.Client, error) {
-	id, _ := secrets.Platform("TS_OAUTH_CLIENT_ID")
-	secret, _ := secrets.Platform("TS_OAUTH_CLIENT_SECRET")
-	return tsapi.New(tsapi.Options{ClientID: id, ClientSecret: secret})
-}
-
 // pushKeys returns Homelab's web push keys, making them on first start (O4).
 func pushKeys(secrets core.Secrets) (private, public string, err error) {
-	private, _ = secrets.Platform(pushPrivateKeyName)
-	public, _ = secrets.Platform(pushPublicKeyName)
+	if private, err = secrets.LoadPlatform(pushPrivateKeyName); err != nil {
+		return "", "", err
+	}
+	if public, err = secrets.LoadPlatform(pushPublicKeyName); err != nil {
+		return "", "", err
+	}
 	if private != "" && public != "" {
 		return private, public, nil
 	}
@@ -401,14 +365,18 @@ const (
 )
 
 func ensurePlatformSecret(secrets core.Secrets, name string) (string, error) {
-	if value, ok := secrets.Platform(name); ok && value != "" {
+	value, err := secrets.LoadPlatform(name)
+	if err != nil {
+		return "", fmt.Errorf("can't read %s from the secret store, so Homelab won't make a new one: %w", name, err)
+	}
+	if value != "" {
 		return value, nil
 	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
 	}
-	value := base64.RawURLEncoding.EncodeToString(raw)
+	value = base64.RawURLEncoding.EncodeToString(raw)
 	if err := secrets.Set("", "", name, value, core.ActorHomelab); err != nil {
 		return "", err
 	}
@@ -493,31 +461,17 @@ func fromLoopback(remote string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// announceTailscale prints the companion's Tailscale address once it's ready.
-func announceTailscale(ctx context.Context, addrs core.Addresses) {
-	t := time.NewTicker(2 * time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			if a, ok := addrs.Observe()["homelab"]; ok && a.Ready && strings.TrimSpace(a.URL) != "" {
-				fmt.Printf("Companion (Tailscale): %s\n", a.URL)
-				return
-			}
-		}
-	}
-}
-
 // identityKeyName is the platform secret holding the key that signs identity headers. Homelab
 // makes it itself (S5); it's never listed in the companion.
 const identityKeyName = "HOMELAB_IDENTITY_KEY"
 
 // identitySigner loads the identity key, making one the first time.
 func identitySigner(secrets core.Secrets) (*identity.Signer, error) {
-	key, ok := secrets.Platform(identityKeyName)
-	if !ok {
+	key, err := secrets.LoadPlatform(identityKeyName)
+	if err != nil {
+		return nil, fmt.Errorf("can't read the identity key from the secret store, so Homelab won't make a new one: %w", err)
+	}
+	if key == "" {
 		k, err := identity.NewKey()
 		if err != nil {
 			return nil, err
@@ -528,46 +482,6 @@ func identitySigner(secrets core.Secrets) (*identity.Signer, error) {
 		key = k
 	}
 	return identity.NewSigner(key)
-}
-
-// importSecretFiles moves milestone 1's plain secrets files into the encrypted store, once.
-// Values already in the store win. Each imported file is renamed to <file>.imported, and
-// the command to delete them is printed.
-func importSecretFiles(dir string, secrets core.Secrets, out io.Writer) error {
-	files, err := filesecrets.New(dir).Files()
-	if err != nil {
-		return err
-	}
-	var done []string
-	for _, f := range files {
-		have, err := secrets.List(f.App, f.Env)
-		if err != nil {
-			return err
-		}
-		stored := map[string]bool{}
-		for _, i := range have {
-			stored[i.Name] = true
-		}
-		n := 0
-		for name, value := range f.Values {
-			if value == "" || stored[name] {
-				continue
-			}
-			if err := secrets.Set(f.App, f.Env, name, value, "imported from "+filepath.Base(f.Path)); err != nil {
-				return fmt.Errorf("%s: %s: %w", filepath.Base(f.Path), name, err)
-			}
-			n++
-		}
-		if err := os.Rename(f.Path, f.Path+".imported"); err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "Moved %d secret(s) from %s into the encrypted store.\n", n, f.Path)
-		done = append(done, f.Path+".imported")
-	}
-	if len(done) > 0 {
-		fmt.Fprintf(out, "The old files aren't read any more. Once Homelab works, delete them:\n  rm %s\n", strings.Join(done, " "))
-	}
-	return nil
 }
 
 // openAppDoor opens the app door, trying again until it can (Docker may still be starting

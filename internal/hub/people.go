@@ -64,7 +64,6 @@ func (h *Hub) SetupOwner(ctx context.Context, p core.Person, recoveryHash string
 		_ = h.store.DeletePerson(ctx, p.ID)
 		return "", err
 	}
-	_ = h.store.SetTailscaleLogin(ctx, p.ID, p.Email)
 	h.logEvent(ctx, state.Event{Actor: "homelab", Action: "owner.created", Detail: "Created the household owner account"})
 	return link, nil
 }
@@ -109,9 +108,6 @@ func (h *Hub) InitialOwnerPasskeyLink(ctx context.Context) (string, error) {
 type Invitation struct {
 	ID  string `json:"id"`
 	URL string `json:"url"` // Homelab's one-time link, for this computer
-	// TailscaleURL lets them join the tailnet, so they can reach Homelab from anywhere.
-	TailscaleURL   string `json:"tailscaleUrl,omitempty"`
-	TailscaleError string `json:"tailscaleError,omitempty"`
 }
 
 // InvitePerson creates a person and returns their invitation links.
@@ -120,9 +116,7 @@ func (h *Hub) InvitePerson(ctx context.Context, p core.Person) (Invitation, erro
 	if err != nil {
 		return Invitation{}, err
 	}
-	inv := Invitation{ID: p.ID, URL: link}
-	inv.TailscaleURL, inv.TailscaleError = h.inviteRemote(ctx, p)
-	return inv, nil
+	return Invitation{ID: p.ID, URL: link}, nil
 }
 
 func (h *Hub) invitePerson(ctx context.Context, pp *core.Person) (string, error) {
@@ -250,26 +244,11 @@ func (h *Hub) UpdatePerson(ctx context.Context, p core.Person) error {
 		return err
 	}
 	p.Email = strings.ToLower(strings.TrimSpace(p.Email))
-	p.TailscaleLogin = strings.ToLower(strings.TrimSpace(p.TailscaleLogin))
-	if strings.ContainsAny(p.TailscaleLogin, " \t,") || len(p.TailscaleLogin) > 200 {
-		return userErr("Use the Tailscale login exactly as Tailscale shows it, like sam@gmail.com.")
-	}
-	if p.TailscaleLogin != "" && !strings.EqualFold(p.TailscaleLogin, old.TailscaleLogin) {
-		if other, err := h.store.PersonByTailscaleLogin(ctx, p.TailscaleLogin); err == nil && other.ID != p.ID {
-			return userErr("%s already uses that Tailscale login.", other.Name)
-		}
-	}
 	p.Status = old.Status
 	p.IdentityID = old.IdentityID
 	if err = h.store.SavePerson(ctx, p); err != nil {
 		return err
 	}
-	if p.TailscaleLogin != old.TailscaleLogin {
-		if err := h.store.SetTailscaleLogin(ctx, p.ID, p.TailscaleLogin); err != nil {
-			return err
-		}
-	}
-	_ = h.syncPolicy(ctx, true) // on failure the reconciler keeps trying
 	if h.ad.Identity != nil {
 		identityID, err := h.ad.Identity.Ensure(ctx, p, personGroups(p))
 		if err != nil {
@@ -329,10 +308,7 @@ func (h *Hub) RemovePerson(ctx context.Context, id string) ([]RemovalStep, error
 	if contains(p.Roles, "owner") {
 		return nil, userErr("The household owner can't be removed.")
 	}
-	steps := h.removeRemote(ctx, p)
-	if steps == nil {
-		steps = []RemovalStep{}
-	}
+	steps := []RemovalStep{}
 	if h.ad.Identity != nil {
 		err = h.ad.Identity.Disable(ctx, providerID(p))
 	} else {
@@ -347,10 +323,6 @@ func (h *Hub) RemovePerson(ctx context.Context, id string) ([]RemovalStep, error
 	steps = append(steps, RemovalStep{Name: "End Homelab and app sessions", Done: err == nil, Detail: errorText(err)})
 	err = h.store.DeletePerson(ctx, id)
 	steps = append(steps, RemovalStep{Name: "Remove app access and invitation links", Done: err == nil, Detail: errorText(err)})
-	if h.ad.Remote != nil {
-		err = h.syncPolicy(ctx, true)
-		steps = append(steps, RemovalStep{Name: "Update the tailnet's access rules", Done: err == nil, Detail: remoteErrorText(err)})
-	}
 	h.logEvent(ctx, state.Event{Actor: "admin", Action: "person.removed", Detail: "Removed " + p.Name})
 	return steps, nil
 }

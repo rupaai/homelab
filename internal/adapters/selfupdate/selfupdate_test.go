@@ -345,3 +345,29 @@ func TestFetchServicesForTheRunningVersion(t *testing.T) {
 		t.Fatal("fetched for a version GitHub doesn't have")
 	}
 }
+
+func TestApplyRefusedDuringATest(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("updates are for Linux")
+	}
+	home := installed(t, "build-1")
+	bin := BinDir(home)
+	if _, err := Install(bin, "pr-7-abc", script("pr-7-abc")); err != nil {
+		t.Fatal(err)
+	}
+	if err := StartTest(bin, Test{Version: "pr-7-abc", PR: 7}, t0); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := Confirm(bin, "pr-7-abc", t0.Add(time.Hour)); !ok || err != nil {
+		t.Fatalf("confirm = %v, %v", ok, err)
+	}
+	prog := script("build-2")
+	srv, _ := fakeGitHub(t, "build-2", prog, sha(prog))
+	u := New(Options{Home: home, Version: "pr-7-abc", API: srv.URL, Now: func() time.Time { return t0 }})
+	if _, err := u.Apply(context.Background()); err == nil || !strings.Contains(err.Error(), "test version") {
+		t.Fatalf("apply = %v", err)
+	}
+	if r, _ := Running(bin); r != "pr-7-abc" {
+		t.Fatalf("running %q", r)
+	}
+}

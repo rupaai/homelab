@@ -1,5 +1,4 @@
-// Command homelabd is the Homelab program: it sets up its folder, runs the hub and
-// installs itself as a login service.
+// Command homelabd is the Homelab program: it installs itself on a Linux device and runs the hub.
 package main
 
 import (
@@ -13,14 +12,10 @@ var version = "dev"
 const usage = `Homelab
 
 Usage:
-  homelabd init [--home DIR]               create the Homelab folder and a starter config
-  homelabd run [--home DIR] [--log-level L] run Homelab
-  homelabd service install [--home DIR]    run Homelab at login (macOS)
-  homelabd service uninstall               stop running Homelab at login (macOS)
+  homelabd run [--home DIR] [--log-level L] run Homelab (needs DIR/config.yaml; it can be empty)
   homelabd recover [--home DIR]             print a 15-minute owner sign-in link
   homelabd password [--home DIR]            set the password for signing in from other devices (addresses: ip)
-  homelabd export [--home DIR] [--out FILE] pack this Homelab up to move it to another computer
-  sudo homelabd setup [--import FILE]       install Homelab on a Linux device (milestone 6)
+  sudo homelabd setup [--force]             install Homelab on a Linux device (milestone 6)
   homelabd version
 `
 
@@ -34,16 +29,12 @@ func main() {
 func dispatch(args []string) error {
 	if len(args) == 0 {
 		fmt.Fprint(os.Stderr, usage)
-		return fmt.Errorf("say what to do: init, run, service, export, setup or version")
+		return fmt.Errorf("say what to do: run, setup, password, recover or version")
 	}
 	rest := args[1:]
 	switch args[0] {
-	case "init":
-		return cmdInit(rest, os.Stdout)
 	case "run":
 		return cmdRun(rest)
-	case "export":
-		return cmdExport(rest, os.Stdout)
 	case "setup":
 		return cmdSetup(rest, os.Stdout)
 	case "update-guard":
@@ -54,8 +45,6 @@ func dispatch(args []string) error {
 		return cmdRecover(rest, os.Stdout)
 	case "password":
 		return cmdPassword(rest, os.Stdin, os.Stdout)
-	case "service":
-		return cmdService(rest, os.Stdout)
 	case "version", "--version", "-version":
 		fmt.Println("homelabd", version)
 		return nil
