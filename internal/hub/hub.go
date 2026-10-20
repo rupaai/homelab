@@ -422,6 +422,8 @@ func (h *Hub) reconcileEnv(ctx context.Context, a state.App, env string, r *core
 			why := "it wasn't running"
 			if r != nil && r.Digest != e.Want.Digest {
 				why = "a different version was running"
+			} else if r != nil && r.State != core.StateExited {
+				why = r.Detail // a service next to the app had stopped
 			} else if r != nil {
 				why = "it had stopped"
 			}
@@ -431,6 +433,12 @@ func (h *Hub) reconcileEnv(ctx context.Context, a state.App, env string, r *core
 				h.deployFailed(ctx, a.ID, env, err, true)
 			} else {
 				h.deployOK(a.ID, env)
+				if r != nil && r.Digest == e.Want.Digest {
+					// A restart: if it stops again right away, wait a minute before the next one.
+					h.mu.Lock()
+					h.st(a.ID, env).nextAttempt = h.cfg.Now().Add(time.Minute)
+					h.mu.Unlock()
+				}
 				h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: a.ID, Env: env, Action: "deploy.done", Detail: e.Want.Short() + " is running"})
 			}
 		}

@@ -199,3 +199,31 @@ func TestCheckHealthSkipsBusyApp(t *testing.T) {
 		t.Errorf("health = %s, want it unchanged while busy", e.Health)
 	}
 }
+
+// A service that stays down is restarted at most once a minute, and the log says which.
+func TestStoppedServiceRestartBackoff(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	r.promoteBoth("aaaaaaa1", "bbbbbbb2")
+	down := func() { r.dep.SetServiceDown("movies", core.Prod, "prowlarr exited with code 1") }
+	deploys := func() int { return r.countCalls("deploy movies/prod sha256:bbbbbbb2") }
+	before := deploys()
+	for i := 0; i < 4; i++ {
+		down() // the deploy "succeeds", but the service stops again
+		r.hub.Reconcile(ctx)
+		r.settle()
+		r.advance(10 * time.Second)
+	}
+	if got := deploys() - before; got != 1 {
+		t.Errorf("%d restarts within a minute, want 1", got)
+	}
+	r.advance(time.Minute)
+	down()
+	r.hub.Reconcile(ctx)
+	if got := deploys() - before; got != 2 {
+		t.Errorf("%d restarts after a minute, want 2", got)
+	}
+	if ev := r.events("deploy.started"); len(ev) == 0 || !strings.Contains(ev[0], "because prowlarr exited with code 1") {
+		t.Errorf("deploy.started events: %v", ev)
+	}
+}
