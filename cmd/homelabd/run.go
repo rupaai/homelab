@@ -256,8 +256,15 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	defer cancel()
 	_ = srv.Shutdown(stopCtx)
 	<-hubDone
+	// Let a promote or rollback that is running finish, so it isn't cut off halfway.
+	idleCtx, idleCancel := context.WithTimeout(context.Background(), actionWait)
+	defer idleCancel()
+	h.WaitIdle(idleCtx)
 	return result
 }
+
+// actionWait is how long a shutdown waits for running actions before it gives up.
+const actionWait = 2 * time.Minute
 
 // confirmUpdate marks a just-installed version as good once it has kept running a while.
 func confirmUpdate(ctx context.Context, home string, h *hub.Hub, log *slog.Logger) {

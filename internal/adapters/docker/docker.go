@@ -274,10 +274,10 @@ func (d *Deployer) Observe(ctx context.Context) ([]core.Running, error) {
 	return out, nil
 }
 
-// envRunning sums up one environment's containers: the version is the app container's, and
-// the state is the worst of all of them. So a service that stopped, a container that was
-// created but never started, or a missing app container all make the environment exited,
-// and the reconciler starts it again. It also returns the app container's id, or "".
+// envRunning sums up one environment's containers: the state and version are the app
+// container's. A service that stopped or never started, or a missing app container, sets
+// Incomplete (the reconciler then starts the environment again) and shows as the detail.
+// It also returns the app container's id, or "".
 func envRunning(cs []container) (core.Running, string) {
 	var app *container
 	for i := range cs {
@@ -286,34 +286,27 @@ func envRunning(cs []container) (core.Running, string) {
 		}
 	}
 	if app == nil {
-		return core.Running{State: core.StateExited, Detail: "the app's container is missing"}, ""
+		return core.Running{State: core.StateExited, Detail: "the app's container is missing", Incomplete: true}, ""
 	}
 	r := core.Running{Commit: app.Labels[labelCommit], Digest: app.Labels[labelDigest]}
 	r.State, r.Detail = mapState(app.State, app.Status)
-	names := make([]string, 0, len(cs))
-	others := map[string]container{}
+	var stopped []string
 	for _, c := range cs {
-		if !isAppService(c) {
-			name := c.Labels["com.docker.compose.service"]
-			names = append(names, name)
-			others[name] = c
+		if isAppService(c) {
+			continue
+		}
+		if state, detail := mapState(c.State, c.Status); state == core.StateExited {
+			stopped = append(stopped, c.Labels["com.docker.compose.service"]+" "+detail)
 		}
 	}
-	sort.Strings(names) // the same detail every time
-	for _, name := range names {
-		c := others[name]
-		state, detail := mapState(c.State, c.Status)
-		if worse(state, r.State) {
-			r.State, r.Detail = state, name+" "+detail
+	sort.Strings(stopped) // the same detail every time
+	if len(stopped) > 0 {
+		r.Incomplete = true
+		if r.State == core.StateRunning {
+			r.Detail = strings.Join(stopped, ", ")
 		}
 	}
 	return r, app.ID
-}
-
-// worse says whether state a is worse than b: exited, then restarting, then running.
-func worse(a, b string) bool {
-	rank := map[string]int{core.StateRunning: 0, core.StateRestarting: 1, core.StateExited: 2}
-	return rank[a] > rank[b]
 }
 
 func isAppService(c container) bool { return c.Labels["com.docker.compose.service"] == serviceName }
@@ -335,8 +328,8 @@ func mapState(state, status string) (string, string) {
 		}
 		return core.StateRestarting, "restarting"
 	case "created":
-		// Compose creates and starts in one go, and Homelab only looks while no deploy runs,
-		// so a container still "created" failed to start (e.g. its port was taken).
+		// Compose creates and starts in one go, so a container still "created" failed to
+		// start (e.g. its port was taken).
 		return core.StateExited, "never started"
 	case "paused":
 		return core.StateExited, "paused"

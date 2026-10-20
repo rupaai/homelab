@@ -135,6 +135,9 @@ type Running struct {
 	State     string    `json:"state"`
 	StartedAt time.Time `json:"startedAt"`
 	Detail    string    `json:"detail"` // e.g. "exited with code 1"
+	// Incomplete is set when a service next to the app stopped or never started. State is
+	// still the app's, so health and alerts follow the app; only the reconciler looks at this.
+	Incomplete bool `json:"incomplete,omitempty"`
 }
 
 // Address is one name served by the Addresses adapter.
