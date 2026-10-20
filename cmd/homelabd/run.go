@@ -214,7 +214,7 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	}
 
 	h := hub.New(hub.Config{DataDir: home, Logger: log, Owners: cfg.Owners, Identity: signer, PushPublicKey: pushPublic,
-		AppAPIURL: appAPIURL, AppHostIP: doorHostIP, OpenApps: cfg.Addresses == "ip"}, store, hub.Adapters{
+		AppAPIURL: appAPIURL, AppHostIP: doorHostIP, OpenApps: cfg.Addresses == "ip", Folders: cfg.Folders}, store, hub.Adapters{
 		Source: gh, Builder: gh, Registry: gh, Deployer: deployer,
 		Addresses: addrs, Health: httphealth.New(nil), Secrets: secrets,
 		Smoke: deployer, Mirror: mirror, Identity: idp, Email: noop.Email{}, Remote: remote,

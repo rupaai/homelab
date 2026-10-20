@@ -23,6 +23,9 @@ type Config struct {
 	// AppAPIPort is the app door's port: where app containers call the Homelab API with
 	// their own key (platform services). Default 7085.
 	AppAPIPort int `yaml:"app_api_port"`
+	// Folders are shared folders on the device that apps may ask for by name, e.g.
+	// media: /mnt/storage. Apps see nothing else outside their own data.
+	Folders map[string]string `yaml:"folders"`
 }
 
 const (
@@ -82,6 +85,11 @@ func parseConfig(b []byte) (Config, error) {
 	}
 	if c.AppAPIPort < 1024 || c.AppAPIPort > 65535 {
 		return c, fmt.Errorf("config.yaml: app_api_port must be between 1024 and 65535, not %d", c.AppAPIPort)
+	}
+	for name, dir := range c.Folders {
+		if !filepath.IsAbs(dir) {
+			return c, fmt.Errorf("config.yaml: folder %s must be an absolute path, not %q", name, dir)
+		}
 	}
 	if len(c.Tailscale.Tags) == 0 {
 		c.Tailscale.Tags = []string{defaultTag}

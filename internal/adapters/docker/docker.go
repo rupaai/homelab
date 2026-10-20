@@ -125,12 +125,31 @@ func (d *Deployer) Prepare(ctx context.Context, spec core.EnvSpec) error {
 			return err
 		}
 		if have {
-			return nil
+			return d.prepareServices(ctx, spec)
 		}
 	}
 	d.log.Info("downloading image", "app", spec.App, "env", spec.Env, "image", ref)
 	if err := d.api.pull(ctx, ref, spec.Auth); err != nil {
 		return err
+	}
+	return d.prepareServices(ctx, spec)
+}
+
+// prepareServices downloads the services' images that aren't here yet. Their tags are
+// fixed, so an image that is here is the right one. They come from public registries.
+func (d *Deployer) prepareServices(ctx context.Context, spec core.EnvSpec) error {
+	for _, s := range spec.Services {
+		have, err := d.api.hasImage(ctx, s.Image)
+		if err != nil {
+			return err
+		}
+		if have {
+			continue
+		}
+		d.log.Info("downloading image", "app", spec.App, "env", spec.Env, "service", s.Name, "image", s.Image)
+		if err := d.api.pull(ctx, s.Image, core.RegistryAuth{}); err != nil {
+			return fmt.Errorf("%s: %w", s.Name, err)
+		}
 	}
 	return nil
 }
@@ -227,24 +246,23 @@ func (d *Deployer) Observe(ctx context.Context) ([]core.Running, error) {
 	if err != nil {
 		return nil, err
 	}
-	best := map[[2]string]container{}
+	byEnv := map[[2]string][]container{}
 	for _, c := range cs {
 		app, env := c.Labels[labelApp], c.Labels[labelEnv]
 		if app == "" || env == "" {
 			continue
 		}
 		k := [2]string{app, env}
-		// Report the app service; a leftover container of another service never hides it.
-		if old, seen := best[k]; !seen || (isAppService(c) && !isAppService(old)) {
-			best[k] = c
-		}
+		byEnv[k] = append(byEnv[k], c)
 	}
-	out := make([]core.Running, 0, len(best))
-	for k, c := range best {
-		state, detail := mapState(c.State, c.Status)
-		r := core.Running{App: k[0], Env: k[1], Commit: c.Labels[labelCommit], Digest: c.Labels[labelDigest], State: state, Detail: detail}
-		if t, err := d.api.startedAt(ctx, c.ID); err == nil && !t.IsZero() {
-			r.StartedAt = t
+	out := make([]core.Running, 0, len(byEnv))
+	for k, group := range byEnv {
+		r, appID := envRunning(group)
+		r.App, r.Env = k[0], k[1]
+		if appID != "" {
+			if t, err := d.api.startedAt(ctx, appID); err == nil && !t.IsZero() {
+				r.StartedAt = t
+			}
 		}
 		out = append(out, r)
 	}
@@ -255,6 +273,48 @@ func (d *Deployer) Observe(ctx context.Context) ([]core.Running, error) {
 		return out[i].Env < out[j].Env
 	})
 	return out, nil
+}
+
+// envRunning sums up one environment's containers: the version is the app container's, and
+// the state is the worst of all of them. So a service that stopped, a container that was
+// created but never started, or a missing app container all make the environment exited,
+// and the reconciler starts it again. It also returns the app container's id, or "".
+func envRunning(cs []container) (core.Running, string) {
+	var app *container
+	for i := range cs {
+		if isAppService(cs[i]) {
+			app = &cs[i]
+		}
+	}
+	if app == nil {
+		return core.Running{State: core.StateExited, Detail: "the app's container is missing"}, ""
+	}
+	r := core.Running{Commit: app.Labels[labelCommit], Digest: app.Labels[labelDigest]}
+	r.State, r.Detail = mapState(app.State, app.Status)
+	names := make([]string, 0, len(cs))
+	others := map[string]container{}
+	for _, c := range cs {
+		if !isAppService(c) {
+			name := c.Labels["com.docker.compose.service"]
+			names = append(names, name)
+			others[name] = c
+		}
+	}
+	sort.Strings(names) // the same detail every time
+	for _, name := range names {
+		c := others[name]
+		state, detail := mapState(c.State, c.Status)
+		if worse(state, r.State) {
+			r.State, r.Detail = state, name+" "+detail
+		}
+	}
+	return r, app.ID
+}
+
+// worse says whether state a is worse than b: exited, then restarting, then running.
+func worse(a, b string) bool {
+	rank := map[string]int{core.StateRunning: 0, core.StateRestarting: 1, core.StateExited: 2}
+	return rank[a] > rank[b]
 }
 
 func isAppService(c container) bool { return c.Labels["com.docker.compose.service"] == serviceName }
@@ -276,7 +336,9 @@ func mapState(state, status string) (string, string) {
 		}
 		return core.StateRestarting, "restarting"
 	case "created":
-		return core.StateStarting, ""
+		// Compose creates and starts in one go, and Homelab only looks while no deploy runs,
+		// so a container still "created" failed to start (e.g. its port was taken).
+		return core.StateExited, "never started"
 	case "paused":
 		return core.StateExited, "paused"
 	case "exited", "dead", "removing":

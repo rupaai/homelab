@@ -25,6 +25,9 @@ project's design docs (milestone_2_plan.md); this file is what the code follows.
 | `promote_after` | `30m` | How long dev must stay healthy before an auto promote (1m to 168h) |
 | `smoke_test` | none | A command, as a list, run inside the app's image before an auto promote, e.g. `[python, -m, app.smoke]` |
 
+More containers next to the app (a media server, an indexer), shared device folders and
+extra ports: see [services.md](services.md).
+
 So a manifest can be as small as `port`, `health`, `tag` and `data`. (A starter template
 repo that uses this is parked for later.)
 

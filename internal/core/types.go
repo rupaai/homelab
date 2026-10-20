@@ -100,7 +100,23 @@ type EnvSpec struct {
 	Mounts   []Mount
 	Vars     map[string]string // settings and secrets, as environment variables
 	Auth     RegistryAuth
-	HostIP   string // if set, the container reaches this address as host.docker.internal (the app door)
+	Ports    []string // extra ports opened on the device, "host:container[/udp]"; prod only
+	// OpenPorts publishes Ports on every network (addresses: ip); otherwise on 127.0.0.1 only.
+	OpenPorts bool
+	Services  []Service // more containers that run next to the app, e.g. a media server
+	HostIP    string    // if set, the app container reaches this address as host.docker.internal (the app door)
+}
+
+// Service is one more container of an app environment. The app reaches it by its name,
+// e.g. http://jellyfin:8096.
+type Service struct {
+	Name   string
+	Image  string // with its tag, e.g. jellyfin/jellyfin:10.11.11
+	Ports  []string
+	Memory string
+	Mounts []Mount
+	Vars   map[string]string
+	GPU    bool // give it the device's graphics card (/dev/dri), e.g. for video transcoding
 }
 
 // Container states as the deploy adapter reports them.

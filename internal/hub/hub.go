@@ -32,23 +32,24 @@ import (
 
 // Config tunes the hub. Zero values get sensible defaults.
 type Config struct {
-	DataDir        string           // root of everything Homelab keeps, e.g. ~/.homelab
-	HostPortBase   int              // app environments publish on 127.0.0.1:HostPortBase+slot*10+n
-	ReconcileEvery time.Duration    // default 15s
-	HealthEvery    time.Duration    // default 30s (O1)
-	BuildsEvery    time.Duration    // default 60s (C4)
-	HealthyWait    time.Duration    // how long promote and rollback wait for health; default 3m
-	KeepBackups    int              // data copies kept per environment; default 5
-	ImageHost      string           // registry for images a manifest doesn't name; default ghcr.io
-	WatchFor       time.Duration    // how long prod is watched after a promote (C7); default 10m
-	MirrorEvery    time.Duration    // how often repos are mirrored (G2); default 10m
-	SmokeTimeout   time.Duration    // longest a smoke test may run; default 5m
-	Owners         []string         // Tailscale logins of the owners, from config.yaml
-	Identity       *identity.Signer // signs the identity headers apps get (A2); nil sends none
-	PushPublicKey  string           // VAPID public key browsers subscribe with (O4)
-	AppAPIURL      string           // where apps reach the Homelab API (the app door); "" means apps get no URL
-	AppHostIP      string           // the app door's address, given to containers as host.docker.internal; "" means Docker's own
-	OpenApps       bool             // addresses: ip; anyone who reaches an app's port may use it, without sign-in
+	DataDir        string            // root of everything Homelab keeps, e.g. ~/.homelab
+	HostPortBase   int               // app environments publish on 127.0.0.1:HostPortBase+slot*10+n
+	ReconcileEvery time.Duration     // default 15s
+	HealthEvery    time.Duration     // default 30s (O1)
+	BuildsEvery    time.Duration     // default 60s (C4)
+	HealthyWait    time.Duration     // how long promote and rollback wait for health; default 3m
+	KeepBackups    int               // data copies kept per environment; default 5
+	ImageHost      string            // registry for images a manifest doesn't name; default ghcr.io
+	WatchFor       time.Duration     // how long prod is watched after a promote (C7); default 10m
+	MirrorEvery    time.Duration     // how often repos are mirrored (G2); default 10m
+	SmokeTimeout   time.Duration     // longest a smoke test may run; default 5m
+	Owners         []string          // Tailscale logins of the owners, from config.yaml
+	Identity       *identity.Signer  // signs the identity headers apps get (A2); nil sends none
+	PushPublicKey  string            // VAPID public key browsers subscribe with (O4)
+	AppAPIURL      string            // where apps reach the Homelab API (the app door); "" means apps get no URL
+	AppHostIP      string            // the app door's address, given to containers as host.docker.internal; "" means Docker's own
+	OpenApps       bool              // addresses: ip; anyone who reaches an app's port may use it, without sign-in
+	Folders        map[string]string // the device's shared folders apps may ask for (config.yaml folders:), e.g. media: /mnt/storage
 	Now            func() time.Time
 	Logger         *slog.Logger
 }
@@ -466,25 +467,60 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 	if h.cfg.Identity != nil {
 		vars[identity.EnvPublicKey] = h.cfg.Identity.PublicKey()
 	}
-	var mounts []core.Mount
-	for _, d := range m.Data {
-		dir := filepath.Join(h.dataDir(a.ID, env), d.Name)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return core.EnvSpec{}, err
-		}
-		if err := sharedir.Open(dir); err != nil {
-			return core.EnvSpec{}, fmt.Errorf("let the app write its data: %w", err)
-		}
-		mounts = append(mounts, core.Mount{HostPath: dir, ContainerPath: d.Path})
+	mounts, err := h.mounts(a.ID, env, m.Data, m.Folders)
+	if err != nil {
+		return core.EnvSpec{}, err
 	}
 	auth, err := h.ad.Registry.PullAuth(ctx, rel.Image)
 	if err != nil {
 		return core.EnvSpec{}, fmt.Errorf("registry sign-in: %w", err)
 	}
-	return core.EnvSpec{
+	spec := core.EnvSpec{
 		App: a.ID, Env: env, Release: rel, Port: m.Port, HostPort: h.hostPort(a.Slot, env),
-		Memory: m.Memory, Mounts: mounts, Vars: vars, Auth: auth, HostIP: h.cfg.AppHostIP,
-	}, nil
+		Memory: m.Memory, Mounts: mounts, Vars: vars, Auth: auth, OpenPorts: h.cfg.OpenApps, HostIP: h.cfg.AppHostIP,
+	}
+	// Ports are fixed numbers on the device, so only one environment can have them: prod.
+	if env == core.Prod {
+		spec.Ports = m.Ports
+	}
+	for _, s := range m.Services {
+		mounts, err := h.mounts(a.ID, env, s.Data, s.Folders)
+		if err != nil {
+			return core.EnvSpec{}, fmt.Errorf("%s: %w", s.Name, err)
+		}
+		svc := core.Service{Name: s.Name, Image: s.Image, Memory: s.Memory, Mounts: mounts, Vars: s.Env, GPU: s.GPU}
+		if env == core.Prod {
+			svc.Ports = s.Ports
+		}
+		spec.Services = append(spec.Services, svc)
+	}
+	return spec, nil
+}
+
+// mounts makes an environment's data folders and finds the shared folders a container asks for.
+func (h *Hub) mounts(app, env string, data, folders []manifest.Data) ([]core.Mount, error) {
+	var mounts []core.Mount
+	for _, d := range data {
+		dir := filepath.Join(h.dataDir(app, env), d.Name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+		if err := sharedir.Open(dir); err != nil {
+			return nil, fmt.Errorf("let the app write its data: %w", err)
+		}
+		mounts = append(mounts, core.Mount{HostPath: dir, ContainerPath: d.Path})
+	}
+	for _, f := range folders {
+		dir, ok := h.cfg.Folders[f.Name]
+		if !ok {
+			return nil, fmt.Errorf("it needs the shared folder %q; add it to config.yaml under folders:, e.g. \"folders: {%s: /mnt/storage}\", and restart Homelab", f.Name, f.Name)
+		}
+		if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+			return nil, fmt.Errorf("the shared folder %q (%s) isn't a folder on this device", f.Name, dir)
+		}
+		mounts = append(mounts, core.Mount{HostPath: dir, ContainerPath: f.Path})
+	}
+	return mounts, nil
 }
 
 func (h *Hub) deploy(ctx context.Context, a state.App, env string, rel core.Release) error {

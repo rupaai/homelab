@@ -403,3 +403,77 @@ func TestFailedPromoteGoesBack(t *testing.T) {
 		t.Fatalf("prod wants %s after a promote that didn't start", e.Version.Commit)
 	}
 }
+
+func TestSpecServicesAndFolders(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	media := t.TempDir()
+	doc := manifestDoc + `
+folders: [{name: media, path: /media}]
+ports: ["6881:6881"]
+services:
+  - name: jellyfin
+    image: jellyfin/jellyfin:10.11.11
+    data: [{name: jellyfin-config, path: /config}]
+    folders: [{name: media, path: /media}]
+    ports: ["8096:8096"]
+    gpu: true
+`
+	a := state.App{ID: "movies", Name: "Movies", Repo: repo, Manifest: []byte(doc), Promotion: "manual"}
+	// Registered, because each environment gets its own API key, which belongs to the app.
+	if _, err := r.store.AddApp(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	rel := core.Release{Image: "ghcr.io/rupaai/movies", Commit: "abc", Manifest: []byte(doc)}
+
+	if _, err := r.hub.spec(ctx, a, core.Prod, rel); err == nil || !strings.Contains(err.Error(), `shared folder "media"`) {
+		t.Fatalf("a missing shared folder should be explained, got %v", err)
+	}
+	r.hub.cfg.Folders = map[string]string{"media": media}
+	prod, err := r.hub.spec(ctx, a, core.Prod, rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jf := prod.Services[0]
+	if !slices.Contains(prod.Mounts, core.Mount{HostPath: media, ContainerPath: "/media"}) || !slices.Equal(prod.Ports, []string{"6881:6881"}) {
+		t.Errorf("app: mounts %v ports %v", prod.Mounts, prod.Ports)
+	}
+	wantConfig := filepath.Join(r.dir, "apps", "movies", "prod", "data", "jellyfin-config")
+	if jf.Name != "jellyfin" || !jf.GPU || !slices.Equal(jf.Ports, []string{"8096:8096"}) ||
+		!slices.Equal(jf.Mounts, []core.Mount{{HostPath: wantConfig, ContainerPath: "/config"}, {HostPath: media, ContainerPath: "/media"}}) {
+		t.Errorf("jellyfin = %+v", jf)
+	}
+	if st, err := os.Stat(wantConfig); err != nil || !st.IsDir() {
+		t.Error("the service's data folder should be made")
+	}
+	dev, err := r.hub.spec(ctx, a, core.Dev, rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dev.Ports) != 0 || len(dev.Services[0].Ports) != 0 {
+		t.Error("dev shouldn't open ports on the device; prod has them")
+	}
+}
+
+// An environment whose container was created but never started (e.g. its port was taken)
+// is down, not starting: the reconciler starts it again once the cause is gone.
+func TestNeverStartedIsRetried(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	r.src.Push(repo, "main", "aaaaaaa1", "first", []byte(manifestDoc))
+	if _, err := r.hub.AddApp(ctx, repo, "", owner); err != nil {
+		t.Fatal(err)
+	}
+	r.push("aaaaaaa1")
+	r.hub.CheckBuilds(ctx)
+	r.settle()
+	if r.running(core.Dev) != "aaaaaaa1" {
+		t.Fatal("dev didn't start")
+	}
+	r.dep.SetState("movies", core.Dev, core.StateExited, "never started")
+	r.hub.st("movies", core.Dev).nextAttempt = time.Time{}
+	r.hub.Reconcile(ctx)
+	if r.running(core.Dev) != "aaaaaaa1" {
+		t.Fatal("the reconciler didn't start the environment again")
+	}
+}
