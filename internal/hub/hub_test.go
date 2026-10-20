@@ -450,3 +450,26 @@ services:
 		t.Error("dev shouldn't open ports on the device; prod has them")
 	}
 }
+
+// An environment whose container was created but never started (e.g. its port was taken)
+// is down, not starting: the reconciler starts it again once the cause is gone.
+func TestNeverStartedIsRetried(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	r.src.Push(repo, "main", "aaaaaaa1", "first", []byte(manifestDoc))
+	if _, err := r.hub.AddApp(ctx, repo, "", owner); err != nil {
+		t.Fatal(err)
+	}
+	r.push("aaaaaaa1")
+	r.hub.CheckBuilds(ctx)
+	r.settle()
+	if r.running(core.Dev) != "aaaaaaa1" {
+		t.Fatal("dev didn't start")
+	}
+	r.dep.SetState("movies", core.Dev, core.StateExited, "never started")
+	r.hub.st("movies", core.Dev).nextAttempt = time.Time{}
+	r.hub.Reconcile(ctx)
+	if r.running(core.Dev) != "aaaaaaa1" {
+		t.Fatal("the reconciler didn't start the environment again")
+	}
+}
