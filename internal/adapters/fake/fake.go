@@ -190,6 +190,15 @@ func (d *Deployer) Wipe() {
 	d.mu.Unlock()
 }
 
+// SetState changes what Observe reports for an environment, e.g. a container that stopped.
+func (d *Deployer) SetState(app, env, state, detail string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	r := d.Envs[app+"/"+env]
+	r.State, r.Detail = state, detail
+	d.Envs[app+"/"+env] = r
+}
+
 func (d *Deployer) Observe(context.Context) ([]core.Running, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
