@@ -6,6 +6,7 @@
 //
 //	homelabd             symlink to the version that runs (systemd starts this)
 //	homelabd-<version>   every version installed so far (the last few are kept)
+//	homelab-services-<version>  the services program that goes with it (platform services)
 //	previous             symlink to the version that ran before the last update
 //	update-pending.json  an update that hasn't proven itself yet
 //	update-result.json   how the last update went
@@ -30,10 +31,11 @@ import (
 )
 
 const (
-	current     = "homelabd"
-	previous    = "previous"
-	pendingFile = "update-pending.json"
-	resultFile  = "update-result.json"
+	current         = "homelabd"
+	servicesProgram = "homelab-services"
+	previous        = "previous"
+	pendingFile     = "update-pending.json"
+	resultFile      = "update-result.json"
 	// maxTries is how many starts a new version gets before the guard gives up on it.
 	maxTries = 3
 	// keepVersions is how many installed versions stay in bin.
@@ -69,13 +71,23 @@ func checkVersion(v string) error {
 
 // Install writes a version's program into bin without switching to it.
 func Install(binDir, version string, program []byte) (string, error) {
+	return install(binDir, current, version, program)
+}
+
+// InstallServices puts the homelab-services program that goes with version into binDir.
+// homelabd-<version> starts it from there.
+func InstallServices(binDir, version string, program []byte) (string, error) {
+	return install(binDir, servicesProgram, version, program)
+}
+
+func install(binDir, name, version string, program []byte) (string, error) {
 	if err := checkVersion(version); err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		return "", err
 	}
-	path := filepath.Join(binDir, VersionFile(version))
+	path := filepath.Join(binDir, name+"-"+version)
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, program, 0o755); err != nil {
 		return "", err
@@ -252,6 +264,7 @@ func prune(binDir string) {
 	for i, v := range vs {
 		if i >= keepVersions && !keep[v.name] {
 			os.Remove(filepath.Join(binDir, v.name))
+			os.Remove(filepath.Join(binDir, servicesProgram+strings.TrimPrefix(v.name, current)))
 		}
 	}
 }

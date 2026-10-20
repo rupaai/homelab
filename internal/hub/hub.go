@@ -71,6 +71,7 @@ type Adapters struct {
 	Resources core.Resources    // may be nil: no resource view or disk alert
 	System    core.System       // may be nil: no device card (milestone 6)
 	Updater   core.Updater      // may be nil: Homelab doesn't update itself (milestone 6)
+	Services  core.Services     // may be nil: no files, databases or data (platform services)
 }
 
 // Hub is the core. Create it with New and run it with Run.

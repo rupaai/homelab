@@ -217,3 +217,23 @@ type Updater interface {
 	// Keep ends a test by keeping the test version and its data, and forgets the saved copy.
 	Keep(ctx context.Context) error
 }
+
+// Services is homelab-services, the program that serves files, databases and data
+// (platform services). homelabd decides who is calling; Services forwards the call with
+// that caller signed.
+type Services interface {
+	Forward(w http.ResponseWriter, r *http.Request, c ServiceCaller)
+	// Problem says what's wrong with the services, or "" when they run.
+	Problem() string
+}
+
+// ServiceCaller is who a call to the services is for: a signed-in person, an admin-made
+// API key, or an app's own key.
+type ServiceCaller struct {
+	Kind   string   `json:"kind"` // "person", "admin" or "app"
+	Person string   `json:"person"`
+	Key    string   `json:"key"`
+	App    string   `json:"app"`
+	Env    string   `json:"env"`
+	Scopes []string `json:"scopes"`
+}

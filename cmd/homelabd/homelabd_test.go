@@ -249,3 +249,17 @@ func TestParseConfigAppAPIPort(t *testing.T) {
 		}
 	}
 }
+
+func TestParseConfigServicesPort(t *testing.T) {
+	if c, err := parseConfig(nil); err != nil || c.ServicesPort != 7086 {
+		t.Fatalf("default: %v %d", err, c.ServicesPort)
+	}
+	if c, err := parseConfig([]byte("services_port: 9001\n")); err != nil || c.ServicesPort != 9001 {
+		t.Fatalf("9001: %v %d", err, c.ServicesPort)
+	}
+	for _, bad := range []string{"services_port: 80\n", "services_port: 70000\n", "services_port: 7085\n"} {
+		if _, err := parseConfig([]byte(bad)); err == nil {
+			t.Errorf("%q was accepted", bad)
+		}
+	}
+}

@@ -53,3 +53,16 @@ An app key always gets its own app, and may leave `app` out.
 # From inside an app container
 curl -s -H "Authorization: Bearer $HOMELAB_TOKEN" "$HOMELAB_API_URL/api/users"
 ```
+
+## homelab-services
+
+Files, databases and data are served by a second program, `homelab-services`, written in Rust. Its code is in `services/`.
+
+- homelabd starts it from next to itself (`bin/homelab-services`, or `homelab-services-<version>` on the device), restarts it if it stops, and stops it on shutdown. If it isn't running, the device card under Resources says so.
+- It listens on `127.0.0.1:7086` only. Change the port with `services_port: 7086` in `config.yaml`.
+- Nothing calls it directly. Apps, keys and the companion call Homelab at `/api/files`, `/api/db` and `/api/data`. Homelab checks who is calling and forwards the call.
+- Every forwarded call carries who it is for (`X-Homelab-Caller`) and a signature (`X-Homelab-Signature`). homelabd makes a new signing key at every start and gives the program only the public half. The program refuses calls that are unsigned, more than 30 seconds old, or signed for another method or path. Homelab removes any `X-Homelab-*` headers, cookies and the key from the incoming call first.
+- Releases ship it for Linux (amd64 and arm64). Updating Homelab updates it too. On the Mac, `make build` builds it.
+- Nothing is served yet: files, databases and data come in the next changes.
+
+Checks: `make check-services` (format, lint, tests).

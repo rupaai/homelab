@@ -39,6 +39,8 @@ type Options struct {
 	// PasswordFile holds the bcrypt hash of the owner's password, for signing in from other
 	// devices with addresses: ip. Empty or missing means no password sign-in.
 	PasswordFile string
+	// Services serves files, databases and data (platform services). nil: those calls get 503.
+	Services core.Services
 }
 
 // OIDCConfig lets startup publish sign-in settings after Pocket ID is ready.
@@ -93,6 +95,7 @@ type server struct {
 	recoveryAttempts map[string]recoveryWindow
 	keyMux           *http.ServeMux
 	passwordFile     string
+	services         core.Services
 }
 
 type recoveryWindow struct {
@@ -112,7 +115,7 @@ func newServer(h *hub.Hub, opts Options) *server {
 		oidc = NewOIDCConfig(opts.OIDCIssuer, opts.OIDCClientID, opts.OIDCClientSecret)
 	}
 	s := &server{hub: h, owners: map[string]bool{}, ver: opts.Version, log: opts.Logger, store: opts.Store,
-		oidc: oidc, httpClient: opts.HTTPClient, passwordFile: opts.PasswordFile}
+		oidc: oidc, httpClient: opts.HTTPClient, passwordFile: opts.PasswordFile, services: opts.Services}
 	s.recoveryAttempts = map[string]recoveryWindow{}
 	if s.log == nil {
 		s.log = slog.Default()
@@ -183,6 +186,10 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("POST /api/device/test", s.tryTestVersion)
 	mux.HandleFunc("POST /api/device/test/back", s.endTest(false))
 	mux.HandleFunc("POST /api/device/test/keep", s.endTest(true))
+	for _, p := range servicePaths {
+		mux.HandleFunc(p, s.personToServices)
+		mux.HandleFunc(p+"/", s.personToServices)
+	}
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "There's nothing at that address.")
 	})

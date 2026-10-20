@@ -1,8 +1,8 @@
-# Homelab. `make` builds bin/homelabd with the companion inside it.
+# Homelab. `make` builds bin/homelabd with the companion inside it, and bin/homelab-services.
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: all build web test test-docker check clean
+.PHONY: all build web services test test-docker check check-services clean
 
 all: build
 
@@ -10,8 +10,13 @@ all: build
 web:
 	cd web && npm ci && npm run build
 
-build: web
+build: web services
 	go build -ldflags "$(LDFLAGS)" -o bin/homelabd ./cmd/homelabd
+
+# homelab-services (Rust): files, databases and data. homelabd starts it from next to itself.
+services:
+	cd services && HOMELAB_VERSION=$(VERSION) cargo build --release --locked
+	mkdir -p bin && cp services/target/release/homelab-services bin/homelab-services
 
 # Fast checks a contributor runs before pushing; CI runs the same.
 check:
@@ -19,11 +24,15 @@ check:
 	go vet ./...
 	go test ./...
 
-test: check
+# The Rust side's checks; CI runs the same.
+check-services:
+	cd services && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+
+test: check check-services
 
 # The Docker adapter's end-to-end test needs a running Docker.
 test-docker:
 	HOMELAB_DOCKER_TESTS=1 go test ./internal/adapters/docker/ -run Integration -v
 
 clean:
-	rm -rf bin web/build
+	rm -rf bin web/build services/target
