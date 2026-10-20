@@ -16,7 +16,6 @@ reasons live in the project's design docs; this file is what the code follows.
 | `internal/adapters/docker` | Deployer, using Docker Compose (OrbStack on the Mac) |
 | `internal/adapters/local` | Addresses on 127.0.0.1 ports |
 | `internal/adapters/httphealth` | Health checks over HTTP |
-| `internal/adapters/filesecrets` | Secrets from files on the computer (milestone 1 only) |
 | `internal/api` | The HTTP JSON API the companion uses, and serving the companion |
 | `internal/companion` | The built companion, embedded into the binary |
 | `web/` | Companion source (SvelteKit, static output) |

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -15,12 +14,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/rupaai/homelab/internal/adapters/docker"
-	"github.com/rupaai/homelab/internal/adapters/filesecrets"
 	"github.com/rupaai/homelab/internal/adapters/github"
 	"github.com/rupaai/homelab/internal/adapters/gitmirror"
 	"github.com/rupaai/homelab/internal/adapters/httphealth"
@@ -116,9 +113,6 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	oidcSecret, err := ensurePlatformSecret(secrets, homelabOIDCSecretName)
 	if err != nil {
 		return fmt.Errorf("Homelab sign-in key: %w", err)
-	}
-	if err := importSecretFiles(secretsDir, secrets, os.Stdout); err != nil {
-		return fmt.Errorf("import secrets files: %w", err)
 	}
 	signer, err := identitySigner(secrets)
 	if err != nil {
@@ -309,8 +303,12 @@ func configurePocketID(ctx context.Context, deployer *docker.Deployer, idp *pock
 
 // pushKeys returns Homelab's web push keys, making them on first start (O4).
 func pushKeys(secrets core.Secrets) (private, public string, err error) {
-	private, _ = secrets.Platform(pushPrivateKeyName)
-	public, _ = secrets.Platform(pushPublicKeyName)
+	if private, err = secrets.LoadPlatform(pushPrivateKeyName); err != nil {
+		return "", "", err
+	}
+	if public, err = secrets.LoadPlatform(pushPublicKeyName); err != nil {
+		return "", "", err
+	}
 	if private != "" && public != "" {
 		return private, public, nil
 	}
@@ -332,14 +330,18 @@ const (
 )
 
 func ensurePlatformSecret(secrets core.Secrets, name string) (string, error) {
-	if value, ok := secrets.Platform(name); ok && value != "" {
+	value, err := secrets.LoadPlatform(name)
+	if err != nil {
+		return "", fmt.Errorf("can't read %s from the secret store, so Homelab won't make a new one: %w", name, err)
+	}
+	if value != "" {
 		return value, nil
 	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
 	}
-	value := base64.RawURLEncoding.EncodeToString(raw)
+	value = base64.RawURLEncoding.EncodeToString(raw)
 	if err := secrets.Set("", "", name, value, core.ActorHomelab); err != nil {
 		return "", err
 	}
@@ -430,8 +432,11 @@ const identityKeyName = "HOMELAB_IDENTITY_KEY"
 
 // identitySigner loads the identity key, making one the first time.
 func identitySigner(secrets core.Secrets) (*identity.Signer, error) {
-	key, ok := secrets.Platform(identityKeyName)
-	if !ok {
+	key, err := secrets.LoadPlatform(identityKeyName)
+	if err != nil {
+		return nil, fmt.Errorf("can't read the identity key from the secret store, so Homelab won't make a new one: %w", err)
+	}
+	if key == "" {
 		k, err := identity.NewKey()
 		if err != nil {
 			return nil, err
@@ -442,44 +447,4 @@ func identitySigner(secrets core.Secrets) (*identity.Signer, error) {
 		key = k
 	}
 	return identity.NewSigner(key)
-}
-
-// importSecretFiles moves milestone 1's plain secrets files into the encrypted store, once.
-// Values already in the store win. Each imported file is renamed to <file>.imported, and
-// the command to delete them is printed.
-func importSecretFiles(dir string, secrets core.Secrets, out io.Writer) error {
-	files, err := filesecrets.New(dir).Files()
-	if err != nil {
-		return err
-	}
-	var done []string
-	for _, f := range files {
-		have, err := secrets.List(f.App, f.Env)
-		if err != nil {
-			return err
-		}
-		stored := map[string]bool{}
-		for _, i := range have {
-			stored[i.Name] = true
-		}
-		n := 0
-		for name, value := range f.Values {
-			if value == "" || stored[name] {
-				continue
-			}
-			if err := secrets.Set(f.App, f.Env, name, value, "imported from "+filepath.Base(f.Path)); err != nil {
-				return fmt.Errorf("%s: %s: %w", filepath.Base(f.Path), name, err)
-			}
-			n++
-		}
-		if err := os.Rename(f.Path, f.Path+".imported"); err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "Moved %d secret(s) from %s into the encrypted store.\n", n, f.Path)
-		done = append(done, f.Path+".imported")
-	}
-	if len(done) > 0 {
-		fmt.Fprintf(out, "The old files aren't read any more. Once Homelab works, delete them:\n  rm %s\n", strings.Join(done, " "))
-	}
-	return nil
 }

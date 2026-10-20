@@ -2,6 +2,7 @@ name: Release
 
 # Every change merged to main becomes a numbered release (build-<n>) with the program for
 # the device, the Mac and arm64 Linux. Homelab on the device updates itself from these.
+# The release is only published when the checks pass.
 on:
   push:
     branches: [main]
@@ -30,7 +31,9 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Build the companion
         working-directory: web
-        run: npm ci && npm run build
+        run: npm ci && npm run check && npm test && npm run build
+      - name: Check the Go code
+        run: make check
       - name: Build homelabd
         run: scripts/build-release.sh "$VERSION"
       - name: Publish the release

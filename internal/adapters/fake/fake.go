@@ -413,6 +413,11 @@ func (s *Secrets) Platform(name string) (string, bool) {
 	return v, ok
 }
 
+func (s *Secrets) LoadPlatform(name string) (string, error) {
+	v, _ := s.Platform(name)
+	return v, nil
+}
+
 // Compile-time checks that the fakes satisfy the contracts.
 var (
 	_ core.Source        = (*Source)(nil)

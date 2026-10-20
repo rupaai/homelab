@@ -107,6 +107,8 @@ type Secrets interface {
 	Inject(app, env string, names []string) (map[string]string, error)
 	// Platform returns a Homelab credential such as GITHUB_TOKEN.
 	Platform(name string) (string, bool)
+	// LoadPlatform is Platform that reports a read error. The value is "" when not set.
+	LoadPlatform(name string) (string, error)
 	// Set stores (or replaces) a value. app "" means a platform credential; env is then "".
 	Set(app, env, name, value, by string) error
 	// Delete removes a value. Deleting one that isn't set is not an error.

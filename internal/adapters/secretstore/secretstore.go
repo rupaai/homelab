@@ -298,21 +298,28 @@ func (s *Store) Inject(app, env string, names []string) (map[string]string, erro
 	return out, nil
 }
 
-// Platform returns a Homelab credential.
+// Platform returns a Homelab credential; ok is false when it is not set or can't be read.
 func (s *Store) Platform(name string) (string, bool) {
+	v, err := s.LoadPlatform(name)
+	return v, err == nil && v != ""
+}
+
+// LoadPlatform returns a Homelab credential. The value is "" when it is not set; err is set
+// when the store can't be read or decrypted, so callers don't mistake that for "not set".
+func (s *Store) LoadPlatform(name string) (string, error) {
 	k := cacheKey("", "", name)
 	s.mu.Lock()
 	v, ok := s.cache[k]
 	s.mu.Unlock()
 	if ok {
-		return v, v != ""
+		return v, nil
 	}
 	v, err := s.get("", "", name)
 	if err != nil {
-		return "", false
+		return "", err
 	}
 	s.mu.Lock()
 	s.cache[k] = v
 	s.mu.Unlock()
-	return v, v != ""
+	return v, nil
 }

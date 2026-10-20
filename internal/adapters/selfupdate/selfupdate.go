@@ -163,13 +163,17 @@ func (u *Updater) check(ctx context.Context) (release, error) {
 }
 
 // Apply downloads the newest release, checks it, switches to it and restarts Homelab.
-// During a test, updating ends the test on the new version.
+// It refuses while a test version runs: a failed update would go back to the test build
+// and lose the data saved before the test.
 func (u *Updater) Apply(ctx context.Context) (string, error) {
 	done, err := u.begin()
 	if err != nil {
 		return "", err
 	}
 	defer done()
+	if t, ok := ReadTest(BinDir(u.o.Home)); ok {
+		return "", fmt.Errorf("PR #%d's test version is still running; go back or keep it before updating", t.PR)
+	}
 	r, err := u.check(ctx)
 	if err != nil {
 		return "", err

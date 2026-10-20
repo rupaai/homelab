@@ -353,9 +353,16 @@ func (h *Hub) reconcilePeople(ctx context.Context) {
 	for _, person := range people {
 		want := personGroups(person)
 		user, found := byID[providerID(person)]
-		if !found || !identityMatches(user, person, want) {
-			h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, Action: "person.identity_changed", Detail: "Restored sign-in account settings for " + person.Name})
+		if found && identityMatches(user, person, want) {
+			// Nothing to restore: don't call the sign-in service.
+			if user.ID != person.IdentityID {
+				if err := h.store.RecordIdentityID(ctx, person.ID, user.ID); err != nil {
+					h.log.Warn("people reconcile: save sign-in account id", "person", person.ID, "err", err)
+				}
+			}
+			continue
 		}
+		h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, Action: "person.identity_changed", Detail: "Restored sign-in account settings for " + person.Name})
 		identityID, err := h.ad.Identity.Ensure(ctx, person, want)
 		if err != nil {
 			h.log.Warn("people reconcile: update sign-in account", "person", person.ID, "err", err)

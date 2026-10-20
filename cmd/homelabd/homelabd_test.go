@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -143,43 +143,13 @@ func TestPasswordCommand(t *testing.T) {
 	}
 }
 
-func TestImportSecretFiles(t *testing.T) {
+func TestIdentityKeyMadeOnce(t *testing.T) {
 	dir := t.TempDir()
-	_ = os.WriteFile(filepath.Join(dir, "platform.env"), []byte("GITHUB_TOKEN=from-file\nTS_AUTHKEY=ts\n"), 0o600)
-	_ = os.WriteFile(filepath.Join(dir, "movies.prod.env"), []byte("TMDB_API_KEY='k p'\n"), 0o600)
 	s, err := secretstore.Open(filepath.Join(dir, "secrets.db"), filepath.Join(dir, "master.key"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	_ = s.Set("", "", "GITHUB_TOKEN", "already-set", "owner") // the store wins
-	var out bytes.Buffer
-	if err := importSecretFiles(dir, s, &out); err != nil {
-		t.Fatal(err)
-	}
-	if v, _ := s.Platform("GITHUB_TOKEN"); v != "already-set" {
-		t.Errorf("GITHUB_TOKEN = %q", v)
-	}
-	if v, _ := s.Platform("TS_AUTHKEY"); v != "ts" {
-		t.Errorf("TS_AUTHKEY = %q", v)
-	}
-	if v, _ := s.Inject("movies", "prod", []string{"TMDB_API_KEY"}); v["TMDB_API_KEY"] != "k p" {
-		t.Errorf("TMDB_API_KEY = %q", v)
-	}
-	for _, f := range []string{"platform.env", "movies.prod.env"} {
-		if _, err := os.Stat(filepath.Join(dir, f+".imported")); err != nil {
-			t.Errorf("%s not renamed: %v", f, err)
-		}
-	}
-	if !strings.Contains(out.String(), "rm ") {
-		t.Errorf("no delete command: %s", out.String())
-	}
-	// Running again (next start) does nothing.
-	out.Reset()
-	if err := importSecretFiles(dir, s, &out); err != nil || out.Len() != 0 {
-		t.Fatalf("second import: %v %q", err, out.String())
-	}
-	// The identity key is made once and kept.
 	a, err := identitySigner(s)
 	if err != nil {
 		t.Fatal(err)
@@ -187,5 +157,33 @@ func TestImportSecretFiles(t *testing.T) {
 	b, _ := identitySigner(s)
 	if a.PublicKey() != b.PublicKey() {
 		t.Error("identity key changed between starts")
+	}
+}
+
+// brokenSecrets can't read platform values, as when the store has a bad row or a locked file.
+type brokenSecrets struct {
+	core.Secrets
+	set int
+}
+
+func (b *brokenSecrets) LoadPlatform(string) (string, error) { return "", errors.New("read failed") }
+func (b *brokenSecrets) Set(app, env, name, value, by string) error {
+	b.set++
+	return nil
+}
+
+func TestStartupStopsOnSecretReadError(t *testing.T) {
+	b := &brokenSecrets{}
+	if _, err := ensurePlatformSecret(b, "X"); err == nil || !strings.Contains(err.Error(), "read failed") {
+		t.Fatalf("ensurePlatformSecret error = %v", err)
+	}
+	if _, err := identitySigner(b); err == nil {
+		t.Fatal("identitySigner made a key although the store can't be read")
+	}
+	if _, _, err := pushKeys(b); err == nil {
+		t.Fatal("pushKeys made keys although the store can't be read")
+	}
+	if b.set != 0 {
+		t.Fatalf("a new secret was written %d times; it would replace the real one", b.set)
 	}
 }
