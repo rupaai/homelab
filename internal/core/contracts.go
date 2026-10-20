@@ -190,6 +190,8 @@ type Resources interface {
 	Device(ctx context.Context, dataDir string) (DeviceUsage, error)
 	// Apps reports each running app environment's CPU and memory.
 	Apps(ctx context.Context) ([]AppUsage, error)
+	// Disk reports how full the disk holding path is.
+	Disk(ctx context.Context, path string) (DiskSpace, error)
 }
 
 // System describes the device itself: its OS, disks, temperature and pending OS updates

@@ -30,6 +30,8 @@
 	// New key form
 	let name = $state('');
 	let endDate = $state('');
+	let chosen = $state<string[]>(['users:read']);
+	const choose = (scope: string, on: boolean) => (chosen = on ? [...chosen, scope] : chosen.filter((s) => s !== scope));
 	let formError = $state('');
 	let sending = $state(false);
 	// The new key, shown once. It lives only in this variable.
@@ -38,14 +40,15 @@
 
 	async function create(e: Event) {
 		e.preventDefault();
-		formError = keyProblem(name);
+		formError = keyProblem(name, chosen);
 		if (formError) return;
 		sending = true;
 		try {
-			const r = await api.createKey({ name: name.trim(), scopes: KEY_SCOPES, expires: endOfDay(endDate) });
+			const r = await api.createKey({ name: name.trim(), scopes: chosen, expires: endOfDay(endDate) });
 			created = r.key;
 			name = '';
 			endDate = '';
+			chosen = ['users:read'];
 			await load();
 		} catch (err) {
 			formError = messageOf(err);
@@ -140,7 +143,7 @@
 					<label for="key-name">Name</label>
 					<input id="key-name" type="text" bind:value={name} maxlength="60" autocomplete="off" placeholder="Photo service" />
 
-					<p class="muted small can-do">It can read the people in Homelab. More choices come with files and databases.</p>
+					<fieldset class="can-do"><legend>It may</legend>{#each KEY_SCOPES as k (k.scope)}<label class="check"><input type="checkbox" checked={chosen.includes(k.scope)} onchange={(e) => choose(k.scope, e.currentTarget.checked)} />{k.words}</label>{/each}</fieldset>
 
 					<label for="key-end">Stops working on (optional)</label>
 					<input id="key-end" type="date" bind:value={endDate} />

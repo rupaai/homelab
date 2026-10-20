@@ -62,10 +62,12 @@ func Program(exe string) string {
 
 // Options configures Services.
 type Options struct {
-	Program string // the homelab-services program
-	DataDir string // its own state
-	Port    int    // it listens on 127.0.0.1:Port
-	Logger  *slog.Logger
+	Program   string      // the homelab-services program
+	DataDir   string      // its own state
+	Port      int         // it listens on 127.0.0.1:Port
+	Storage   []core.Disk // where it keeps files
+	MaxUpload int64       // the largest upload it takes, in bytes
+	Logger    *slog.Logger
 }
 
 // Services runs homelab-services and forwards calls to it.
@@ -223,6 +225,11 @@ func (s *Services) runOnce(ctx context.Context) error {
 		"HOMELAB_SERVICES_DATA=" + s.o.DataDir,
 		"HOMELAB_SERVICES_KEY=" + s.PublicKey(),
 		"PATH=" + os.Getenv("PATH"),
+	}
+	storage, _ := json.Marshal(s.o.Storage)
+	cmd.Env = append(cmd.Env, "HOMELAB_SERVICES_STORAGE="+string(storage))
+	if s.o.MaxUpload > 0 {
+		cmd.Env = append(cmd.Env, "HOMELAB_SERVICES_MAX_UPLOAD="+strconv.FormatInt(s.o.MaxUpload, 10))
 	}
 	logs := &lineLogger{log: s.o.Logger}
 	cmd.Stdout, cmd.Stderr = logs, logs

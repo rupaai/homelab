@@ -48,6 +48,7 @@ type Config struct {
 	AppAPIURL      string            // where apps reach the Homelab API (the app door), e.g. http://host.docker.internal:7085
 	OpenApps       bool              // addresses: ip; anyone who reaches an app's port may use it, without sign-in
 	Folders        map[string]string // the device's shared folders apps may ask for (config.yaml folders:), e.g. media: /mnt/storage
+	Storage        []core.Disk       // where homelab-services keeps files (config.yaml storage:)
 	Now            func() time.Time
 	Logger         *slog.Logger
 }

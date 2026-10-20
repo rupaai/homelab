@@ -215,3 +215,27 @@ func TestParseConfigServicesPort(t *testing.T) {
 		}
 	}
 }
+
+func TestParseConfigStorage(t *testing.T) {
+	c, err := parseConfig([]byte("storage:\n  - {name: main, path: /mnt/storage}\n  - {name: usb, path: /media/usb}\nmax_upload_mb: 500\n"))
+	if err != nil || len(c.Storage) != 2 || c.Storage[1].Name != "usb" || c.Storage[1].Path != "/media/usb" || c.MaxUploadMB != 500 {
+		t.Fatalf("%+v %v", c, err)
+	}
+	if d := storageOrDefault(c, "/home/x/.homelab"); len(d) != 2 {
+		t.Fatalf("configured storage replaced: %v", d)
+	}
+	c, _ = parseConfig(nil)
+	if d := storageOrDefault(c, "/home/x/.homelab"); len(d) != 1 || d[0].Name != "main" || d[0].Path != "/home/x/.homelab/storage" || c.MaxUploadMB != 10240 {
+		t.Fatalf("default: %v %d", d, c.MaxUploadMB)
+	}
+	for _, bad := range []string{
+		"storage: [{name: Main, path: /x}]",
+		"storage: [{name: a, path: relative}]",
+		"storage: [{name: a, path: /x}, {name: a, path: /y}]",
+		"max_upload_mb: -1",
+	} {
+		if _, err := parseConfig([]byte(bad)); err == nil {
+			t.Errorf("%q was accepted", bad)
+		}
+	}
+}

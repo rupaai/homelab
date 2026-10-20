@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/rupaai/homelab/internal/core"
@@ -92,5 +93,37 @@ func TestServicesNotSetUpIs503(t *testing.T) {
 	r := newRig(t)
 	if rec := do(r.handler(), "GET", "/api/files", "", &local); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestUploadsSkipTheJSONRulesButNotTheCSRFHeader(t *testing.T) {
+	r := newRig(t)
+	f := &fakeServices{}
+	h := New(r.h, Options{Version: "test", Static: testSite(), Store: r.store, Services: f})
+	photo := strings.Repeat("x", 200<<10) // bigger than the JSON body limit
+	if rec := do(h, "POST", "/api/files/photos?name=a.jpg", photo, &local, "X-Homelab-Request", "1", "Content-Type", "image/jpeg"); rec.Code != http.StatusTeapot {
+		t.Fatalf("upload: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(h, "POST", "/api/files/photos?name=a.jpg", photo, &local, "Content-Type", "image/jpeg"); rec.Code == http.StatusTeapot {
+		t.Fatal("upload without the CSRF header reached the services")
+	}
+	// The rest of the API still wants JSON.
+	if rec := do(h, "POST", "/api/apps", "x", &local, "X-Homelab-Request", "1", "Content-Type", "image/jpeg"); rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("non-JSON elsewhere: %d", rec.Code)
+	}
+	if len(f.calls) != 1 {
+		t.Fatalf("calls %+v", f.calls)
+	}
+}
+
+func TestStorageListsDisks(t *testing.T) {
+	r := newRig(t)
+	r.people(t)
+	rec := do(r.handler(), "GET", "/api/storage", "", &local)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"name":"homelab"`) {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	if rec := do(r.handler(), "GET", "/api/storage", "", &core.Viewer{Login: "mo@example.test", PersonID: "member"}); rec.Code == http.StatusOK {
+		t.Fatal("a non-admin saw the disks")
 	}
 }
