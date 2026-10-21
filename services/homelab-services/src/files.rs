@@ -28,6 +28,7 @@ use crate::caller::{Caller, Kind};
 use crate::config::Disk;
 use crate::db::{self, Db, FileRow, Folder};
 use crate::disk::{make_dirs, open_file, safe_name, valid_name, year_month};
+use crate::meta;
 
 /// Trashed files are deleted for good after this many seconds (30 days).
 const TRASH_KEEP: i64 = 30 * 24 * 60 * 60;
@@ -403,6 +404,7 @@ fn file_json(f: &FileRow) -> Value {
         "created_by": f.created_by,
         "tags": f.tags,
         "info": f.info,
+        "meta": f.meta,
     })
 }
 
@@ -497,7 +499,7 @@ async fn delete_file(
 
 // ---- listing ----
 
-/// GET /api/files/<folder>?tag=&type=&after=&limit=
+/// GET /api/files/<folder>?tag=&type=&after=&limit=&taken_after=&taken_before=&camera=
 async fn list_files(
     State(s): State<AppState>,
     caller: Caller,
@@ -525,21 +527,41 @@ async fn list_files(
         ),
         None => None,
     };
-    let (tag, kind) = (q.get("tag").cloned(), q.get("type").cloned());
+    let bound = |name: &str| -> Result<Option<String>, ApiError> {
+        q.get(name)
+            .map(|v| {
+                meta::parse_taken_bound(v).ok_or_else(|| {
+                    err(
+                        StatusCode::BAD_REQUEST,
+                        format!("The {name} value must be an RFC 3339 date or date-time."),
+                    )
+                })
+            })
+            .transpose()
+    };
+    let camera = match q.get("camera") {
+        Some(c) if (1..=100).contains(&c.chars().count()) => Some(c.clone()),
+        Some(_) => {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "The camera value must be 1-100 characters.",
+            ))
+        }
+        None => None,
+    };
+    let filter = db::ListFilter {
+        tag: q.get("tag").cloned(),
+        type_prefix: q.get("type").cloned(),
+        after,
+        taken_after: bound("taken_after")?,
+        taken_before: bound("taken_before")?,
+        camera,
+    };
     // Ask for one extra to know whether there is a next page.
     let mut rows = s
         .files
         .db
-        .run(move |c| {
-            db::file_list(
-                c,
-                &folder,
-                tag.as_deref(),
-                kind.as_deref(),
-                after.as_deref(),
-                limit + 1,
-            )
-        })
+        .run(move |c| db::file_list(c, &folder, &filter, limit + 1))
         .await?;
     let next = if rows.len() as i64 > limit {
         rows.truncate(limit as usize);
@@ -607,6 +629,9 @@ async fn receive(body: Body, path: &std::path::Path, max: u64) -> Result<Receive
 }
 
 /// POST /api/files/<folder>?name=&tags=&sha256=
+///
+/// 201 with the new file, or 200 with the existing file and
+/// `X-Homelab-Duplicate: true` when the folder already holds the same content.
 async fn upload(
     State(s): State<AppState>,
     caller: Caller,
@@ -680,6 +705,8 @@ async fn upload(
                 env: caller.env.clone(),
                 tags,
                 info: json!({}),
+                meta: json!({}),
+                taken_at: None,
                 path: format!(
                     "homelab-files/{}/{year:04}/{month:02}/{file_name}",
                     folder.name
@@ -690,7 +717,13 @@ async fn upload(
     )
     .await;
     match result {
-        Ok(row) => Ok((StatusCode::CREATED, Json(file_json(&row))).into_response()),
+        Ok((row, false)) => Ok((StatusCode::CREATED, Json(file_json(&row))).into_response()),
+        Ok((row, true)) => Ok((
+            StatusCode::OK,
+            [("x-homelab-duplicate", "true")],
+            Json(file_json(&row)),
+        )
+            .into_response()),
         Err(e) => {
             // Leave nothing behind.
             let _ = tokio::fs::remove_file(&tmp).await;
@@ -709,14 +742,29 @@ struct Stored<'a> {
     want_sha: Option<String>,
 }
 
-/// Receives the body, moves it into place and records it.
-async fn store(s: &AppState, body: Body, mut st: Stored<'_>) -> Result<FileRow, ApiError> {
+/// Receives the body, moves it into place and records it. The flag is true
+/// when the folder already had the same content: nothing new is stored then.
+async fn store(s: &AppState, body: Body, mut st: Stored<'_>) -> Result<(FileRow, bool), ApiError> {
     let got = receive(body, st.tmp, s.files.max_upload).await?;
     if st.want_sha.is_some_and(|w| w != got.sha256) {
         return Err(err(
             StatusCode::BAD_REQUEST,
             "The file doesn't match the sha256 you gave.",
         ));
+    }
+    // The same content in the same folder is kept only once. Other folders may
+    // belong to other apps, so they keep their own copy.
+    let (folder, sha) = (st.row.folder.clone(), got.sha256.clone());
+    if let Some(existing) = s
+        .files
+        .db
+        .run(move |c| db::file_by_sha(c, &folder, &sha))
+        .await?
+    {
+        tokio::fs::remove_file(st.tmp)
+            .await
+            .map_err(|e| disk_error("cannot remove the duplicate upload", e))?;
+        return Ok((existing, true));
     }
     st.row.size = got.size as i64;
     st.row.sha256 = got.sha256;
@@ -725,6 +773,16 @@ async fn store(s: &AppState, body: Body, mut st: Stored<'_>) -> Result<FileRow, 
         .map(|t| t.mime_type())
         .unwrap_or("application/octet-stream")
         .to_string();
+
+    // The body is complete and synced: read what the file says about itself.
+    let found = meta::extract(
+        st.tmp.to_path_buf(),
+        st.row.content_type.clone(),
+        &st.row.id,
+    )
+    .await;
+    st.row.meta = found.meta;
+    st.row.taken_at = found.taken_at;
 
     tokio::fs::rename(st.tmp, st.target)
         .await
@@ -739,7 +797,7 @@ async fn store(s: &AppState, body: Body, mut st: Stored<'_>) -> Result<FileRow, 
 
     let row = st.row.clone();
     s.files.db.run(move |c| db::file_insert(c, &row)).await?;
-    Ok(st.row)
+    Ok((st.row, false))
 }
 
 // ---- download ----
@@ -1538,7 +1596,7 @@ mod tests {
             assert_eq!(status, StatusCode::BAD_REQUEST, "{name}");
         }
         // A hostile file name stays a plain name inside the folder.
-        let (status, info) = put(&env, &person(), "?name=..%2F..%2F..%2Fevil.txt", b"x").await;
+        let (status, info) = put(&env, &person(), "?name=..%2F..%2F..%2Fevil.txt", b"y").await;
         assert_eq!(status, StatusCode::CREATED);
         assert_eq!(info["name"], "_.._.._evil.txt");
 
@@ -1601,5 +1659,305 @@ mod tests {
             let (status, _, _) = call(&env, &person(), method, target, &[], &[]).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{method} {target}");
         }
+    }
+
+    // ---- metadata ----
+
+    use crate::meta::fixtures;
+
+    async fn list(env: &TestEnv, query: &str) -> (StatusCode, Value) {
+        let target = format!("/api/files/photos{query}");
+        json_call(env, &person(), "GET", &target, Value::Null).await
+    }
+
+    fn names(listing: &Value) -> Vec<String> {
+        let mut v: Vec<String> = listing["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["name"].as_str().unwrap().to_string())
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[tokio::test]
+    async fn upload_returns_meta() {
+        let env = test_env(1 << 20);
+        make_folder(&env, &person(), "photos", "", "").await;
+
+        let (status, info) = put(&env, &person(), "?name=a.jpg", &fixtures::jpeg_with_exif()).await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(info["content_type"], "image/jpeg");
+        assert_eq!(info["meta"]["width"], 640);
+        assert_eq!(info["meta"]["camera_make"], "ACME");
+        assert_eq!(info["meta"]["taken_at"], "2023-07-09T20:36:33+08:00");
+        assert!(info["meta"]["gps"]["lat"].is_f64());
+
+        // The same object comes back from the info and the list.
+        let target = format!("/api/files/photos/{}/info", info["id"].as_str().unwrap());
+        let (_, again) = json_call(&env, &person(), "GET", &target, Value::Null).await;
+        assert_eq!(again["meta"], info["meta"]);
+        let (_, listing) = list(&env, "").await;
+        assert_eq!(listing["files"][0]["meta"], info["meta"]);
+
+        let (status, png) = put(&env, &person(), "?name=b.png", &fixtures::png()).await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(png["meta"], json!({ "width": 3, "height": 2 }));
+
+        // Nothing found: an empty object, not null or missing.
+        let (status, text) = put(&env, &person(), "?name=c.txt", b"just words").await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(text["meta"], json!({}));
+    }
+
+    #[tokio::test]
+    async fn the_client_cannot_choose_the_type_or_meta() {
+        let env = test_env(1 << 20);
+        make_folder(&env, &person(), "photos", "", "").await;
+        // A PNG that calls itself a JPEG (by name and Content-Type), and the
+        // other way round.
+        let (_, info) = put(&env, &person(), "?name=x.jpg", &fixtures::png()).await;
+        assert_eq!(info["content_type"], "image/png");
+        assert_eq!(info["meta"]["width"], 3);
+        let target = "/api/files/photos?name=y.png";
+        let (status, _, out) = call(
+            &env,
+            &person(),
+            "POST",
+            target,
+            &fixtures::jpeg_with_exif(),
+            &[("content-type", "image/png")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let out: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(out["content_type"], "image/jpeg");
+        assert_eq!(out["meta"]["camera_make"], "ACME");
+    }
+
+    #[tokio::test]
+    async fn garbage_claiming_to_be_a_jpeg_still_uploads() {
+        let env = test_env(1 << 20);
+        make_folder(&env, &person(), "photos", "", "").await;
+        let (status, info) = put(&env, &person(), "?name=bad.jpg", &fixtures::fake_jpeg()).await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(info["content_type"], "image/jpeg");
+        assert_eq!(info["meta"], json!({}));
+        // Truncated real files too.
+        let whole = fixtures::jpeg_with_exif();
+        for (i, len) in [10, 40, 100, whole.len() - 3].into_iter().enumerate() {
+            let (status, _) = put(&env, &person(), &format!("?name=t{i}.jpg"), &whole[..len]).await;
+            assert_eq!(status, StatusCode::CREATED, "{len}");
+        }
+    }
+
+    #[tokio::test]
+    async fn listing_by_date_and_camera() {
+        let env = test_env(1 << 20);
+        make_folder(&env, &person(), "photos", "", "").await;
+        let old = fixtures::jpeg_with_exif();
+        let mut other = old.clone();
+        for (from, to) in [
+            (&b"2023:07:09"[..], &b"2021:01:02"[..]),
+            (b"ACME\0", b"Zeta\0"),
+            (b"Pocket Cam 3", b"Big Camera 9"),
+            (b"+08:00", b"\0\0\0\0\0\0"),
+        ] {
+            let at = other.windows(from.len()).position(|w| w == from).unwrap();
+            other[at..at + from.len()].copy_from_slice(to);
+        }
+        put(&env, &person(), "?name=acme.jpg", &old).await;
+        put(&env, &person(), "?name=zeta.jpg", &other).await;
+        put(&env, &person(), "?name=plain.png", &fixtures::png()).await;
+        put(&env, &person(), "?name=note.txt", b"hi").await;
+
+        let q = |s: &str| {
+            let (env, s) = (&env, s.to_string());
+            async move { list(env, &s).await }
+        };
+        // 2023-07-09 20:36 at +08:00 is 12:36 UTC.
+        assert_eq!(names(&q("").await.1).len(), 4);
+        assert_eq!(names(&q("?taken_after=2022-01-01").await.1), ["acme.jpg"]);
+        assert_eq!(names(&q("?taken_before=2022-01-01").await.1), ["zeta.jpg"]);
+        assert_eq!(
+            names(&q("?taken_after=2021-01-02&taken_before=2024-01-01").await.1),
+            ["acme.jpg", "zeta.jpg"]
+        );
+        // The first is inclusive, the second is not.
+        assert_eq!(
+            names(&q("?taken_after=2021-01-02T20:36:33Z").await.1),
+            ["acme.jpg", "zeta.jpg"]
+        );
+        assert_eq!(
+            names(&q("?taken_before=2021-01-02T20:36:33Z").await.1),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            names(
+                &q("?taken_before=2023-07-09T12:36:34Z&taken_after=2023-07-09T12:36:33Z")
+                    .await
+                    .1
+            ),
+            ["acme.jpg"]
+        );
+        assert_eq!(
+            names(
+                &q("?taken_before=2023-07-09T12:36:33Z&taken_after=2023-01-01")
+                    .await
+                    .1
+            ),
+            Vec::<String>::new()
+        );
+        // A time zone offset is taken into account.
+        assert_eq!(
+            names(&q("?taken_after=2023-07-09T21:00:00%2B08:00").await.1),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            names(&q("?taken_after=2023-07-09T20:36:33%2B08:00").await.1),
+            ["acme.jpg"]
+        );
+
+        assert_eq!(names(&q("?camera=acme").await.1), ["acme.jpg"]);
+        assert_eq!(names(&q("?camera=POCKET").await.1), ["acme.jpg"]);
+        assert_eq!(names(&q("?camera=acme%20pocket").await.1), ["acme.jpg"]);
+        assert_eq!(names(&q("?camera=zet").await.1), ["zeta.jpg"]);
+        assert_eq!(names(&q("?camera=camera").await.1), ["zeta.jpg"]);
+        assert_eq!(names(&q("?camera=nikon").await.1), Vec::<String>::new());
+        // % and _ are plain characters, and quotes do no harm.
+        for odd in ["%25", "_", "'%20OR%201%3D1%20--", "%22"] {
+            assert_eq!(
+                names(&q(&format!("?camera={odd}")).await.1),
+                Vec::<String>::new(),
+                "{odd}"
+            );
+        }
+        assert_eq!(
+            names(&q("?camera=acme&taken_after=2022-01-01").await.1),
+            ["acme.jpg"]
+        );
+        assert_eq!(
+            names(&q("?camera=acme&taken_before=2022-01-01").await.1),
+            Vec::<String>::new()
+        );
+
+        // Paging still works with the filters.
+        let (_, page) = q("?taken_after=2000-01-01&limit=1").await;
+        assert_eq!(page["files"].as_array().unwrap().len(), 1);
+        assert!(page["next"].is_string());
+        let after = page["next"].as_str().unwrap();
+        let (_, page2) = q(&format!("?taken_after=2000-01-01&limit=1&after={after}")).await;
+        assert_eq!(page2["files"].as_array().unwrap().len(), 1);
+        assert!(page2["next"].is_null());
+        assert_ne!(page["files"][0]["id"], page2["files"][0]["id"]);
+
+        for bad in [
+            "?taken_after=yesterday",
+            "?taken_before=2023-13-01",
+            "?taken_after=",
+            "?taken_after=2023-07-09T10:00:00",
+            "?camera=",
+            &format!("?camera={}", "a".repeat(101)),
+        ] {
+            let (status, body) = q(bad).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+            assert!(body["error"].is_string());
+        }
+        let (status, _) = q(&format!("?camera={}", "a".repeat(100))).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn duplicates_are_stored_once_per_folder() {
+        let env = test_env(1 << 20);
+        make_folder(&env, &person(), "photos", "", "").await;
+        make_folder(&env, &person(), "other", "", "").await;
+        let jpeg = fixtures::jpeg_with_exif();
+
+        let (status, first) = put(&env, &person(), "?name=a.jpg&tags=one", &jpeg).await;
+        assert_eq!(status, StatusCode::CREATED);
+        let on_disk = files_on_disk(&env);
+
+        let (status, headers, out) = call(
+            &env,
+            &person(),
+            "POST",
+            "/api/files/photos?name=copy.jpg&tags=two",
+            &jpeg,
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers["x-homelab-duplicate"], "true");
+        let second: Value = serde_json::from_slice(&out).unwrap();
+        // The existing file, untouched.
+        assert_eq!(second, first);
+        assert_eq!(second["name"], "a.jpg");
+        assert_eq!(second["tags"], json!(["one"]));
+        assert_eq!(files_on_disk(&env), on_disk);
+        assert!(tree(&env.disk.join("homelab-files").join(".tmp")).is_empty());
+        assert_eq!(list(&env, "").await.1["files"].as_array().unwrap().len(), 1);
+
+        // A new upload has no such header.
+        let (status, headers, _) =
+            call(&env, &person(), "POST", "/api/files/photos", b"new", &[]).await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert!(headers.get("x-homelab-duplicate").is_none());
+
+        // Another folder keeps its own copy.
+        let (status, headers, _) =
+            call(&env, &person(), "POST", "/api/files/other", &jpeg, &[]).await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert!(headers.get("x-homelab-duplicate").is_none());
+
+        // A trashed file does not count.
+        let target = format!("/api/files/photos/{}", first["id"].as_str().unwrap());
+        let (status, _, _) = call(&env, &person(), "DELETE", &target, b"", &[]).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, again) = put(&env, &person(), "?name=back.jpg", &jpeg).await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_ne!(again["id"], first["id"]);
+
+        // A wrong sha256 is still refused, even for a duplicate.
+        let (status, _) = put(
+            &env,
+            &person(),
+            &format!("?sha256={}", "0".repeat(64)),
+            &jpeg,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn patch_cannot_change_meta() {
+        let env = test_env(1 << 20);
+        make_folder(&env, &person(), "photos", "", "").await;
+        let (_, info) = put(&env, &person(), "?name=a.jpg", &fixtures::jpeg_with_exif()).await;
+        let target = format!("/api/files/photos/{}/info", info["id"].as_str().unwrap());
+
+        for body in [
+            json!({ "meta": { "width": 1 } }),
+            json!({ "meta": {}, "tags": ["x"] }),
+            json!({ "taken_at": "2000-01-01T00:00:00" }),
+            json!({ "info": { "meta": 1 }, "meta": null }),
+        ] {
+            let (status, out) = json_call(&env, &person(), "PATCH", &target, body).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert!(out["error"].is_string());
+        }
+        let (_, now) = json_call(&env, &person(), "GET", &target, Value::Null).await;
+        assert_eq!(now["meta"], info["meta"]);
+        assert_eq!(now["tags"], json!([]));
+
+        // Tags and info still work, and meta stays as it was.
+        let body = json!({ "tags": ["x"], "info": { "meta": "mine" } });
+        let (status, out) = json_call(&env, &person(), "PATCH", &target, body).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(out["meta"], info["meta"]);
+        assert_eq!(out["info"], json!({ "meta": "mine" }));
+        let (_, listing) = list(&env, "?taken_after=2023-01-01").await;
+        assert_eq!(listing["files"].as_array().unwrap().len(), 1);
     }
 }

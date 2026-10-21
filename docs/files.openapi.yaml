@@ -1,0 +1,611 @@
+openapi: 3.1.0
+info:
+  title: Homelab Files API
+  version: "1.1"
+  summary: Folders and files on the Homelab computer's disks.
+  description: |
+    Store, list, download and tag files. Every call needs an API key.
+
+    **Base URL.** Whatever `HOMELAB_API_URL` is. From inside an app that is the app door
+    (`http://host.docker.internal:7085`); a server outside Homelab uses the companion's
+    own address with an admin key.
+
+    **Who sees what.** An app key sees its own folders only (the app and environment it
+    belongs to); every other folder looks like it does not exist (404). An admin key
+    needs `files:read` to read and `files:write` to read and change. A signed-in admin
+    in the companion can do everything.
+
+    **Content type.** The type of a stored file is worked out from its first bytes, never
+    from the `Content-Type` header or the file name the client sends. Files whose type is
+    not recognised are `application/octet-stream`.
+
+    **Metadata.** On every upload the server reads what the file says about itself and
+    saves it as `meta` (see the `Meta` schema). Clients cannot set or change it. Files
+    uploaded before this feature existed have `"meta": {}`.
+
+    **Errors.** A failed call answers with a status and `{"error": "A sentence."}`.
+    The exceptions are a request body that is over a framework limit (413, may not be
+    JSON) and a homelab-services outage (503, JSON, sent by Homelab itself).
+servers:
+  - url: "{HOMELAB_API_URL}"
+    description: The value of HOMELAB_API_URL.
+    variables:
+      HOMELAB_API_URL:
+        default: "http://host.docker.internal:7085"
+security:
+  - apiKey: []
+tags:
+  - name: Folders
+  - name: Files
+paths:
+  /api/files/folders:
+    get:
+      tags: [Folders]
+      operationId: listFolders
+      summary: The folders you can see
+      description: Each folder with its count and total size of files that are not in the trash.
+      responses:
+        "200":
+          description: The folders, ordered by name.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [folders]
+                properties:
+                  folders:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Folder"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    post:
+      tags: [Folders]
+      operationId: createFolder
+      summary: Make a folder
+      description: |
+        An app key always makes a folder for its own app and environment (`app` and `env`
+        may be left out, but may not name another app). A person or an admin key with
+        `files:write` makes an admin-owned folder (leave out `app` and `env`) or one for an
+        app (give both).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewFolder"
+      responses:
+        "201":
+          description: The new, empty folder.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Folder"
+        "400":
+          description: |
+            Not a valid body (including unknown fields), a bad folder name, an unknown
+            disk, only one of `app` and `env`, or an `env` that is not `dev` or `prod`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: The key may not make folders, or an app asked for another app's folder.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: There is already a folder with that name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          description: The JSON body is over 64 KiB.
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/files/{folder}:
+    parameters:
+      - $ref: "#/components/parameters/folder"
+    get:
+      tags: [Files]
+      operationId: listFiles
+      summary: List the files of a folder
+      description: |
+        Files that are not in the trash, newest first (by id). Filters combine with AND.
+        All filter values are plain data: they are bound as query parameters and never
+        treated as patterns.
+
+        Files without a `taken_at` never match `taken_after` or `taken_before`. Files
+        without a camera never match `camera`.
+      parameters:
+        - name: tag
+          in: query
+          description: Only files that have exactly this tag.
+          schema: { type: string }
+        - name: type
+          in: query
+          description: Only files whose content type starts with this, for example `image/`.
+          schema: { type: string }
+        - name: after
+          in: query
+          description: A file id. Only files older than it (smaller ids). Use the `next` of the previous page.
+          schema: { $ref: "#/components/schemas/FileId" }
+        - name: limit
+          in: query
+          description: Files per page. Numbers outside 1-200 are moved to the nearest end.
+          schema: { type: integer, default: 50 }
+        - name: taken_after
+          in: query
+          description: |
+            Only files taken at or after this moment. An RFC 3339 date (`2024-05-01`, the
+            start of that day in UTC) or date-time (`2024-05-01T10:00:00+02:00`). A
+            `taken_at` without an offset is compared as if it were UTC.
+          schema:
+            type: string
+            examples: ["2024-05-01", "2024-05-01T10:00:00Z"]
+        - name: taken_before
+          in: query
+          description: Only files taken before this moment (not including it). Same format as `taken_after`.
+          schema: { type: string }
+        - name: camera
+          in: query
+          description: |
+            Only files whose camera make or model contains this text, ignoring upper and
+            lower case (letters outside ASCII are compared as they are). "make model"
+            together also matches, so `canon eos` finds make `Canon`, model `EOS R5`.
+            1-100 characters.
+          schema: { type: string, minLength: 1, maxLength: 100 }
+      responses:
+        "200":
+          description: A page of files.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [files, next]
+                properties:
+                  files:
+                    type: array
+                    items: { $ref: "#/components/schemas/File" }
+                  next:
+                    type: [string, "null"]
+                    description: Pass as `after` to get the next page. `null` on the last page.
+        "400":
+          description: |
+            `limit` is not a number, `after` is not a file id, `taken_after` or
+            `taken_before` is not an RFC 3339 date or date-time, or `camera` is empty or
+            longer than 100 characters.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NoFolder" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    post:
+      tags: [Files]
+      operationId: uploadFile
+      summary: Save a file
+      description: |
+        The body is the file itself, not JSON. It is streamed to a temporary file, hashed,
+        and synced. Then, in this order:
+
+        1. If the `sha256` query parameter was given and does not match: 400.
+        2. If the folder already holds a file that is not in the trash with the same
+           SHA-256: the new bytes are thrown away and the **existing** file is answered
+           with status **200** and the header `X-Homelab-Duplicate: true`. Tags of the new
+           upload are not merged. Other folders are not looked at.
+        3. The metadata is read (`meta`), the file is moved into place and recorded: 201.
+
+        Reading metadata never makes an upload fail: a file that cannot be read, takes too
+        long (10 seconds) or is too odd gets `"meta": {}`.
+      parameters:
+        - name: name
+          in: query
+          description: |
+            The file's name. Only letters, digits, `.`, `_` and `-` are kept; everything
+            else becomes `_`, leading dots are dropped, and it is cut at 100 characters.
+            Missing or empty gives `file`.
+          schema: { type: string }
+        - name: tags
+          in: query
+          description: Comma separated tags, at most 20. Each is 1-40 characters of `a-z 0-9 space _ -` (upper case is lowered).
+          schema: { type: string, examples: ["dune,poster"] }
+        - name: sha256
+          in: query
+          description: 64 hex digits. The upload is refused when the bytes do not hash to this.
+          schema: { type: string, pattern: "^[0-9a-fA-F]{64}$" }
+      requestBody:
+        required: true
+        description: The raw bytes. Any `Content-Type` is accepted and ignored.
+        content:
+          "*/*":
+            schema:
+              type: string
+              format: binary
+      responses:
+        "201":
+          description: Stored as a new file.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/File" }
+        "200":
+          description: The folder already had this file. Nothing was stored.
+          headers:
+            X-Homelab-Duplicate:
+              description: Always `true`.
+              schema: { type: string, enum: ["true"] }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/File" }
+        "400":
+          description: Bad `tags`, bad `sha256`, `sha256` does not match, or the upload was interrupted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/NoPermission" }
+        "404": { $ref: "#/components/responses/NoFolder" }
+        "413":
+          description: The file is bigger than the server's upload limit (`HOMELAB_SERVICES_MAX_UPLOAD`, 10 GiB unless changed).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: The server could not use its storage.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/files/{folder}/{id}:
+    parameters:
+      - $ref: "#/components/parameters/folder"
+      - $ref: "#/components/parameters/id"
+    get:
+      tags: [Files]
+      operationId: downloadFile
+      summary: The file's bytes
+      description: |
+        Always sent as an attachment with the type found at upload and
+        `X-Content-Type-Options: nosniff`. One byte range is supported; anything the
+        server cannot read as a single range gives the whole file.
+      parameters:
+        - name: Range
+          in: header
+          description: "`bytes=first-last`, `bytes=first-` or `bytes=-count`."
+          schema: { type: string }
+      responses:
+        "200":
+          description: The whole file.
+          headers: &downloadHeaders
+            Content-Type:
+              schema: { type: string }
+            Content-Length:
+              schema: { type: integer }
+            Content-Disposition:
+              schema: { type: string, examples: ['attachment; filename="poster.jpg"'] }
+            Accept-Ranges:
+              schema: { type: string, enum: [bytes] }
+            ETag:
+              description: The SHA-256 of the file, in quotes.
+              schema: { type: string }
+          content:
+            "*/*":
+              schema: { type: string, format: binary }
+        "206":
+          description: The requested range.
+          headers:
+            <<: *downloadHeaders
+            Content-Range:
+              schema: { type: string, examples: ["bytes 0-99/1000"] }
+          content:
+            "*/*":
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NoFile" }
+        "416":
+          description: Nothing in the file matches the range.
+          headers:
+            Content-Range:
+              schema: { type: string, examples: ["bytes */1000"] }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: The stored file could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    delete:
+      tags: [Files]
+      operationId: deleteFile
+      summary: Move a file to the trash
+      description: It disappears from lists and downloads at once, and is deleted for good after 30 days.
+      responses:
+        "204":
+          description: Moved to the trash.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/NoPermission" }
+        "404": { $ref: "#/components/responses/NoFile" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/files/{folder}/{id}/info:
+    parameters:
+      - $ref: "#/components/parameters/folder"
+      - $ref: "#/components/parameters/id"
+    get:
+      tags: [Files]
+      operationId: getFileInfo
+      summary: The file's details
+      responses:
+        "200":
+          description: The file.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/File" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NoFile" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    patch:
+      tags: [Files]
+      operationId: updateFileInfo
+      summary: Change tags or info
+      description: |
+        Only `tags` and `info` can be changed. Any other field, `meta` and `taken_at`
+        included, makes the whole call fail with 400 and changes nothing. A field that is
+        left out stays as it is.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                tags:
+                  type: array
+                  maxItems: 20
+                  description: Replaces the tags.
+                  items: { type: string, minLength: 1, maxLength: 40 }
+                info:
+                  type: object
+                  description: Replaces `info`. At most 4096 bytes when written as JSON.
+      responses:
+        "200":
+          description: The file after the change.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/File" }
+        "400":
+          description: Not a valid body, an unknown field, bad tags, or `info` that is not an object or is too big.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/NoPermission" }
+        "404": { $ref: "#/components/responses/NoFile" }
+        "413":
+          description: The JSON body is over 64 KiB.
+        "503": { $ref: "#/components/responses/Unavailable" }
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      description: |
+        A Homelab API key (`hlk_` and 43 characters): an app's `HOMELAB_TOKEN`, or an
+        admin key with `files:read` or `files:write`. An app key only works at the app
+        door (`HOMELAB_API_URL`); an admin key only on the companion's own address.
+  parameters:
+    folder:
+      name: folder
+      in: path
+      required: true
+      description: A folder name. A name that is not valid, or a folder you cannot see, is 404.
+      schema: { $ref: "#/components/schemas/Name" }
+    id:
+      name: id
+      in: path
+      required: true
+      description: A file id. Anything that is not a ULID, and files in the trash, are 404.
+      schema: { $ref: "#/components/schemas/FileId" }
+  responses:
+    Unauthorized:
+      description: No key, a wrong key, a revoked or expired key. Comes with `WWW-Authenticate`.
+      headers:
+        WWW-Authenticate:
+          schema: { type: string, examples: ['Bearer realm="homelab"'] }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: The key may not use this API from here (wrong door), or lacks a scope.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NoPermission:
+      description: |
+        The folder is visible to the caller but the caller may not change it (an admin
+        key with only `files:read`).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NoFolder:
+      description: There is no such folder, or the caller cannot see it.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NoFile:
+      description: |
+        There is no such folder (or it is not visible), or no such file in it (or it is in
+        the trash).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unavailable:
+      description: homelab-services is not running right now. Sent by Homelab, not the service.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: A plain sentence for a person.
+    Name:
+      type: string
+      description: 1-63 characters of `a-z 0-9 _ -`, starting with a letter or digit.
+      pattern: "^[a-z0-9][a-z0-9_-]{0,62}$"
+    FileId:
+      type: string
+      description: A ULID. Ids sort by time.
+      pattern: "^[0-9A-HJKMNP-TV-Z]{26}$"
+      examples: ["01J9Z3X5K8Q2W4E6R8T0Y1U2I3"]
+    NewFolder:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          allOf:
+            - $ref: "#/components/schemas/Name"
+          description: Not `folders`.
+        disk:
+          type: string
+          description: A configured disk. The first disk when left out.
+        app:
+          type: string
+          description: The app that owns the folder. With `env`. Empty means admin-owned.
+          default: ""
+        env:
+          type: string
+          enum: ["", dev, prod]
+          default: ""
+    Folder:
+      type: object
+      required: [name, disk, app, env, files, bytes, created_at]
+      properties:
+        name: { $ref: "#/components/schemas/Name" }
+        disk: { type: string }
+        app:
+          type: string
+          description: The owning app, or "" for an admin-owned folder.
+        env:
+          type: string
+          description: "`dev`, `prod`, or \"\" for an admin-owned folder."
+        files:
+          type: integer
+          description: Files that are not in the trash. 0 in the answer to a create.
+        bytes:
+          type: integer
+          description: Their total size. 0 in the answer to a create.
+        created_at:
+          type: integer
+          description: Unix time in seconds.
+    File:
+      type: object
+      required: [id, folder, name, content_type, size, sha256, created_at, created_by, tags, info, meta]
+      properties:
+        id: { $ref: "#/components/schemas/FileId" }
+        folder: { $ref: "#/components/schemas/Name" }
+        name:
+          type: string
+          description: The cleaned file name.
+        content_type:
+          type: string
+          description: Found from the bytes. `application/octet-stream` when not recognised.
+        size:
+          type: integer
+          description: Bytes.
+        sha256:
+          type: string
+          description: Lower case hex.
+        created_at:
+          type: integer
+          description: Unix time in seconds.
+        created_by:
+          type: string
+          description: "`person:<id>`, `key:<id>` or `app:<app>/<env>`."
+        tags:
+          type: array
+          items: { type: string }
+        info:
+          type: object
+          description: Whatever the app saved with PATCH. `{}` at first.
+        meta: { $ref: "#/components/schemas/Meta" }
+    Meta:
+      type: object
+      description: |
+        What the server found inside the file, chosen by the file's real (sniffed) type.
+        Every key is left out when it was not found, so `{}` is normal. Strings have
+        control characters removed and are cut at 200 characters; numbers are finite;
+        the whole object is at most 4096 bytes (or it is `{}`). Not settable by clients.
+
+        Which keys can appear:
+
+        * Images (JPEG, PNG, HEIC/HEIF, WebP, TIFF, GIF): `width`, `height`, `taken_at`,
+          `camera_make`, `camera_model`, `lens`, `orientation`, `gps`. GIF has only
+          `width` and `height`; PNG, WebP and the rest give the rest only when they carry EXIF.
+        * Video (MP4, MOV, M4V, and best effort for others such as WebM and MKV): `width`,
+          `height`, `duration_s`, `taken_at`, `gps`.
+        * Audio (MP3, FLAC, M4A, OGG, WAV, ...): `duration_s`, `title`, `artist`,
+          `album`, `year`. An audio-only MP4 can also come through the video path and
+          then gets the audio keys.
+        * PDF (up to 100 MB): `pages`, `title`, `author`.
+      additionalProperties: false
+      properties:
+        width:
+          type: integer
+          description: Pixels, as stored in the file, before any `orientation` turn.
+        height:
+          type: integer
+          description: Pixels, as stored in the file, before any `orientation` turn.
+        duration_s:
+          type: number
+          description: Seconds.
+        taken_at:
+          type: string
+          description: |
+            When it was taken, RFC 3339, to the second. From EXIF `DateTimeOriginal`
+            (with `OffsetTimeOriginal` when the camera wrote one) or the video's creation
+            time. With an offset it is written with it (`2023-07-09T20:36:33+08:00`).
+            Without one, the camera's clock time is kept exactly as given and written
+            **without** an offset (`2023-07-09T20:36:33`): this is not a valid RFC 3339
+            time on its own, and nothing is guessed about the time zone.
+            Years outside 1900-2100 (1970-2100 for video) are dropped.
+            Searches (`taken_after`, `taken_before`) use this value turned into UTC when it
+            has an offset, and as given when it has none.
+          examples: ["2023-07-09T20:36:33+08:00", "2023-07-09T20:36:33"]
+        camera_make: { type: string }
+        camera_model: { type: string }
+        lens: { type: string }
+        orientation:
+          type: integer
+          minimum: 1
+          maximum: 8
+          description: The EXIF orientation. 1 is upright.
+        gps:
+          type: object
+          required: [lat, lon]
+          additionalProperties: false
+          properties:
+            lat:
+              type: number
+              description: Degrees, -90 to 90. South is negative.
+            lon:
+              type: number
+              description: Degrees, -180 to 180. West is negative.
+            alt:
+              type: number
+              description: Metres above sea level (negative below). Only when known.
+        title: { type: string }
+        artist: { type: string }
+        album: { type: string }
+        author: { type: string }
+        year:
+          type: integer
+        pages:
+          type: integer
+          description: PDF page count.

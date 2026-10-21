@@ -9,6 +9,7 @@ pub mod config;
 pub mod db;
 pub mod disk;
 pub mod files;
+pub mod meta;
 
 #[cfg(test)]
 mod testutil;

@@ -33,6 +33,10 @@ pub struct FileRow {
     pub env: String,
     pub tags: Vec<String>,
     pub info: serde_json::Value,
+    /// Found by the server on upload. Clients cannot change it.
+    pub meta: serde_json::Value,
+    /// `meta.taken_at` for searching: UTC if it had an offset, else as given.
+    pub taken_at: Option<String>,
     /// Relative to the disk's path.
     pub path: String,
 }
@@ -65,13 +69,8 @@ impl Db {
     }
 }
 
-/// Brings the schema up to date, using `user_version`.
-/// Add a new `if version < N` step here for later changes.
-fn migrate(conn: &Connection) -> rusqlite::Result<()> {
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version < 1 {
-        conn.execute_batch(
-            "BEGIN;
+/// Never change this: databases in the field have already run it.
+const MIGRATION_1: &str = "BEGIN;
              CREATE TABLE folders(
                name TEXT PRIMARY KEY,
                disk TEXT NOT NULL,
@@ -96,6 +95,23 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                trashed_at INTEGER);
              CREATE INDEX files_by_folder ON files(folder, trashed_at, id);
              PRAGMA user_version = 1;
+             COMMIT;";
+
+/// Brings the schema up to date, using `user_version`.
+/// Add a new `if version < N` step here for later changes.
+fn migrate(conn: &Connection) -> rusqlite::Result<()> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version < 1 {
+        conn.execute_batch(MIGRATION_1)?;
+    }
+    if version < 2 {
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE files ADD COLUMN meta TEXT NOT NULL DEFAULT '{}';
+             ALTER TABLE files ADD COLUMN taken_at TEXT;
+             CREATE INDEX files_by_taken ON files(folder, taken_at);
+             CREATE INDEX files_by_sha ON files(folder, sha256);
+             PRAGMA user_version = 2;
              COMMIT;",
         )?;
     }
@@ -151,11 +167,12 @@ pub fn folder_insert(conn: &Connection, f: &Folder) -> rusqlite::Result<()> {
 }
 
 const FILE_COLS: &str = "id, folder, name, content_type, size, sha256, created_at, created_by, \
-                         app, env, tags, info, path";
+                         app, env, tags, info, path, meta, taken_at";
 
 fn file_from(r: &rusqlite::Row) -> rusqlite::Result<FileRow> {
     let tags: String = r.get(10)?;
     let info: String = r.get(11)?;
+    let meta: String = r.get(13)?;
     Ok(FileRow {
         id: r.get(0)?,
         folder: r.get(1)?,
@@ -170,14 +187,19 @@ fn file_from(r: &rusqlite::Row) -> rusqlite::Result<FileRow> {
         tags: serde_json::from_str(&tags).unwrap_or_default(),
         info: serde_json::from_str(&info).unwrap_or_else(|_| serde_json::json!({})),
         path: r.get(12)?,
+        meta: serde_json::from_str(&meta)
+            .ok()
+            .filter(serde_json::Value::is_object)
+            .unwrap_or_else(|| serde_json::json!({})),
+        taken_at: r.get(14)?,
     })
 }
 
 pub fn file_insert(conn: &Connection, f: &FileRow) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO files(id, folder, name, content_type, size, sha256, created_at, created_by,
-                           app, env, tags, info, path)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                           app, env, tags, info, path, meta, taken_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         params![
             f.id,
             f.folder,
@@ -191,7 +213,9 @@ pub fn file_insert(conn: &Connection, f: &FileRow) -> rusqlite::Result<()> {
             f.env,
             serde_json::to_string(&f.tags).unwrap_or_default(),
             f.info.to_string(),
-            f.path
+            f.path,
+            f.meta.to_string(),
+            f.taken_at
         ],
     )
     .map(|_| ())
@@ -209,13 +233,43 @@ pub fn file_get(conn: &Connection, folder: &str, id: &str) -> rusqlite::Result<O
     .optional()
 }
 
+/// A non-trashed file of the folder with this content, if there is one.
+pub fn file_by_sha(
+    conn: &Connection,
+    folder: &str,
+    sha256: &str,
+) -> rusqlite::Result<Option<FileRow>> {
+    conn.query_row(
+        &format!(
+            "SELECT {FILE_COLS} FROM files
+             WHERE folder = ? AND sha256 = ? AND trashed_at IS NULL
+             ORDER BY id LIMIT 1"
+        ),
+        [folder, sha256],
+        file_from,
+    )
+    .optional()
+}
+
+/// The optional filters of a file listing. All values are bound as parameters.
+#[derive(Default)]
+pub struct ListFilter {
+    pub tag: Option<String>,
+    pub type_prefix: Option<String>,
+    pub after: Option<String>,
+    /// `taken_at` at or after this (already normalised).
+    pub taken_after: Option<String>,
+    /// `taken_at` before this (already normalised).
+    pub taken_before: Option<String>,
+    /// Case-insensitive part of the camera make or model.
+    pub camera: Option<String>,
+}
+
 /// Files that are not trashed, newest first. The filters are all optional.
 pub fn file_list(
     conn: &Connection,
     folder: &str,
-    tag: Option<&str>,
-    type_prefix: Option<&str>,
-    after: Option<&str>,
+    f: &ListFilter,
     limit: i64,
 ) -> rusqlite::Result<Vec<FileRow>> {
     let mut stmt = conn.prepare(&format!(
@@ -224,9 +278,28 @@ pub fn file_list(
            AND (?2 IS NULL OR EXISTS (SELECT 1 FROM json_each(files.tags) WHERE value = ?2))
            AND (?3 IS NULL OR substr(content_type, 1, length(?3)) = ?3)
            AND (?4 IS NULL OR id < ?4)
-         ORDER BY id DESC LIMIT ?5"
+           AND (?5 IS NULL OR taken_at >= ?5)
+           AND (?6 IS NULL OR taken_at < ?6)
+           AND (?7 IS NULL
+                OR instr(lower(json_extract(meta, '$.camera_make')), lower(?7)) > 0
+                OR instr(lower(json_extract(meta, '$.camera_model')), lower(?7)) > 0
+                OR instr(lower(json_extract(meta, '$.camera_make') || ' '
+                               || json_extract(meta, '$.camera_model')), lower(?7)) > 0)
+         ORDER BY id DESC LIMIT ?8"
     ))?;
-    let rows = stmt.query_map(params![folder, tag, type_prefix, after, limit], file_from)?;
+    let rows = stmt.query_map(
+        params![
+            folder,
+            f.tag,
+            f.type_prefix,
+            f.after,
+            f.taken_after,
+            f.taken_before,
+            f.camera,
+            limit
+        ],
+        file_from,
+    )?;
     rows.collect()
 }
 
@@ -268,4 +341,51 @@ pub fn trashed_before(
 pub fn file_delete(conn: &Connection, id: &str) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM files WHERE id = ?", [id])
         .map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn user_version(conn: &Connection) -> i64 {
+        conn.query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_version_1_database_is_upgraded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("files.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(MIGRATION_1).unwrap();
+            assert_eq!(user_version(&conn), 1);
+            conn.execute_batch(
+                "INSERT INTO folders VALUES ('photos', 'main', '', '', 1, 'person:p1');
+                 INSERT INTO files(id, folder, name, content_type, size, sha256, created_at,
+                                   created_by, app, env, tags, info, path)
+                 VALUES ('01AAAAAAAAAAAAAAAAAAAAAAAA', 'photos', 'a.jpg', 'image/jpeg', 3, 'ab',
+                         1, 'person:p1', '', '', '[\"x\"]', '{\"k\":1}', 'homelab-files/a');",
+            )
+            .unwrap();
+        }
+        let db = Db::open(&path).unwrap();
+        // Opening it again changes nothing.
+        Db::open(&path).unwrap();
+        let (version, row) = db
+            .run(|c| {
+                Ok((
+                    user_version(c),
+                    file_get(c, "photos", "01AAAAAAAAAAAAAAAAAAAAAAAA")?,
+                ))
+            })
+            .await
+            .unwrap();
+        assert_eq!(version, 2);
+        let row = row.unwrap();
+        assert_eq!(row.meta, serde_json::json!({}));
+        assert_eq!(row.taken_at, None);
+        assert_eq!(row.tags, ["x"]);
+        assert_eq!(row.info, serde_json::json!({"k": 1}));
+    }
 }

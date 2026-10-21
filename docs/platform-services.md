@@ -105,13 +105,16 @@ The **Files** screen in the companion shows how full each disk is, and the folde
 | `GET /api/files/folders` | the folders you can see |
 | `POST /api/files/folders` `{"name","disk"?}` | make a folder. An app's folder is always its own |
 | `POST /api/files/<folder>?name=&tags=a,b&sha256=` | save a file. The body is the file itself, not JSON |
-| `GET /api/files/<folder>?tag=&type=image/&after=&limit=` | list files, newest first, 50 at a time. Pass `next` as `after` for more |
+| `GET /api/files/<folder>?tag=&type=image/&taken_after=&taken_before=&camera=&after=&limit=` | list files, newest first, 50 at a time. Pass `next` as `after` for more |
 | `GET /api/files/<folder>/<id>` | the file. Supports `Range` |
 | `GET /api/files/<folder>/<id>/info` | the file's details |
 | `PATCH /api/files/<folder>/<id>/info` `{"tags"?,"info"?}` | change tags (up to 20) or `info` (any JSON object up to 4 KB) |
 | `DELETE /api/files/<folder>/<id>` | move it to the trash. The trash is emptied after 30 days |
 
 - The type of a file is worked out from its bytes, not from what the caller says. Downloads are always sent as attachments.
+- Homelab reads what it can from each file and returns it as `meta`. Photos: `width`, `height`, `taken_at`, `camera_make`, `camera_model`, `lens`, `orientation`, `gps`. Videos: `width`, `height`, `duration_s`, `taken_at`, `gps`. Audio: `duration_s`, `title`, `artist`, `album`, `year`. PDFs: `pages`, `title`, `author`. A key is there only when found. This is done in Rust with memory-safe parsers only, at most 10 seconds and two files at a time; a file it can't read just gets `{}`.
+- Saving a file that's already in the folder (same bytes) stores nothing new: the answer is `200` with the file already there and `X-Homelab-Duplicate: true`.
+- Every call is described in [files.openapi.yaml](files.openapi.yaml), so tools can make a client from it.
 - The name is cleaned: only letters, digits, `.`, `_` and `-` are kept.
 - An upload is written to a temp file, synced, then moved into place, so a crash never leaves half a file.
 
