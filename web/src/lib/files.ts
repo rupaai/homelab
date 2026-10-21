@@ -1,5 +1,5 @@
-import { bytes } from './format';
-import type { FileFolder, StorageDisk } from './types';
+import { absoluteTime, bytes, shortDate } from './format';
+import type { FileFolder, FileMeta, StorageDisk } from './types';
 
 const FOLDER_NAME = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 
@@ -50,4 +50,75 @@ export function saveBlob(blob: Blob, name: string): void {
 	a.download = name;
 	a.click();
 	setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export interface MetaLine { label: string; value: string; link?: { text: string; href: string } }
+
+const text = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+
+/** "Apple iPhone 15 Pro", but not "Apple Apple iPhone 15 Pro". */
+function cameraName(meta: FileMeta): string {
+	const make = text(meta.camera_make);
+	const model = text(meta.camera_model);
+	if (make && model) return model.toLowerCase().startsWith(make.toLowerCase()) ? model : `${make} ${model}`;
+	return make || model;
+}
+
+/** 151 becomes "2:31"; 3725 becomes "1:02:05". */
+export function lengthText(seconds: number): string {
+	const s = Math.max(0, Math.round(seconds));
+	const h = Math.floor(s / 3600);
+	const m = Math.floor((s % 3600) / 60);
+	const sec = String(s % 60).padStart(2, '0');
+	return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+}
+
+/** A link to a spot on the map. The numbers are always plain numbers, never text from the file. */
+export const mapLink = (lat: number, lon: number): string => `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}`;
+
+/** What Homelab read from a file, in plain words. Missing meta and unknown keys give nothing. */
+export function metaLines(meta: FileMeta | null | undefined): MetaLine[] {
+	const m = (meta ?? {}) as FileMeta;
+	const out: MetaLine[] = [];
+	const w = num(m.width);
+	const h = num(m.height);
+	if (w && h) out.push({ label: 'Size in pixels', value: `${w} × ${h}` });
+	const taken = text(m.taken_at) ? absoluteTime(m.taken_at) : '';
+	if (taken) out.push({ label: 'Taken', value: taken });
+	const camera = cameraName(m);
+	if (camera) out.push({ label: 'Camera', value: camera });
+	if (text(m.lens)) out.push({ label: 'Lens', value: text(m.lens) });
+	const len = num(m.duration_s);
+	if (len !== undefined && len >= 0) out.push({ label: 'Length', value: lengthText(len) });
+	const pages = num(m.pages);
+	if (pages) out.push({ label: 'Pages', value: String(pages) });
+	if (text(m.title)) out.push({ label: 'Title', value: text(m.title) });
+	if (text(m.artist)) out.push({ label: 'Artist', value: text(m.artist) });
+	if (text(m.album)) out.push({ label: 'Album', value: text(m.album) });
+	const year = num(m.year);
+	if (year) out.push({ label: 'Year', value: String(year) });
+	if (text(m.author)) out.push({ label: 'Author', value: text(m.author) });
+	const lat = num(m.gps?.lat);
+	const lon = num(m.gps?.lon);
+	if (lat !== undefined && lon !== undefined && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+		out.push({ label: 'Place', value: `${lat.toFixed(5)}, ${lon.toFixed(5)}`, link: { text: 'Open map', href: mapLink(Number(lat.toFixed(5)), Number(lon.toFixed(5))) } });
+	}
+	return out;
+}
+
+/** One short line for the file list, like "Taken 3 Oct 2026 · iPhone 15 Pro" or "2:31". Empty when there's nothing to say. */
+export function metaSummary(meta: FileMeta | null | undefined): string {
+	const m = (meta ?? {}) as FileMeta;
+	const parts: string[] = [];
+	const date = text(m.taken_at) ? shortDate(m.taken_at) : '';
+	if (date) parts.push(`Taken ${date}`);
+	const camera = cameraName(m);
+	if (camera) parts.push(camera);
+	const len = num(m.duration_s);
+	if (len !== undefined && len >= 0) parts.push(lengthText(len));
+	const pages = num(m.pages);
+	if (pages) parts.push(`${pages} ${pages === 1 ? 'page' : 'pages'}`);
+	if (text(m.artist)) parts.push(text(m.artist));
+	return parts.join(' · ');
 }

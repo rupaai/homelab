@@ -1,6 +1,6 @@
 // Fake data for developing the UI without the Go server (see api.ts for how it's switched on).
 import { ApiError } from './errors';
-import type { ActivityEvent, Api, AppView, FileFolder, StorageDisk, StoredFile, EnvName, EnvView, PersonInput, KeyView, PersonView, ReleaseView, SecretView, SettingView } from './types';
+import type { ActivityEvent, Api, AppView, FileFolder, StorageDisk, StoredFile, UploadResult, EnvName, EnvView, PersonInput, KeyView, PersonView, ReleaseView, SecretView, SettingView } from './types';
 
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 const delay = <T>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
@@ -160,9 +160,11 @@ const folderStore: FileFolder[] = [
 	{ name: 'movie-night-posters', disk: 'photos', app: 'movie-night', env: 'prod', files: 0, bytes: 0, created_at: ago(60 * 24 * 5) }
 ];
 const fileStore: StoredFile[] = [
-	{ id: 'f003', folder: 'documents', name: 'holiday.svg', content_type: 'image/svg+xml', size: 1200, sha256: 'a'.repeat(64), created_at: ago(30), created_by: 'owner', tags: ['trip'], info: {} },
-	{ id: 'f002', folder: 'documents', name: 'insurance.pdf', content_type: 'application/pdf', size: 482_000, sha256: 'b'.repeat(64), created_at: ago(60 * 30), created_by: 'owner', tags: ['home', 'paperwork'], info: {} },
-	{ id: 'f001', folder: 'documents', name: 'notes.txt', content_type: 'text/plain', size: 2300, sha256: 'c'.repeat(64), created_at: ago(60 * 24 * 12), created_by: 'owner', tags: [], info: {} }
+	{ id: 'f005', folder: 'documents', name: 'harbour.jpg', content_type: 'image/jpeg', size: 3_400_000, sha256: 'd'.repeat(64), created_at: ago(10), created_by: 'owner', tags: ['trip'], info: {}, meta: { width: 4032, height: 3024, taken_at: '2026-10-03T14:21:07Z', camera_make: 'Apple', camera_model: 'iPhone 15 Pro', lens: 'iPhone 15 Pro back triple camera 6.86mm f/1.78', orientation: 1, gps: { lat: 55.67594, lon: 12.56553, alt: 12 } } },
+	{ id: 'f004', folder: 'documents', name: 'birthday.mp4', content_type: 'video/mp4', size: 24_800_000, sha256: 'e'.repeat(64), created_at: ago(20), created_by: 'owner', tags: [], info: {}, meta: { width: 1920, height: 1080, taken_at: '2026-08-14T18:02:00Z', camera_make: 'Canon', camera_model: 'Canon EOS R6', duration_s: 151, video_codec: 'h264' } },
+	{ id: 'f003', folder: 'documents', name: 'holiday.svg', content_type: 'image/svg+xml', size: 1200, sha256: 'a'.repeat(64), created_at: ago(30), created_by: 'owner', tags: ['trip'], info: {}, meta: { width: 120, height: 80 } },
+	{ id: 'f002', folder: 'documents', name: 'insurance.pdf', content_type: 'application/pdf', size: 482_000, sha256: 'b'.repeat(64), created_at: ago(60 * 30), created_by: 'owner', tags: ['home', 'paperwork'], info: {}, meta: { pages: 12, title: 'Home insurance policy', author: 'Northgate Insurance' } },
+	{ id: 'f001', folder: 'documents', name: 'notes.txt', content_type: 'text/plain', size: 2300, sha256: 'c'.repeat(64), created_at: ago(60 * 24 * 12), created_by: 'owner', tags: [], info: {}, meta: {} }
 ];
 const syncFolders = () => folderStore.forEach((f) => {
 	const rows = fileStore.filter((x) => x.folder === f.name);
@@ -421,18 +423,24 @@ export const mockApi: Api = {
 	async files(folder, q = {}) {
 		folderOf(folder);
 		let rows = fileStore.filter((f) => f.folder === folder && (!q.tag || f.tags.includes(q.tag)) && (!q.type || f.content_type.startsWith(q.type)));
+		const day = (v: string) => (/^\d{4}-\d{2}-\d{2}$/.test(v) ? 864e5 : 0);
+		if (q.takenAfter) rows = rows.filter((f) => !!f.meta.taken_at && Date.parse(f.meta.taken_at) >= Date.parse(q.takenAfter!));
+		if (q.takenBefore) rows = rows.filter((f) => !!f.meta.taken_at && Date.parse(f.meta.taken_at) < Date.parse(q.takenBefore!) + day(q.takenBefore!));
+		if (q.camera) rows = rows.filter((f) => `${f.meta.camera_make ?? ''} ${f.meta.camera_model ?? ''}`.toLowerCase().includes(q.camera!.trim().toLowerCase()));
 		if (q.after) rows = rows.filter((f) => f.id < q.after!);
 		const limit = q.limit ?? 50;
 		const page = rows.slice(0, limit);
-		return delay({ files: page.map((f) => ({ ...f, tags: [...f.tags] })), next: rows.length > limit ? page[page.length - 1].id : null });
+		return delay({ files: page.map((f) => ({ ...f, tags: [...f.tags], meta: { ...f.meta } })), next: rows.length > limit ? page[page.length - 1].id : null });
 	},
-	async uploadFile(folder, file, tags = []) {
+	async uploadFile(folder, file, tags = []): Promise<UploadResult> {
 		folderOf(folder);
 		if (file.size > 50e6) throw new ApiError('That file is too big. The limit is 50 MB.', 413);
-		const f: StoredFile = { id: `f${String(Date.now()).slice(-9)}`, folder, name: file.name, content_type: file.type || 'application/octet-stream', size: file.size, sha256: '0'.repeat(64), created_at: new Date().toISOString(), created_by: 'owner', tags: [...tags], info: {} };
+		const same = fileStore.find((x) => x.folder === folder && x.name === file.name && x.size === file.size);
+		if (same) return delay({ file: { ...same, tags: [...same.tags], meta: { ...same.meta } }, duplicate: true });
+		const f: StoredFile = { id: `f${String(Date.now()).slice(-9)}`, folder, name: file.name, content_type: file.type || 'application/octet-stream', size: file.size, sha256: '0'.repeat(64), created_at: new Date().toISOString(), created_by: 'owner', tags: [...tags], info: {}, meta: {} };
 		fileStore.unshift(f);
 		syncFolders();
-		return delay({ ...f });
+		return delay({ file: { ...f }, duplicate: false });
 	},
 	async fileBlob() {
 		const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80"><rect width="120" height="80" fill="#8ab"/><circle cx="85" cy="25" r="10" fill="#fd8"/><path d="M0 80l40-40 30 30 20-15 30 25z" fill="#465"/></svg>';

@@ -1,7 +1,7 @@
 import { ApiError, NETWORK_MESSAGE, errorMessage } from './errors';
 import { SIGN_IN_MESSAGE, sessionLost } from './session';
 import { clearToken, getToken, setToken } from './token';
-import type { Api, AppView, FileFolder, FilePage, FileQuery, StorageDisk, StoredFile, BootstrapView, CreatedKey, KeysView, DeviceView, EnvSecrets, Invitation, KeyView, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult, TestVersion } from './types';
+import type { Api, AppView, FileFolder, FilePage, FileQuery, StorageDisk, StoredFile, UploadResult, FileMeta, BootstrapView, CreatedKey, KeysView, DeviceView, EnvSecrets, Invitation, KeyView, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult, TestVersion } from './types';
 
 /** Mock mode: `?mock` in the URL or VITE_MOCK=1 gives fake data, no server needed. Dev builds only, so the mock data is dropped from the real companion. */
 export const useMock: boolean =
@@ -41,12 +41,12 @@ async function request<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: strin
 }
 
 /** The raw file as the body, not JSON. */
-async function upload(path: string, file: File): Promise<StoredFile> {
+async function upload(path: string, file: File): Promise<UploadResult> {
 	const headers = { Accept: 'application/json', 'Content-Type': file.type || 'application/octet-stream', ...authHeaders(true) };
 	const res = await send(path, { method: 'POST', headers, body: file });
 	const text = await res.text();
 	if (!res.ok) throw failure(res, text);
-	return JSON.parse(text) as StoredFile;
+	return { file: fixFile(JSON.parse(text) as StoredFile), duplicate: res.headers.get('X-Homelab-Duplicate') === 'true' };
 }
 
 /** A file's bytes. A plain <img src> or link can't send the token, so the screens fetch it here. */
@@ -72,6 +72,9 @@ function fixApp(a: AppView): AppView {
 		envs: list(a.envs).map((e) => ({ ...e, missingSecrets: list(e.missingSecrets) }))
 	};
 }
+
+// Older servers send no meta; the screens want an object.
+const fixFile = (f: StoredFile): StoredFile => ({ ...f, tags: list(f.tags), info: f.info ?? {}, meta: (f.meta ?? {}) as FileMeta });
 
 const realApi: Api = {
 	bootstrap: () => request<BootstrapView>('GET', '/api/bootstrap'),
@@ -156,8 +159,11 @@ const realApi: Api = {
 		if (q.type) p.set('type', q.type);
 		if (q.after) p.set('after', q.after);
 		if (q.limit) p.set('limit', String(q.limit));
+		if (q.takenAfter) p.set('taken_after', q.takenAfter);
+		if (q.takenBefore) p.set('taken_before', q.takenBefore);
+		if (q.camera) p.set('camera', q.camera);
 		const r = await request<FilePage>('GET', `/api/files/${enc(folder)}?${p}`);
-		return { files: list(r.files).map((f) => ({ ...f, tags: list(f.tags), info: f.info ?? {} })), next: r.next ?? null };
+		return { files: list(r.files).map(fixFile), next: r.next ?? null };
 	},
 	uploadFile: (folder, file, tags = []) => {
 		const p = new URLSearchParams({ name: file.name });

@@ -156,3 +156,10 @@ export function appAddress(address: string, host = typeof location === 'undefine
 		return u.toString().replace(/\/$/, '');
 	} catch { return address; }
 }
+
+/** "3 Oct 2026", or nothing when the text isn't a date. */
+export function shortDate(iso: string | null | undefined): string {
+	if (!iso) return '';
+	const d = new Date(iso);
+	return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}

@@ -226,7 +226,7 @@ export interface Api {
 	fileFolders(): Promise<FileFolder[]>;
 	createFileFolder(name: string, disk?: string): Promise<FileFolder>;
 	files(folder: string, q?: FileQuery): Promise<FilePage>;
-	uploadFile(folder: string, file: File, tags?: string[]): Promise<StoredFile>;
+	uploadFile(folder: string, file: File, tags?: string[]): Promise<UploadResult>;
 	fileBlob(folder: string, id: string): Promise<Blob>;
 	deleteFile(folder: string, id: string): Promise<void>;
 }
@@ -238,9 +238,26 @@ export interface FileFolder { name: string; disk: string; app: string; env: stri
 export interface StoredFile {
 	id: string; folder: string; name: string; content_type: string; size: number; sha256: string;
 	created_at: string; created_by: string; tags: string[]; info: Record<string, unknown>;
+	meta: FileMeta;
 }
+/** Facts Homelab read from the file itself. Every key is optional, and the server may add more. */
+export interface FileMeta {
+	width?: number; height?: number;
+	/** RFC 3339 */
+	taken_at?: string;
+	camera_make?: string; camera_model?: string; lens?: string;
+	/** 1 to 8 */
+	orientation?: number;
+	gps?: { lat: number; lon: number; alt?: number };
+	duration_s?: number; video_codec?: string;
+	title?: string; artist?: string; album?: string; year?: number;
+	pages?: number; author?: string;
+}
+/** duplicate is true when the folder already had this file, so `file` is the one that was there. */
+export interface UploadResult { file: StoredFile; duplicate: boolean; }
 export interface FilePage { files: StoredFile[]; next: string | null; }
-export interface FileQuery { tag?: string; type?: string; after?: string; limit?: number; }
+/** takenAfter and takenBefore are dates (yyyy-mm-dd) or RFC 3339 times. camera is text to look for. */
+export interface FileQuery { tag?: string; type?: string; after?: string; limit?: number; takenAfter?: string; takenBefore?: string; camera?: string; }
 
 export interface KeyView {
 	id: string; prefix: string; name: string; kind: 'app' | 'admin';

@@ -53,3 +53,30 @@ describe('invite redemption API', () => {
 		});
 	});
 });
+
+describe('file upload API', () => {
+	afterEach(() => vi.unstubAllGlobals());
+	const file = new File(['hi'], 'a.txt', { type: 'text/plain' });
+	const reply = (body: string, headers: Record<string, string> = {}) => vi.fn().mockResolvedValue(new Response(body, { status: 200, headers: { 'Content-Type': 'application/json', ...headers } }));
+
+	it('says when the file was already in the folder', async () => {
+		vi.stubGlobal('fetch', reply('{"id":"f1","folder":"d","name":"a.txt","tags":null,"meta":{"pages":2}}', { 'X-Homelab-Duplicate': 'true' }));
+		const r = await api.uploadFile('d', file);
+		expect(r.duplicate).toBe(true);
+		expect(r.file.meta).toEqual({ pages: 2 });
+		expect(r.file.tags).toEqual([]);
+	});
+	it('treats a new file as new and fills in missing meta', async () => {
+		vi.stubGlobal('fetch', reply('{"id":"f1","folder":"d","name":"a.txt"}'));
+		const r = await api.uploadFile('d', file);
+		expect(r.duplicate).toBe(false);
+		expect(r.file.meta).toEqual({});
+	});
+	it('sends the metadata filters', async () => {
+		const fetch = reply('{"files":[{"id":"f1"}],"next":null}');
+		vi.stubGlobal('fetch', fetch);
+		const r = await api.files('d', { takenAfter: '2026-01-01', takenBefore: '2026-02-01', camera: 'iPhone 15' });
+		expect(fetch.mock.calls[0][0]).toBe('/api/files/d?taken_after=2026-01-01&taken_before=2026-02-01&camera=iPhone+15');
+		expect(r.files[0].meta).toEqual({});
+	});
+});

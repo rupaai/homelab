@@ -4,7 +4,7 @@
 	import { api } from '#lib/api.ts';
 	import { messageOf } from '#lib/errors.ts';
 	import { bytes } from '#lib/format.ts';
-	import { isImage, parseTags, saveBlob } from '#lib/files.ts';
+	import { isImage, metaLines, metaSummary, parseTags, saveBlob } from '#lib/files.ts';
 	import type { StoredFile } from '#lib/types.ts';
 	import FileImage from '#lib/components/FileImage.svelte';
 	import Sheet from '#lib/components/Sheet.svelte';
@@ -19,11 +19,15 @@
 	let more = $state(false);
 	let error = $state('');
 	let tagFilter = $state('');
+	let takenFrom = $state('');
+	let takenTo = $state('');
+	let cameraFilter = $state('');
+	const filtered = $derived(!!(tagFilter.trim() || takenFrom || takenTo || cameraFilter.trim()));
 
 	async function load(after?: string) {
 		const tag = tagFilter.trim();
 		try {
-			const r = await api.files(folder, { after, tag: tag || undefined });
+			const r = await api.files(folder, { after, tag: tag || undefined, takenAfter: takenFrom || undefined, takenBefore: takenTo || undefined, camera: cameraFilter.trim() || undefined });
 			files = after ? [...files, ...r.files] : r.files;
 			next = r.next;
 			error = '';
@@ -51,24 +55,29 @@
 	let progress = $state('');
 	let uploadErrors = $state<string[]>([]);
 	let uploading = $state(false);
+	let duplicates = $state<string[]>([]);
 	async function upload() {
 		const chosen = Array.from(picker.files ?? []);
 		if (chosen.length === 0) return;
 		const tags = parseTags(tagText);
 		uploading = true;
 		uploadErrors = [];
+		duplicates = [];
 		let saved = 0;
+		let already: string[] = [];
 		for (const [i, f] of chosen.entries()) {
 			progress = `Saving ${i + 1} of ${chosen.length}: ${f.name}`;
 			try {
-				await api.uploadFile(folder, f, tags);
-				saved++;
+				const r = await api.uploadFile(folder, f, tags);
+				if (r.duplicate) already = [...already, r.file.name];
+				else saved++;
 			} catch (e) {
 				uploadErrors = [...uploadErrors, `${f.name}: ${messageOf(e)}`];
 			}
 		}
 		picker.value = '';
 		progress = saved > 0 ? `Saved ${saved} of ${chosen.length}.` : '';
+		duplicates = already;
 		uploading = false;
 		if (saved > 0) await load();
 	}
@@ -118,6 +127,7 @@
 		<input class="hidden" type="file" multiple bind:this={picker} onchange={upload} aria-label="Choose files" />
 		<div class="row-actions"><button class="btn primary" type="button" disabled={uploading} onclick={() => picker.click()}>{uploading ? 'Saving…' : 'Choose files'}</button></div>
 		{#if progress}<p class="muted small" role="status">{#if uploading}<Spinner /> {/if}{progress}</p>{/if}
+		{#each duplicates as n}<p class="muted small" role="status">Already here: {n}</p>{/each}
 		{#each uploadErrors as m}<p class="notice bad" role="alert">{m}</p>{/each}
 	</section>
 
@@ -134,8 +144,13 @@
 				<input id="tag-filter" type="text" bind:value={tagFilter} autocomplete="off" placeholder="Show only a tag" />
 				<button class="btn small" type="submit">Show</button>
 			</form>
+			<form class="filter more-filters" onsubmit={filter}>
+				<div><label for="taken-from">Taken from</label><input id="taken-from" type="date" bind:value={takenFrom} /></div>
+				<div><label for="taken-to">to</label><input id="taken-to" type="date" bind:value={takenTo} /></div>
+				<div class="grow"><label for="camera-filter">Camera</label><input id="camera-filter" type="text" bind:value={cameraFilter} autocomplete="off" placeholder="iPhone" /></div>
+			</form>
 			{#if files.length === 0}
-				<p class="muted none">{tagFilter.trim() ? 'No files have that tag.' : 'No files yet. Add some above.'}</p>
+				<p class="muted none">{filtered ? 'No files match.' : 'No files yet. Add some above.'}</p>
 			{:else}
 				<ul>
 					{#each files as f (f.id)}
@@ -146,8 +161,10 @@
 							<div class="info">
 								<strong>{f.name}</strong>
 								<p class="muted small">{bytes(f.size)} · <Time at={f.created_at} />{#if f.tags.length} · {f.tags.join(', ')}{/if}</p>
+								{#if metaSummary(f.meta)}<p class="muted small">{metaSummary(f.meta)}</p>{/if}
 							</div>
 							<div class="acts">
+								{#if !isImage(f.content_type) && metaLines(f.meta).length}<button class="btn small" type="button" onclick={() => (previewing = f)}>Details<span class="sr-only"> {f.name}</span></button>{/if}
 								<button class="btn small" type="button" onclick={() => download(f)}>Download<span class="sr-only"> {f.name}</span></button>
 								<button class="btn danger small" type="button" onclick={() => (deleting = f)}>Delete<span class="sr-only"> {f.name}</span></button>
 							</div>
@@ -159,10 +176,23 @@
 		</section>
 	{/if}
 
+	{#snippet details(f: StoredFile)}
+		{@const lines = metaLines(f.meta)}
+		{#if lines.length}
+			<dl class="meta">
+				{#each lines as l}
+					<dt>{l.label}</dt>
+					<dd>{l.value}{#if l.link} · <a href={l.link.href} target="_blank" rel="noopener noreferrer">{l.link.text}</a>{/if}</dd>
+				{/each}
+			</dl>
+		{/if}
+	{/snippet}
+
 	{#if previewing}
 		<Sheet title={previewing.name} onclose={() => (previewing = null)}>
 			{#snippet children()}
-				<FileImage {folder} id={previewing!.id} name={previewing!.name} large />
+				{#if isImage(previewing!.content_type)}<FileImage {folder} id={previewing!.id} name={previewing!.name} large />{/if}
+				{@render details(previewing!)}
 			{/snippet}
 			{#snippet footer()}
 				<button class="btn" type="button" onclick={() => previewing && download(previewing)}>Download</button>
@@ -212,6 +242,28 @@
 		display: flex;
 		gap: 0.5rem;
 		align-items: center;
+	}
+	.more-filters {
+		flex-wrap: wrap;
+		align-items: flex-end;
+		margin-top: 0.5rem;
+	}
+	.grow {
+		flex: 1;
+		min-width: 8rem;
+	}
+	.meta {
+		display: grid;
+		grid-template-columns: max-content 1fr;
+		gap: 0.25rem 0.9rem;
+		margin: 0.8rem 0 0;
+	}
+	.meta dt {
+		color: var(--muted, inherit);
+	}
+	.meta dd {
+		margin: 0;
+		overflow-wrap: anywhere;
 	}
 	ul {
 		list-style: none;
