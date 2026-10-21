@@ -431,6 +431,7 @@ func TestRemoveApp(t *testing.T) {
 func TestSecretsViewAndLogMasking(t *testing.T) {
 	ctx := context.Background()
 	r := newRig(t)
+	r.addPeople()
 	r.promoteBoth("aaaaaaa1", "bbbbbbb2")
 	r.sec.Set("movies", core.Prod, "OLD_KEY", "x", "t")
 	envs, err := r.hub.AppSecrets(ctx, "movies")
@@ -460,7 +461,7 @@ func TestSecretsViewAndLogMasking(t *testing.T) {
 	}
 	r.dep.LogTail = "using key tmdb-secret and token ghp_secret_token\n"
 	out, err := r.hub.Logs(ctx, "movies", core.Prod, 10)
-	if err != nil || strings.Contains(out, "tmdb-secret") || strings.Contains(out, "ghp_secret_token") || !strings.Contains(out, "••••••") {
+	if err != nil || strings.Contains(out, "tmdb-secret") || strings.Contains(out, "ghp_secret_token") || !strings.Contains(out, "[secret TMDB_API_KEY]") || !strings.Contains(out, "[secret GITHUB_TOKEN]") {
 		t.Fatalf("logs = %q %v", out, err)
 	}
 	set, _ := r.hub.PlatformSettings(ctx)

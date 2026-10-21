@@ -77,13 +77,26 @@ export interface SecretView {
 	set: boolean;
 	updatedAt?: string;
 	updatedBy?: string;
+	version?: number;
 	generated?: boolean;
-	value?: string;
 }
 
 export interface EnvSecrets {
 	env: EnvName;
 	secrets: SecretView[];
+}
+
+/** An app's secrets. Never has values; canSeeValues says whether this person may ask for them. */
+export interface AppSecretsView {
+	envs: EnvSecrets[];
+	canSeeValues: boolean;
+}
+
+/** One kept value of a secret: who set it and when, never the value. */
+export interface SecretVersion {
+	version: number;
+	setBy: string;
+	setAt: string;
 }
 
 export interface SettingView {
@@ -92,6 +105,7 @@ export interface SettingView {
 	set: boolean;
 	updatedAt?: string;
 	updatedBy?: string;
+	version?: number;
 	appliesAfterRestart: boolean;
 }
 
@@ -171,7 +185,7 @@ export interface PersonInput {
 	grants: Record<string, 'use' | 'build'>;
 }
 export interface Invitation { id: string; url: string; }
-export interface MeView { personId: string; login: string; name: string; local: boolean; roles: HouseholdRole[]; }
+export interface MeView { personId: string; login: string; name: string; local: boolean; roles: HouseholdRole[]; /** may see and change secret values */ canSeeSecrets?: boolean; }
 export interface BootstrapView { needsSetup: boolean; signInReady: boolean; ownerNeedsPasskey?: boolean; /** addresses: ip, from another device: sign in with the password */ password?: boolean; }
 export interface SetupResult { loginUrl: string; recoveryCode: string; }
 export interface PasskeyLink { url: string; }
@@ -215,12 +229,18 @@ export interface Api {
 	activity(q?: ActivityQuery): Promise<ActivityEvent[]>;
 	setPromotion(appId: string, mode: PromotionMode): Promise<AppView>;
 	removeApp(appId: string): Promise<void>;
-	appSecrets(appId: string): Promise<EnvSecrets[]>;
+	appSecrets(appId: string): Promise<AppSecretsView>;
+	revealSecret(appId: string, env: EnvName, name: string): Promise<string>;
+	secretVersions(appId: string, env: EnvName, name: string): Promise<SecretVersion[]>;
+	restoreSecret(appId: string, env: EnvName, name: string, version: number): Promise<void>;
 	setSecret(appId: string, env: EnvName, name: string, value: string): Promise<void>;
 	deleteSecret(appId: string, env: EnvName, name: string): Promise<void>;
 	regenerateSecret(appId: string, env: EnvName, name: string): Promise<void>;
 	settings(): Promise<SettingView[]>;
 	setSetting(name: string, value: string): Promise<void>;
+	revealSetting(name: string): Promise<string>;
+	settingVersions(name: string): Promise<SecretVersion[]>;
+	restoreSetting(name: string, version: number): Promise<void>;
 	deleteSetting(name: string): Promise<void>;
 	keys(): Promise<KeysView>;
 	createKey(input: NewKeyInput): Promise<CreatedKey>;

@@ -1,6 +1,8 @@
 package secretstore
 
 import (
+	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -177,5 +179,188 @@ func TestLoadPlatformSeparatesUnsetFromUnreadable(t *testing.T) {
 	}
 	if _, ok := s.Platform("KEY"); ok {
 		t.Fatal("Platform reports an unreadable value as set")
+	}
+}
+
+func TestVersionsKeepTheLastFive(t *testing.T) {
+	s := open(t, t.TempDir())
+	for i := 1; i <= 7; i++ {
+		if err := s.Set("movies", "prod", "KEY", fmt.Sprintf("value-%d", i), fmt.Sprintf("who-%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	vs, err := s.Versions("movies", "prod", "KEY")
+	if err != nil || len(vs) != 5 {
+		t.Fatalf("versions = %+v, %v", vs, err)
+	}
+	if vs[0].Version != 7 || vs[4].Version != 3 || vs[0].SetBy != "who-7" || vs[0].SetAt.IsZero() {
+		t.Fatalf("versions = %+v", vs)
+	}
+	if list, _ := s.List("movies", "prod"); len(list) != 1 || list[0].Version != 7 {
+		t.Fatalf("list = %+v", list)
+	}
+	// Another secret has its own versions.
+	if other, _ := s.Versions("movies", "dev", "KEY"); len(other) != 0 {
+		t.Fatalf("other env versions = %+v", other)
+	}
+	// Restoring makes a new version holding the old value.
+	n, err := s.Restore("movies", "prod", "KEY", 4, "restorer")
+	if err != nil || n != 8 {
+		t.Fatalf("restore = %d, %v", n, err)
+	}
+	if got, _ := s.Inject("movies", "prod", []string{"KEY"}); got["KEY"] != "value-4" {
+		t.Fatalf("value = %v", got)
+	}
+	vs, _ = s.Versions("movies", "prod", "KEY")
+	if len(vs) != 5 || vs[0].Version != 8 || vs[0].SetBy != "restorer" || vs[4].Version != 4 {
+		t.Fatalf("versions after restore = %+v", vs)
+	}
+	// Version 3 was pushed out.
+	if _, err := s.Restore("movies", "prod", "KEY", 3, "x"); err == nil {
+		t.Fatal("restored a version that is no longer kept")
+	}
+	if _, err := s.Restore("movies", "prod", "NOPE", 1, "x"); err == nil {
+		t.Fatal("restored a secret that was never set")
+	}
+}
+
+func TestVersionsAreSealedToTheirPlace(t *testing.T) {
+	s := open(t, t.TempDir())
+	_ = s.Set("movies", "prod", "KEY", "one-one", "x")
+	_ = s.Set("movies", "prod", "KEY", "two-two", "x")
+	_ = s.Set("movies", "prod", "OTHER", "other-value", "x")
+	// Copy version 1's sealed value over version 2: it must not open as version 2.
+	if _, err := s.db.Exec(`UPDATE secret_versions SET nonce = (SELECT nonce FROM secret_versions WHERE name='KEY' AND version=1),
+		sealed = (SELECT sealed FROM secret_versions WHERE name='KEY' AND version=1) WHERE name='KEY' AND version=2`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Restore("movies", "prod", "KEY", 2, "x"); err == nil {
+		t.Fatal("one version opened as another")
+	}
+	// Copy another secret's sealed value onto KEY version 1.
+	if _, err := s.db.Exec(`UPDATE secret_versions SET nonce = (SELECT nonce FROM secret_versions WHERE name='OTHER'),
+		sealed = (SELECT sealed FROM secret_versions WHERE name='OTHER') WHERE name='KEY' AND version=1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Restore("movies", "prod", "KEY", 1, "x"); err == nil {
+		t.Fatal("another secret's value opened as KEY")
+	}
+	raw, _ := s.db.Query(`SELECT sealed FROM secret_versions`)
+	defer raw.Close()
+	for raw.Next() {
+		var b []byte
+		_ = raw.Scan(&b)
+		if strings.Contains(string(b), "one-one") || strings.Contains(string(b), "two-two") {
+			t.Fatal("a kept value is stored in plain text")
+		}
+	}
+}
+
+func TestDeleteForgetsVersions(t *testing.T) {
+	s := open(t, t.TempDir())
+	_ = s.Set("movies", "prod", "KEY", "one-one", "x")
+	_ = s.Set("movies", "dev", "KEY", "dev-one", "x")
+	_ = s.Set("music", "dev", "KEY", "music-one", "x")
+	if err := s.Delete("movies", "prod", "KEY"); err != nil {
+		t.Fatal(err)
+	}
+	if vs, _ := s.Versions("movies", "prod", "KEY"); len(vs) != 0 {
+		t.Fatalf("versions left after delete: %+v", vs)
+	}
+	if err := s.DeleteApp("movies"); err != nil {
+		t.Fatal(err)
+	}
+	if vs, _ := s.Versions("movies", "dev", "KEY"); len(vs) != 0 {
+		t.Fatalf("versions left after DeleteApp: %+v", vs)
+	}
+	if vs, _ := s.Versions("music", "dev", "KEY"); len(vs) != 1 {
+		t.Fatalf("music versions = %+v", vs)
+	}
+	// A deleted secret starts again at version 1.
+	_ = s.Set("movies", "prod", "KEY", "again", "x")
+	if l, _ := s.List("movies", "prod"); l[0].Version != 1 {
+		t.Fatalf("version = %d", l[0].Version)
+	}
+}
+
+// A secrets.db made before versions existed has no version column and no versions table.
+func TestOpenOldStoreMakesValuesVersionOne(t *testing.T) {
+	dir := t.TempDir()
+	dbPath, keyPath := filepath.Join(dir, "secrets.db"), filepath.Join(dir, "master.key")
+	// Make a key, and seal values the way the old code did.
+	first := open(t, dir)
+	seal := func(app, env, name, value string) ([]byte, []byte) {
+		n, c, err := first.seal(aad(app, env, name), value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n, c
+	}
+	n1, c1 := seal("movies", "prod", "TMDB_API_KEY", "old-prod-value")
+	n2, c2 := seal("", "", "GITHUB_TOKEN", "ghp_old")
+	first.Close()
+	for _, f := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		os.Remove(f)
+	}
+	old, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`CREATE TABLE secrets (
+		app TEXT NOT NULL, env TEXT NOT NULL, name TEXT NOT NULL,
+		nonce BLOB NOT NULL, sealed BLOB NOT NULL,
+		updated_at INTEGER NOT NULL, updated_by TEXT NOT NULL,
+		PRIMARY KEY (app, env, name))`); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []struct {
+		app, env, name string
+		n, c           []byte
+	}{{"movies", "prod", "TMDB_API_KEY", n1, c1}, {"", "", "GITHUB_TOKEN", n2, c2}} {
+		if _, err := old.Exec(`INSERT INTO secrets VALUES (?,?,?,?,?,?,?)`, r.app, r.env, r.name, r.n, r.c, 1700000000000, "owner"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old.Close()
+
+	s, err := Open(dbPath, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	got, err := s.Inject("movies", "prod", []string{"TMDB_API_KEY"})
+	if err != nil || got["TMDB_API_KEY"] != "old-prod-value" {
+		t.Fatalf("inject = %v, %v", got, err)
+	}
+	if v, ok := s.Platform("GITHUB_TOKEN"); !ok || v != "ghp_old" {
+		t.Fatalf("platform = %q %v", v, ok)
+	}
+	list, _ := s.List("movies", "prod")
+	if len(list) != 1 || list[0].Version != 1 || list[0].UpdatedBy != "owner" {
+		t.Fatalf("list = %+v", list)
+	}
+	vs, _ := s.Versions("movies", "prod", "TMDB_API_KEY")
+	if len(vs) != 1 || vs[0].Version != 1 || vs[0].SetBy != "owner" || vs[0].SetAt.UnixMilli() != 1700000000000 {
+		t.Fatalf("versions = %+v", vs)
+	}
+	// New changes build on it, and opening again changes nothing.
+	if err := s.Set("movies", "prod", "TMDB_API_KEY", "new-prod-value", "me"); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	s2, err := Open(dbPath, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s2.Close() })
+	vs, _ = s2.Versions("movies", "prod", "TMDB_API_KEY")
+	if len(vs) != 2 || vs[0].Version != 2 || vs[1].Version != 1 {
+		t.Fatalf("versions after reopen = %+v", vs)
+	}
+	if _, err := s2.Restore("movies", "prod", "TMDB_API_KEY", 1, "me"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s2.Inject("movies", "prod", []string{"TMDB_API_KEY"}); got["TMDB_API_KEY"] != "old-prod-value" {
+		t.Fatalf("restored = %v", got)
 	}
 }

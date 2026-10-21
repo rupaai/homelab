@@ -44,14 +44,16 @@ Both are appended to the migration list. Earlier migrations are unchanged.
 | Production app | All apps | `use` or `build` grant | `use` or `build` grant |
 | Development and projects | All apps | `build` grant only | `build` grant only |
 | Logs | All apps | `build` grant only | `build` grant only |
-| People, settings, secrets and app management | Allowed | Denied | Denied |
+| People, settings, secret names and app management | Allowed | Denied | Denied |
+| Secret values (show, set, restore) | Owner, or `secrets` role | Only with `secrets` role | Only with `secrets` role |
 
 App access is independent of role: a `build` grant also permits production. The API checks
 every request; the companion only hides controls. A member receives production-only app
 views. Builders receive full app/project views only for apps they can build. Apps receive
 signed identity groups such as `role:member` and `app:movies`.
-Builders can deploy and promote their granted apps, but setting or deleting app secrets remains
-admin-only in this milestone.
+Builders can deploy and promote their granted apps. Seeing or changing secret values is
+narrower than admin: only the owner, and people the owner gave the `secrets` role (see
+milestone 2, "Who sees secret values"). Other admins see names and whether each is set.
 
 ## API additions
 

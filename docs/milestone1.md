@@ -39,6 +39,7 @@ Everything is under one folder, `~/.homelab` by default (`--home` to change it):
   apps/<app>/<env>/
     compose.yaml           written by the docker adapter
     .env                   settings and secrets for the containers (mode 0600)
+    secrets/<NAME>         each secret as a file, mounted at /run/secrets (folder 0755, files 0444)
     data/<name>/           the app's data folders, one copy per environment
   backups/<app>/prod/<time>-<commit>/   the app's own data copied before each promote (newest 5 kept)
   local/ports.json         local adapter's port assignments

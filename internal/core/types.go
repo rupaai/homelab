@@ -98,9 +98,13 @@ type EnvSpec struct {
 	HostPort int    // published on 127.0.0.1 only; homelabd forwards the address to it
 	Memory   string // e.g. "2g"; empty means no limit
 	Mounts   []Mount
-	Vars     map[string]string // settings and secrets, as environment variables
-	Auth     RegistryAuth
-	Ports    []string // extra ports opened on the device, "host:container[/udp]"; prod only
+	Vars     map[string]string // settings as environment variables (and the secrets too, unless SecretsAsFiles)
+	// Secrets are the app's secret values by name. The deploy adapter writes each as a file
+	// in the app's /run/secrets folder. With SecretsAsFiles they are not in Vars.
+	Secrets        map[string]string
+	SecretsAsFiles bool
+	Auth           RegistryAuth
+	Ports          []string // extra ports opened on the device, "host:container[/udp]"; prod only
 	// OpenPorts publishes Ports on every network (addresses: ip); otherwise on 127.0.0.1 only.
 	OpenPorts bool
 	Services  []Service // more containers that run next to the app, e.g. a media server
@@ -171,6 +175,9 @@ type Viewer struct {
 	Local    bool   // connected from this machine (127.0.0.1)
 	Network  bool   // came over the plain network (addresses: ip); signs in with the password
 	PersonID string
+	// Session is true only when PersonID came from a companion sign-in session. An API key
+	// never has one.
+	Session bool
 }
 
 // Person is one household account. Roles and app grants are independent sets.

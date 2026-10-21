@@ -4,6 +4,9 @@
 // Every value has its own random nonce and is bound to its app, environment and name as
 // additional data, so a sealed value copied onto another secret fails to open instead of
 // quietly becoming that secret.
+//
+// The last few values of each secret are kept as versions, in their own table. A kept value
+// is also bound to its version number, so it can't be opened as another version.
 package secretstore
 
 import (
@@ -17,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -63,6 +67,10 @@ func Open(dbPath, keyPath string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("secrets store: %w", err)
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("secrets store: %w", err)
+	}
 	_ = os.Chmod(dbPath, 0o600)
 	var n int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM secrets`).Scan(&n); err != nil {
@@ -98,7 +106,90 @@ func Open(dbPath, keyPath string) (*Store, error) {
 			return nil, fmt.Errorf("the master key at %s doesn't open the secrets in %s. Put back the key that was used with them", keyPath, dbPath)
 		}
 	}
+	if err := s.backfillVersions(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("secrets store: %w", err)
+	}
 	return s, nil
+}
+
+// migrate brings a store made by an older Homelab up to date. Values it already holds
+// become version 1; nothing is re-sealed or lost.
+func migrate(db *sql.DB) error {
+	var has bool
+	rows, err := db.Query(`PRAGMA table_info(secrets)`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "version" {
+			has = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE secrets ADD COLUMN version INTEGER NOT NULL DEFAULT 1`); err != nil {
+			return err
+		}
+	}
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS secret_versions (
+		app TEXT NOT NULL, env TEXT NOT NULL, name TEXT NOT NULL, version INTEGER NOT NULL,
+		nonce BLOB NOT NULL, sealed BLOB NOT NULL,
+		set_at INTEGER NOT NULL, set_by TEXT NOT NULL,
+		PRIMARY KEY (app, env, name, version))`)
+	return err
+}
+
+// backfillVersions keeps the current value of every secret that has no kept version yet,
+// which is every secret stored before versions existed.
+func (s *Store) backfillVersions() error {
+	rows, err := s.db.Query(`SELECT app, env, name, version, nonce, sealed, updated_at, updated_by FROM secrets s
+		WHERE NOT EXISTS (SELECT 1 FROM secret_versions v WHERE v.app = s.app AND v.env = s.env AND v.name = s.name AND v.version = s.version)`)
+	if err != nil {
+		return err
+	}
+	type row struct {
+		app, env, name, by string
+		version            int
+		nonce, sealed      []byte
+		at                 int64
+	}
+	var todo []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.app, &r.env, &r.name, &r.version, &r.nonce, &r.sealed, &r.at, &r.by); err != nil {
+			rows.Close()
+			return err
+		}
+		todo = append(todo, r)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, r := range todo {
+		v, err := s.open(r.app, r.env, r.name, r.nonce, r.sealed)
+		if err != nil {
+			return err
+		}
+		nonce, sealed, err := s.seal(versionAAD(r.app, r.env, r.name, r.version), v)
+		if err != nil {
+			return err
+		}
+		if _, err := s.db.Exec(`INSERT OR IGNORE INTO secret_versions (app, env, name, version, nonce, sealed, set_at, set_by) VALUES (?,?,?,?,?,?,?,?)`,
+			r.app, r.env, r.name, r.version, nonce, sealed, r.at, r.by); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // loadKey reads the master key, or makes one when allowed.
@@ -151,11 +242,28 @@ func aad(app, env, name string) []byte {
 	return []byte("homelab-secret-v1\x00" + app + "\x00" + env + "\x00" + name)
 }
 
+// versionAAD binds a kept value to its place and its version number.
+func versionAAD(app, env, name string, version int) []byte {
+	return []byte("homelab-secret-version-v1\x00" + app + "\x00" + env + "\x00" + name + "\x00" + strconv.Itoa(version))
+}
+
+func (s *Store) seal(ad []byte, value string) (nonce, sealed []byte, err error) {
+	nonce = make([]byte, s.aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, nil, err
+	}
+	return nonce, s.aead.Seal(nil, nonce, []byte(value), ad), nil
+}
+
 func (s *Store) open(app, env, name string, nonce, sealed []byte) (string, error) {
+	return s.openAAD(name, aad(app, env, name), nonce, sealed)
+}
+
+func (s *Store) openAAD(name string, ad, nonce, sealed []byte) (string, error) {
 	if len(nonce) != s.aead.NonceSize() {
 		return "", errors.New("bad nonce")
 	}
-	v, err := s.aead.Open(nil, nonce, sealed, aad(app, env, name))
+	v, err := s.aead.Open(nil, nonce, sealed, ad)
 	if err != nil {
 		return "", fmt.Errorf("secret %s couldn't be decrypted", name)
 	}
@@ -189,16 +297,40 @@ func (s *Store) Set(app, env, name, value, by string) error {
 	if strings.ContainsAny(value, "\n\r\x00") {
 		return errors.New("a value can't contain line breaks")
 	}
-	nonce := make([]byte, s.aead.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
+	nonce, sealed, err := s.seal(aad(app, env, name), value)
+	if err != nil {
 		return err
 	}
-	sealed := s.aead.Seal(nil, nonce, []byte(value), aad(app, env, name))
-	_, err := s.db.Exec(`INSERT INTO secrets (app, env, name, nonce, sealed, updated_at, updated_by) VALUES (?,?,?,?,?,?,?)
-		ON CONFLICT (app, env, name) DO UPDATE SET nonce = excluded.nonce, sealed = excluded.sealed,
-		updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
-		app, env, name, nonce, sealed, s.now().UnixMilli(), by)
+	tx, err := s.db.Begin()
 	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var version int
+	if err := tx.QueryRow(`SELECT version FROM secrets WHERE app = ? AND env = ? AND name = ?`, app, env, name).Scan(&version); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	version++
+	at := s.now().UnixMilli()
+	if _, err := tx.Exec(`INSERT INTO secrets (app, env, name, nonce, sealed, updated_at, updated_by, version) VALUES (?,?,?,?,?,?,?,?)
+		ON CONFLICT (app, env, name) DO UPDATE SET nonce = excluded.nonce, sealed = excluded.sealed,
+		updated_at = excluded.updated_at, updated_by = excluded.updated_by, version = excluded.version`,
+		app, env, name, nonce, sealed, at, by, version); err != nil {
+		return err
+	}
+	vnonce, vsealed, err := s.seal(versionAAD(app, env, name, version), value)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO secret_versions (app, env, name, version, nonce, sealed, set_at, set_by) VALUES (?,?,?,?,?,?,?,?)`,
+		app, env, name, version, vnonce, vsealed, at, by); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM secret_versions WHERE app = ? AND env = ? AND name = ? AND version <= ?`,
+		app, env, name, version-core.SecretVersionsKept); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -207,12 +339,65 @@ func (s *Store) Set(app, env, name, value, by string) error {
 	return nil
 }
 
+// Versions lists the kept values of a secret, newest first, without the values.
+func (s *Store) Versions(app, env, name string) ([]core.SecretVersion, error) {
+	if err := check(app, env, name); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(`SELECT version, set_by, set_at FROM secret_versions WHERE app = ? AND env = ? AND name = ? ORDER BY version DESC`, app, env, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []core.SecretVersion
+	for rows.Next() {
+		var v core.SecretVersion
+		var at int64
+		if err := rows.Scan(&v.Version, &v.SetBy, &at); err != nil {
+			return nil, err
+		}
+		v.SetAt = time.UnixMilli(at)
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// Restore stores the value of a kept version again, as a new version.
+func (s *Store) Restore(app, env, name string, version int, by string) (int, error) {
+	if err := check(app, env, name); err != nil {
+		return 0, err
+	}
+	var nonce, sealed []byte
+	err := s.db.QueryRow(`SELECT nonce, sealed FROM secret_versions WHERE app = ? AND env = ? AND name = ? AND version = ?`, app, env, name, version).Scan(&nonce, &sealed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("there's no version %d of %s", version, name)
+	}
+	if err != nil {
+		return 0, err
+	}
+	v, err := s.openAAD(name, versionAAD(app, env, name, version), nonce, sealed)
+	if err != nil {
+		return 0, err
+	}
+	if err := s.Set(app, env, name, v, by); err != nil {
+		return 0, err
+	}
+	var now int
+	if err := s.db.QueryRow(`SELECT version FROM secrets WHERE app = ? AND env = ? AND name = ?`, app, env, name).Scan(&now); err != nil {
+		return 0, err
+	}
+	return now, nil
+}
+
 // Delete removes a value.
 func (s *Store) Delete(app, env, name string) error {
 	if err := check(app, env, name); err != nil {
 		return err
 	}
 	_, err := s.db.Exec(`DELETE FROM secrets WHERE app = ? AND env = ? AND name = ?`, app, env, name)
+	if err == nil {
+		_, err = s.db.Exec(`DELETE FROM secret_versions WHERE app = ? AND env = ? AND name = ?`, app, env, name)
+	}
 	s.mu.Lock()
 	delete(s.cache, cacheKey(app, env, name))
 	s.mu.Unlock()
@@ -224,13 +409,16 @@ func (s *Store) DeleteApp(app string) error {
 	if app == "" {
 		return errors.New("DeleteApp needs an app")
 	}
-	_, err := s.db.Exec(`DELETE FROM secrets WHERE app = ?`, app)
+	if _, err := s.db.Exec(`DELETE FROM secrets WHERE app = ?`, app); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`DELETE FROM secret_versions WHERE app = ?`, app)
 	return err
 }
 
 // List describes the values stored for app/env, by name, without the values.
 func (s *Store) List(app, env string) ([]core.SecretInfo, error) {
-	rows, err := s.db.Query(`SELECT name, updated_at, updated_by FROM secrets WHERE app = ? AND env = ? ORDER BY name`, app, env)
+	rows, err := s.db.Query(`SELECT name, updated_at, updated_by, version FROM secrets WHERE app = ? AND env = ? ORDER BY name`, app, env)
 	if err != nil {
 		return nil, err
 	}
@@ -239,7 +427,7 @@ func (s *Store) List(app, env string) ([]core.SecretInfo, error) {
 	for rows.Next() {
 		var i core.SecretInfo
 		var at int64
-		if err := rows.Scan(&i.Name, &at, &i.UpdatedBy); err != nil {
+		if err := rows.Scan(&i.Name, &at, &i.UpdatedBy, &i.Version); err != nil {
 			return nil, err
 		}
 		i.UpdatedAt = time.UnixMilli(at)

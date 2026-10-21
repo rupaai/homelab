@@ -164,3 +164,21 @@ func TestGenerateSecrets(t *testing.T) {
 		t.Fatalf("SecretNames = %s", got)
 	}
 }
+
+func TestSecretsAs(t *testing.T) {
+	m, err := Parse([]byte(movies), Defaults{})
+	if err != nil || m.SecretsAs != SecretsAsEnv {
+		t.Fatalf("default = %q, %v", m.SecretsAs, err)
+	}
+	for _, mode := range []string{"env", "files"} {
+		m, err := Parse([]byte(movies+"secrets_as: "+mode+"\n"), Defaults{})
+		if err != nil || m.SecretsAs != mode {
+			t.Fatalf("%s: got %q, %v", mode, m.SecretsAs, err)
+		}
+	}
+	for _, mode := range []string{"file", "Files", "both", `""x`} {
+		if _, err := Parse([]byte(movies+"secrets_as: "+mode+"\n"), Defaults{}); err == nil {
+			t.Errorf("secrets_as: %s was accepted", mode)
+		}
+	}
+}

@@ -1,7 +1,7 @@
 import { ApiError, NETWORK_MESSAGE, errorMessage } from './errors';
 import { SIGN_IN_MESSAGE, sessionLost } from './session';
 import { clearToken, getToken, setToken } from './token';
-import type { Api, AppView, FileFolder, FilePage, FileQuery, StorageDisk, StoredFile, UploadResult, FileMeta, BootstrapView, CreatedKey, KeysView, DeviceView, EnvSecrets, Invitation, KeyView, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult, TestVersion } from './types';
+import type { Api, AppView, FileFolder, FilePage, FileQuery, StorageDisk, StoredFile, UploadResult, FileMeta, BootstrapView, CreatedKey, KeysView, DeviceView, EnvSecrets, Invitation, KeyView, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult, TestVersion, AppSecretsView, SecretVersion } from './types';
 
 /** Mock mode: `?mock` in the URL or VITE_MOCK=1 gives fake data, no server needed. Dev builds only, so the mock data is dropped from the real companion. */
 export const useMock: boolean =
@@ -131,15 +131,21 @@ const realApi: Api = {
 	},
 	setPromotion: async (id, mode) => fixApp(await request<AppView>('PUT', `/api/apps/${enc(id)}/promotion`, { mode })),
 	removeApp: (id) => request('DELETE', `/api/apps/${enc(id)}`),
-	appSecrets: async (id) => {
-		const r = await request<{ envs: EnvSecrets[] | null }>('GET', `/api/apps/${enc(id)}/secrets`);
-		return list(r.envs).map((e) => ({ ...e, secrets: list(e.secrets) }));
+	appSecrets: async (id): Promise<AppSecretsView> => {
+		const r = await request<{ envs: EnvSecrets[] | null; canSeeValues?: boolean }>('GET', `/api/apps/${enc(id)}/secrets`);
+		return { envs: list(r.envs).map((e) => ({ ...e, secrets: list(e.secrets) })), canSeeValues: r.canSeeValues === true };
 	},
+	revealSecret: async (id, env, name) => (await request<{ value: string }>('POST', `/api/apps/${enc(id)}/envs/${env}/secrets/${enc(name)}/reveal`)).value,
+	secretVersions: async (id, env, name) => list((await request<{ versions: SecretVersion[] | null }>('GET', `/api/apps/${enc(id)}/envs/${env}/secrets/${enc(name)}/versions`)).versions),
+	restoreSecret: (id, env, name, version) => request('POST', `/api/apps/${enc(id)}/envs/${env}/secrets/${enc(name)}/versions/${version}/restore`),
 	setSecret: (id, env, name, value) => request('PUT', `/api/apps/${enc(id)}/envs/${env}/secrets/${enc(name)}`, { value }),
 	deleteSecret: (id, env, name) => request('DELETE', `/api/apps/${enc(id)}/envs/${env}/secrets/${enc(name)}`),
 	regenerateSecret: (id, env, name) => request('POST', `/api/apps/${enc(id)}/envs/${env}/secrets/${enc(name)}/regenerate`),
 	settings: async () => list(await request<SettingView[]>('GET', '/api/settings/secrets')),
 	setSetting: (name, value) => request('PUT', `/api/settings/secrets/${enc(name)}`, { value }),
+	revealSetting: async (name) => (await request<{ value: string }>('POST', `/api/settings/secrets/${enc(name)}/reveal`)).value,
+	settingVersions: async (name) => list((await request<{ versions: SecretVersion[] | null }>('GET', `/api/settings/secrets/${enc(name)}/versions`)).versions),
+	restoreSetting: (name, version) => request('POST', `/api/settings/secrets/${enc(name)}/versions/${version}/restore`),
 	deleteSetting: (name) => request('DELETE', `/api/settings/secrets/${enc(name)}`),
 	keys: async () => {
 		const r = await request<{ admin: KeyView[] | null; app: KeyView[] | null }>('GET', '/api/keys');

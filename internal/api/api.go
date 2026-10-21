@@ -160,9 +160,15 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("PUT /api/apps/{id}/envs/{env}/secrets/{name}", s.setSecret)
 	mux.HandleFunc("DELETE /api/apps/{id}/envs/{env}/secrets/{name}", s.deleteSecret)
 	mux.HandleFunc("POST /api/apps/{id}/envs/{env}/secrets/{name}/regenerate", s.regenerateSecret)
+	mux.HandleFunc("POST /api/apps/{id}/envs/{env}/secrets/{name}/reveal", s.revealSecret)
+	mux.HandleFunc("GET /api/apps/{id}/envs/{env}/secrets/{name}/versions", s.secretVersions)
+	mux.HandleFunc("POST /api/apps/{id}/envs/{env}/secrets/{name}/versions/{n}/restore", s.restoreSecret)
 	mux.HandleFunc("GET /api/settings/secrets", s.settings)
 	mux.HandleFunc("PUT /api/settings/secrets/{name}", s.setSetting)
 	mux.HandleFunc("DELETE /api/settings/secrets/{name}", s.deleteSetting)
+	mux.HandleFunc("POST /api/settings/secrets/{name}/reveal", s.revealSetting)
+	mux.HandleFunc("GET /api/settings/secrets/{name}/versions", s.settingVersions)
+	mux.HandleFunc("POST /api/settings/secrets/{name}/versions/{n}/restore", s.restoreSetting)
 	mux.HandleFunc("GET /api/push/key", s.pushKey)
 	mux.HandleFunc("POST /api/push/subscriptions", s.subscribePush)
 	mux.HandleFunc("DELETE /api/push/subscriptions", s.unsubscribePush)
@@ -204,7 +210,7 @@ func (s *server) handler() http.Handler {
 		if digest, ok := sessionDigest(token); ok && s.store != nil {
 			if p, err := s.store.SessionPerson(r.Context(), digest, time.Now(), 7*24*time.Hour); err == nil {
 				v, _ := core.ViewerFrom(r.Context())
-				v.PersonID, v.Login, v.Name = p.ID, p.Email, p.Name
+				v.PersonID, v.Login, v.Name, v.Session = p.ID, p.Email, p.Name, true
 				r = r.WithContext(core.WithViewer(r.Context(), v))
 			}
 		}
@@ -278,6 +284,11 @@ func (s *server) guard(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	action, app := apiAction(r)
+	// Secret values need a real sign-in, never an API key.
+	if action == hub.ActionSecretValues && !v.Session {
+		writeErr(w, http.StatusForbidden, msgSecretSession)
+		return false
+	}
 	if action == hub.ActionRemoveUser {
 		if target, err := s.store.Person(r.Context(), app); err == nil && hasRole(target, "owner") {
 			app = "owner"
@@ -312,10 +323,38 @@ func (s *server) guard(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+// msgSecretSession is what a call gets when it reaches for a secret value without a sign-in.
+const msgSecretSession = "Secret values can only be seen or changed by signing in to the Homelab companion. API keys can't do it."
+
+// secretValueRoute says whether path parts (of /api/...) name an endpoint that shows, sets,
+// replaces, regenerates, deletes or restores a secret value, or lists its versions:
+//
+//	/api/apps/{id}/envs/{env}/secrets/{name}[/...]
+//	/api/settings/secrets/{name}[/...]
+//
+// The plain list of an app's secrets (names only) is not one.
+func secretValueRoute(parts []string) bool {
+	if len(parts) >= 7 && parts[1] == "apps" && parts[3] == "envs" && parts[5] == "secrets" {
+		return true
+	}
+	return len(parts) >= 4 && parts[1] == "settings" && parts[2] == "secrets"
+}
+
+// isSecretValueRoute is secretValueRoute for a request.
+func isSecretValueRoute(r *http.Request) bool {
+	return secretValueRoute(strings.Split(strings.Trim(r.URL.Path, "/"), "/"))
+}
+
 func apiAction(r *http.Request) (string, string) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	if len(parts) < 2 {
 		return hub.ActionManage, ""
+	}
+	if secretValueRoute(parts) {
+		if parts[1] == "apps" {
+			return hub.ActionSecretValues, parts[2]
+		}
+		return hub.ActionSecretValues, ""
 	}
 	if parts[1] == "apps" {
 		if len(parts) == 2 {
@@ -434,7 +473,8 @@ func (s *server) me(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"login": p.Email, "name": p.Name, "local": v.Local, "roles": p.Roles})
+	writeJSON(w, http.StatusOK, map[string]any{"login": p.Email, "name": p.Name, "local": v.Local, "roles": p.Roles,
+		"canSeeSecrets": hub.Can(p, hub.ActionSecretValues, "")})
 }
 
 func (s *server) passkeyLink(w http.ResponseWriter, r *http.Request) {
@@ -905,7 +945,49 @@ func (s *server) appSecrets(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"envs": envs})
+	writeJSON(w, http.StatusOK, map[string]any{"envs": envs, "canSeeValues": s.hub.CanSeeSecretValues(r.Context(), viewer(r).PersonID)})
+}
+
+func (s *server) revealSecret(w http.ResponseWriter, r *http.Request) {
+	if !decode(w, r, &struct{}{}, false) {
+		return
+	}
+	v, err := s.hub.RevealSecret(actionCtx(r), r.PathValue("id"), r.PathValue("env"), r.PathValue("name"), viewer(r))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"value": v})
+}
+
+func (s *server) secretVersions(w http.ResponseWriter, r *http.Request) {
+	list, err := s.hub.SecretVersions(r.Context(), r.PathValue("id"), r.PathValue("env"), r.PathValue("name"), viewer(r))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"versions": list})
+}
+
+func (s *server) restoreSecret(w http.ResponseWriter, r *http.Request) {
+	n, ok := versionParam(w, r)
+	if !ok || !decode(w, r, &struct{}{}, false) {
+		return
+	}
+	if err := s.hub.RestoreSecret(actionCtx(r), r.PathValue("id"), r.PathValue("env"), r.PathValue("name"), n, viewer(r)); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	noContent(w)
+}
+
+func versionParam(w http.ResponseWriter, r *http.Request) (int, bool) {
+	n, err := strconv.Atoi(r.PathValue("n"))
+	if err != nil || n < 1 {
+		writeErr(w, http.StatusBadRequest, "That isn't a version number.")
+		return 0, false
+	}
+	return n, true
 }
 
 type valueIn struct {
@@ -963,6 +1045,39 @@ func (s *server) setSetting(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) deleteSetting(w http.ResponseWriter, r *http.Request) {
 	if err := s.hub.DeletePlatformSetting(actionCtx(r), r.PathValue("name"), viewer(r)); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	noContent(w)
+}
+
+func (s *server) revealSetting(w http.ResponseWriter, r *http.Request) {
+	if !decode(w, r, &struct{}{}, false) {
+		return
+	}
+	v, err := s.hub.RevealPlatformSetting(actionCtx(r), r.PathValue("name"), viewer(r))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"value": v})
+}
+
+func (s *server) settingVersions(w http.ResponseWriter, r *http.Request) {
+	list, err := s.hub.PlatformSettingVersions(r.Context(), r.PathValue("name"), viewer(r))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"versions": list})
+}
+
+func (s *server) restoreSetting(w http.ResponseWriter, r *http.Request) {
+	n, ok := versionParam(w, r)
+	if !ok || !decode(w, r, &struct{}{}, false) {
+		return
+	}
+	if err := s.hub.RestorePlatformSetting(actionCtx(r), r.PathValue("name"), n, viewer(r)); err != nil {
 		s.fail(w, r, err)
 		return
 	}

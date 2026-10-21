@@ -54,6 +54,39 @@ describe('invite redemption API', () => {
 	});
 });
 
+describe('secrets API', () => {
+	afterEach(() => vi.unstubAllGlobals());
+	const json = (body: string, status = 200) => new Response(body, { status, headers: { 'Content-Type': 'application/json' } });
+
+	it('lists secrets without values and says whether this person may ask for them', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json('{"envs":[{"env":"prod","secrets":null}]}')));
+		await expect(api.appSecrets('movies')).resolves.toEqual({ envs: [{ env: 'prod', secrets: [] }], canSeeValues: false });
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json('{"envs":null,"canSeeValues":true}')));
+		await expect(api.appSecrets('movies')).resolves.toEqual({ envs: [], canSeeValues: true });
+	});
+
+	it('asks the server for one value at a time', async () => {
+		const fetch = vi.fn().mockImplementation(async () => json('{"value":"abc"}'));
+		vi.stubGlobal('fetch', fetch);
+		await expect(api.revealSecret('movies', 'prod', 'TMDB_API_KEY')).resolves.toBe('abc');
+		expect(fetch.mock.calls[0][0]).toBe('/api/apps/movies/envs/prod/secrets/TMDB_API_KEY/reveal');
+		expect(fetch.mock.calls[0][1].method).toBe('POST');
+		await expect(api.revealSetting('GITHUB_TOKEN')).resolves.toBe('abc');
+		expect(fetch.mock.calls[1][0]).toBe('/api/settings/secrets/GITHUB_TOKEN/reveal');
+	});
+
+	it('lists versions and restores one', async () => {
+		const fetch = vi.fn().mockResolvedValueOnce(json('{"versions":[{"version":2,"setBy":"a","setAt":"2026-01-01T00:00:00Z"}]}')).mockImplementation(async () => new Response(null, { status: 204 }));
+		vi.stubGlobal('fetch', fetch);
+		await expect(api.secretVersions('movies', 'dev', 'A')).resolves.toEqual([{ version: 2, setBy: 'a', setAt: '2026-01-01T00:00:00Z' }]);
+		expect(fetch.mock.calls[0][0]).toBe('/api/apps/movies/envs/dev/secrets/A/versions');
+		await api.restoreSecret('movies', 'dev', 'A', 1);
+		expect(fetch.mock.calls[1][0]).toBe('/api/apps/movies/envs/dev/secrets/A/versions/1/restore');
+		await api.restoreSetting('GITHUB_TOKEN', 3);
+		expect(fetch.mock.calls[2][0]).toBe('/api/settings/secrets/GITHUB_TOKEN/versions/3/restore');
+	});
+});
+
 describe('file upload API', () => {
 	afterEach(() => vi.unstubAllGlobals());
 	const file = new File(['hi'], 'a.txt', { type: 'text/plain' });

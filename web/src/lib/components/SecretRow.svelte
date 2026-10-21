@@ -10,8 +10,9 @@
 		updatedBy,
 		note,
 		extra,
-		actions
-	}: { name: string; set: boolean; updatedAt?: string; updatedBy?: string; note?: string; extra?: string; actions: Snippet } = $props();
+		actions,
+		below
+	}: { name: string; set: boolean; updatedAt?: string; updatedBy?: string; note?: string; extra?: string; actions?: Snippet; below?: Snippet } = $props();
 </script>
 
 <li>
@@ -24,7 +25,8 @@
 			<p class="muted small">Updated <Time at={updatedAt} />{updatedBy ? ` by ${updatedBy === 'homelab' ? 'Homelab' : updatedBy}` : ''}</p>
 		{/if}
 	</div>
-	<div class="actions">{@render actions()}</div>
+	{#if actions}<div class="actions">{@render actions()}</div>{/if}
+	{#if below}<div class="below">{@render below()}</div>{/if}
 </li>
 
 <style>
@@ -32,6 +34,7 @@
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
+		flex-wrap: wrap;
 		gap: 0.75rem;
 		padding: 0.7rem 0;
 		border-top: 1px solid var(--border);
@@ -56,7 +59,11 @@
 	}
 	.actions {
 		display: flex;
+		flex-wrap: wrap;
+		justify-content: flex-end;
 		gap: 0.4rem;
-		flex-shrink: 0;
+	}
+	.below {
+		flex-basis: 100%;
 	}
 </style>

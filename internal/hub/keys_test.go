@@ -367,23 +367,24 @@ func TestAppAPIURLOnlyWhenConfigured(t *testing.T) {
 
 func TestReservedSecretNames(t *testing.T) {
 	ctx := context.Background()
-	r, admin := keyRig(t)
+	r, _ := keyRig(t)
+	r.addPeople()
 	movieSpec(t, r, core.Dev) // makes HOMELAB_TOKEN
 	if _, ok := r.sec.Values["movies/dev/HOMELAB_TOKEN"]; !ok {
 		t.Fatal("token not kept in the secret store")
 	}
 	for _, name := range []string{"HOMELAB_TOKEN", "HOMELAB_ANYTHING", "HOMELAB_"} {
-		if err := r.hub.SetSecret(ctx, "movies", core.Dev, name, "x", admin); !isUserErr(err) {
+		if err := r.hub.SetSecret(ctx, "movies", core.Dev, name, "x", owner); !isUserErr(err) {
 			t.Errorf("SetSecret %s: %v", name, err)
 		}
-		if err := r.hub.DeleteSecret(ctx, "movies", core.Dev, name, admin); !isUserErr(err) {
+		if err := r.hub.DeleteSecret(ctx, "movies", core.Dev, name, owner); !isUserErr(err) {
 			t.Errorf("DeleteSecret %s: %v", name, err)
 		}
 	}
 	if _, ok := r.sec.Values["movies/dev/HOMELAB_TOKEN"]; !ok {
 		t.Fatal("token was deleted")
 	}
-	if err := r.hub.SetSecret(ctx, "movies", core.Dev, "OTHER", "x", admin); err != nil {
+	if err := r.hub.SetSecret(ctx, "movies", core.Dev, "OTHER", "x", owner); err != nil {
 		t.Fatal(err)
 	}
 	all, err := r.hub.AppSecrets(ctx, "movies")

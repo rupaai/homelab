@@ -157,7 +157,8 @@ func (d *Deployer) prepareServices(ctx context.Context, spec core.EnvSpec) error
 // Deploy writes the compose project and settings, makes sure the image is here, and starts
 // the containers, replacing any older ones.
 func (d *Deployer) Deploy(ctx context.Context, spec core.EnvSpec) error {
-	compose, err := composeYAML(spec)
+	dir := d.envDir(spec.App, spec.Env)
+	compose, err := composeYAML(spec, dir)
 	if err != nil {
 		return err
 	}
@@ -168,9 +169,11 @@ func (d *Deployer) Deploy(ctx context.Context, spec core.EnvSpec) error {
 	if err := d.Prepare(ctx, spec); err != nil {
 		return err
 	}
-	dir := d.envDir(spec.App, spec.Env)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("can't create %s: %w", dir, err)
+	}
+	if err := writeSecretFiles(filepath.Join(dir, secretsDir), spec.Secrets); err != nil {
+		return err
 	}
 	if err := writeFile(filepath.Join(dir, ".env"), env); err != nil {
 		return err
@@ -192,6 +195,53 @@ func writeFile(path string, data []byte) error {
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)
 		return fmt.Errorf("can't write %s: %w", path, err)
+	}
+	return nil
+}
+
+// secretsDir is the folder inside an environment's folder that holds its secrets as files.
+const secretsDir = "secrets"
+
+// writeSecretFiles makes dir hold exactly one file per secret, named after it. The environment's
+// folder is private (0700), which keeps other users on this computer out. The container's user
+// can be any user, so the folder is 0755 and the files are 0444. Each file is replaced in one
+// step, and files of secrets that are gone are removed.
+func writeSecretFiles(dir string, secrets map[string]string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("can't create %s: %w", dir, err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		return fmt.Errorf("can't set up %s: %w", dir, err)
+	}
+	for name, value := range secrets {
+		if !varRe.MatchString(name) {
+			return fmt.Errorf("secret name %q must be letters, digits and _ and not start with a digit", name)
+		}
+		path := filepath.Join(dir, name)
+		tmp := filepath.Join(dir, "."+name+".tmp")
+		os.Remove(tmp)
+		if err := os.WriteFile(tmp, []byte(value), 0o444); err != nil {
+			return fmt.Errorf("can't write secret %s: %w", name, err)
+		}
+		if err := os.Chmod(tmp, 0o444); err != nil {
+			os.Remove(tmp)
+			return fmt.Errorf("can't write secret %s: %w", name, err)
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			os.Remove(tmp)
+			return fmt.Errorf("can't write secret %s: %w", name, err)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if _, keep := secrets[e.Name()]; !keep {
+			if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+				return fmt.Errorf("can't remove old secret %s: %w", e.Name(), err)
+			}
+		}
 	}
 	return nil
 }

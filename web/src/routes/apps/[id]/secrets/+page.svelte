@@ -1,11 +1,13 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { api } from '#lib/api.ts';
 	import { appsStore } from '#lib/apps.svelte.ts';
 	import { messageOf } from '#lib/errors.ts';
 	import { envLabel } from '#lib/format.ts';
 	import type { EnvName, EnvSecrets, SecretView } from '#lib/types.ts';
+	import RevealedValue from '#lib/components/RevealedValue.svelte';
+	import SecretHistory from '#lib/components/SecretHistory.svelte';
 	import SecretRow from '#lib/components/SecretRow.svelte';
 	import SecretSheet from '#lib/components/SecretSheet.svelte';
 	import Spinner from '#lib/components/Spinner.svelte';
@@ -14,24 +16,38 @@
 	const app = $derived(appsStore.get(id));
 
 	let envs = $state<EnvSecrets[]>([]);
+	let canSeeValues = $state(false);
 	let loaded = $state(false);
 	let error = $state('');
 	let editing = $state<null | { env: EnvName; secret: SecretView }>(null);
+	let history = $state<null | { env: EnvName; name: string }>(null);
 	let deleting = $state('');
-	let copied = $state('');
+	// Values people asked to see, by "env/NAME". Only kept while this page is open.
+	let revealed = $state<Record<string, string>>({});
+	let revealing = $state('');
 
-	async function copy(key: string, value: string) {
+	const keyOf = (env: EnvName, name: string) => `${env}/${name}`;
+
+	async function show(env: EnvName, name: string) {
+		const key = keyOf(env, name);
+		revealing = key;
+		error = '';
 		try {
-			await navigator.clipboard.writeText(value);
-			copied = key;
-			setTimeout(() => { if (copied === key) copied = ''; }, 2000);
-		} catch {
-			error = 'Your browser could not copy it. Select and copy it instead.';
+			revealed[key] = await api.revealSecret(id, env, name);
+		} catch (e) {
+			error = messageOf(e);
+		} finally {
+			revealing = '';
 		}
+	}
+
+	function hide(env: EnvName, name: string) {
+		delete revealed[keyOf(env, name)];
 	}
 
 	async function makeNew(env: EnvName, name: string) {
 		error = '';
+		hide(env, name);
 		try {
 			await api.regenerateSecret(id, env, name);
 			await load();
@@ -42,7 +58,9 @@
 
 	async function load() {
 		try {
-			envs = await api.appSecrets(id);
+			const r = await api.appSecrets(id);
+			envs = r.envs;
+			canSeeValues = r.canSeeValues;
 			error = '';
 		} catch (e) {
 			error = messageOf(e);
@@ -56,10 +74,25 @@
 		load();
 	});
 
+	// A value never outlives the page.
+	onDestroy(() => {
+		revealed = {};
+	});
+
 	async function save(value: string) {
 		const t = editing!;
 		await api.setSecret(id, t.env, t.secret.name, value);
+		hide(t.env, t.secret.name);
 		editing = null;
+		await load();
+		appsStore.refresh();
+	}
+
+	async function restore(version: number) {
+		const h = history!;
+		await api.restoreSecret(id, h.env, h.name, version);
+		hide(h.env, h.name);
+		history = null;
 		await load();
 		appsStore.refresh();
 	}
@@ -67,6 +100,7 @@
 	async function remove(env: EnvName, name: string) {
 		deleting = `${env}/${name}`;
 		error = '';
+		hide(env, name);
 		try {
 			await api.deleteSecret(id, env, name);
 			await load();
@@ -83,7 +117,14 @@
 <div class="page">
 	<a class="back" href="/apps/{encodeURIComponent(id)}">← {app?.name ?? 'Back to the app'}</a>
 	<h1>Secrets{app ? ` for ${app.name}` : ''}</h1>
-	<p class="muted intro">Dev and prod are kept separate on purpose. Values can be replaced but not shown again.</p>
+	<p class="muted intro">
+		Dev and prod are kept separate on purpose.
+		{#if canSeeValues}
+			Showing a value is written to Activity.
+		{:else}
+			You can see which secrets are set. Only the owner, or people the owner allows, can see or change values.
+		{/if}
+	</p>
 
 	{#if error}<p class="notice bad" role="alert">{error}</p>{/if}
 
@@ -105,24 +146,40 @@
 								extra={s.generated ? (s.set ? 'Made by Homelab' : 'Made on next deploy') : undefined}
 							>
 								{#snippet actions()}
-									{#if s.generated}
-										{#if s.value}
-											<code class="value">{s.value}</code>
-											<button class="btn small" type="button" onclick={() => copy(`${group.env}/${s.name}`, s.value ?? '')}>
-												{copied === `${group.env}/${s.name}` ? 'Copied' : 'Copy'}<span class="sr-only"> {s.name} for {envLabel(group.env)}</span>
+									{#if canSeeValues}
+										{@const key = keyOf(group.env, s.name)}
+										{#if s.set}
+											<button class="btn small" type="button" disabled={revealing === key} onclick={() => (key in revealed ? hide(group.env, s.name) : show(group.env, s.name))}>
+												{key in revealed ? 'Hide' : revealing === key ? 'Showing…' : 'Show'}<span class="sr-only"> {s.name} for {envLabel(group.env)}</span>
 											</button>
-											<button class="btn small" type="button" onclick={() => makeNew(group.env, s.name)}>
-												Make new<span class="sr-only"> {s.name} for {envLabel(group.env)}</span>
+											<button class="btn small" type="button" onclick={() => (history = { env: group.env, name: s.name })}>
+												History<span class="sr-only"> of {s.name} for {envLabel(group.env)}</span>
 											</button>
 										{/if}
-									{:else if s.declared}
-										<button class="btn small" type="button" onclick={() => (editing = { env: group.env, secret: s })}>
-											{s.set ? 'Replace' : 'Set'}<span class="sr-only"> {s.name} for {envLabel(group.env)}</span>
-										</button>
-									{:else}
-										<button class="btn small" type="button" disabled={deleting === `${group.env}/${s.name}`} onclick={() => remove(group.env, s.name)}>
-											Delete<span class="sr-only"> {s.name} from {envLabel(group.env)}</span>
-										</button>
+										{#if s.generated}
+											{#if s.set}
+												<button class="btn small" type="button" onclick={() => makeNew(group.env, s.name)}>
+													Make new<span class="sr-only"> {s.name} for {envLabel(group.env)}</span>
+												</button>
+											{/if}
+										{:else if s.declared}
+											<button class="btn small" type="button" onclick={() => (editing = { env: group.env, secret: s })}>
+												{s.set ? 'Replace' : 'Set'}<span class="sr-only"> {s.name} for {envLabel(group.env)}</span>
+											</button>
+										{:else}
+											<button class="btn small" type="button" disabled={deleting === key} onclick={() => remove(group.env, s.name)}>
+												Delete<span class="sr-only"> {s.name} from {envLabel(group.env)}</span>
+											</button>
+										{/if}
+									{/if}
+								{/snippet}
+								{#snippet below()}
+									{#if keyOf(group.env, s.name) in revealed}
+										<RevealedValue
+											value={revealed[keyOf(group.env, s.name)]}
+											label="{s.name} for {envLabel(group.env)}"
+											onhide={() => hide(group.env, s.name)}
+										/>
 									{/if}
 								{/snippet}
 							</SecretRow>
@@ -139,9 +196,19 @@
 		<SecretSheet
 			title="{editing.secret.set ? 'Replace' : 'Set'} {editing.secret.name} for {envLabel(editing.env)}"
 			name={editing.secret.name}
-			intro={editing.secret.set ? `This replaces the value ${envLabel(editing.env)} uses now. The old one can't be shown again.` : undefined}
+			intro={editing.secret.set ? `This replaces the value ${envLabel(editing.env)} uses now. The old one stays in History.` : undefined}
 			onsave={save}
 			onclose={() => (editing = null)}
+		/>
+	{/if}
+
+	{#if history}
+		<SecretHistory
+			title="History of {history.name} for {envLabel(history.env)}"
+			name={history.name}
+			load={() => api.secretVersions(id, history!.env, history!.name)}
+			onrestore={restore}
+			onclose={() => (history = null)}
 		/>
 	{/if}
 </div>
@@ -164,10 +231,6 @@
 	}
 	h2 {
 		margin: 0 0 0.3rem;
-	}
-	.value {
-		align-self: center;
-		overflow-wrap: anywhere;
 	}
 	ul {
 		list-style: none;
