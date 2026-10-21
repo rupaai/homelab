@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { api } from '#lib/api.ts';
 	import { messageOf } from '#lib/errors.ts';
@@ -113,6 +114,26 @@
 		}
 	}
 	const closeDelete = () => ((deleting = null), (deleteError = ''));
+
+	// Delete the folder (only when it is empty)
+	let deletingFolder = $state(false);
+	let folderError = $state('');
+	let folderBusy = $state(false);
+	const canDeleteFolder = $derived(loaded && !error && files.length === 0 && !filtered);
+	async function removeFolder() {
+		folderBusy = true;
+		folderError = '';
+		try {
+			await api.deleteFileFolder(folder);
+			deletingFolder = false;
+			await goto('/files');
+		} catch (e) {
+			folderError = messageOf(e);
+		} finally {
+			folderBusy = false;
+		}
+	}
+	const closeFolder = () => ((deletingFolder = false), (folderError = ''));
 </script>
 
 <svelte:head><title>{folder} · Files · Homelab</title></svelte:head>
@@ -197,6 +218,27 @@
 			{#snippet footer()}
 				<button class="btn" type="button" onclick={() => previewing && download(previewing)}>Download</button>
 				<button class="btn primary" type="button" onclick={() => (previewing = null)}>Close</button>
+			{/snippet}
+		</Sheet>
+	{/if}
+
+	{#if loaded}
+		<section class="card" aria-labelledby="del-h">
+			<h2 id="del-h">Delete folder</h2>
+			<p class="muted small">{canDeleteFolder ? 'This folder is empty.' : 'Only an empty folder can be deleted. Delete its files first, and clear the filters.'}</p>
+			<div class="row-actions"><button class="btn danger" type="button" disabled={!canDeleteFolder} onclick={() => (deletingFolder = true)}>Delete folder</button></div>
+		</section>
+	{/if}
+
+	{#if deletingFolder}
+		<Sheet title="Delete the folder {folder}?" onclose={closeFolder}>
+			{#snippet children()}
+				<p>Delete the folder {folder}? It's empty. Files in its trash are removed for good.</p>
+				{#if folderError}<p class="notice bad" role="alert">{folderError}</p>{/if}
+			{/snippet}
+			{#snippet footer()}
+				<button class="btn" type="button" onclick={closeFolder}>Keep folder</button>
+				<button class="btn danger" type="button" disabled={folderBusy} onclick={removeFolder}>{folderBusy ? 'Deleting…' : 'Delete folder'}</button>
 			{/snippet}
 		</Sheet>
 	{/if}

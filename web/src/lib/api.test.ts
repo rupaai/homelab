@@ -80,3 +80,24 @@ describe('file upload API', () => {
 		expect(r.files[0].meta).toEqual({});
 	});
 });
+
+describe('deleting a folder', () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	it('sends DELETE with the CSRF header and an encoded name', async () => {
+		const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+		vi.stubGlobal('fetch', fetch);
+		await expect(api.deleteFileFolder('my folder')).resolves.toBeUndefined();
+		expect(fetch).toHaveBeenCalledWith('/api/files/folders/my%20folder', {
+			method: 'DELETE',
+			headers: { Accept: 'application/json', 'X-Homelab-Request': '1' },
+			body: undefined
+		});
+	});
+
+	it('shows the server text when the folder still has files', async () => {
+		const fetch = vi.fn().mockResolvedValue(new Response('{"error":"The folder still has files. Delete them first."}', { status: 409 }));
+		vi.stubGlobal('fetch', fetch);
+		await expect(api.deleteFileFolder('d')).rejects.toMatchObject({ message: 'The folder still has files. Delete them first.', status: 409 });
+	});
+});

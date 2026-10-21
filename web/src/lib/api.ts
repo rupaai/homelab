@@ -153,6 +153,7 @@ const realApi: Api = {
 	storage: async () => list(await request<StorageDisk[]>('GET', '/api/storage')),
 	fileFolders: async () => list((await request<{ folders: FileFolder[] | null }>('GET', '/api/files/folders')).folders),
 	createFileFolder: (name, disk) => request<FileFolder>('POST', '/api/files/folders', disk ? { name, disk } : { name }),
+	deleteFileFolder: (name) => request('DELETE', `/api/files/folders/${enc(name)}`),
 	files: async (folder, q = {}) => {
 		const p = new URLSearchParams();
 		if (q.tag) p.set('tag', q.tag);

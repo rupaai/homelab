@@ -103,6 +103,34 @@ paths:
         "413":
           description: The JSON body is over 64 KiB.
         "503": { $ref: "#/components/responses/Unavailable" }
+  /api/files/folders/{folder}:
+    parameters:
+      - $ref: "#/components/parameters/folder"
+    delete:
+      tags: [Folders]
+      operationId: deleteFolder
+      summary: Delete an empty folder
+      description: |
+        Only a folder with no files can be deleted. Files in its trash are deleted for good
+        with it. The name can be used again afterwards. Needs the same permission as changing
+        files: a person, an admin key with `files:write`, or the app key that owns the folder.
+      responses:
+        "204":
+          description: The folder is deleted.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/NoPermission" }
+        "404": { $ref: "#/components/responses/NoFolder" }
+        "409":
+          description: The folder still has files that are not in the trash. Delete them first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: The server could not remove a file from its storage. Nothing was deleted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/Unavailable" }
   /api/files/{folder}:
     parameters:
       - $ref: "#/components/parameters/folder"

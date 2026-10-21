@@ -343,6 +343,49 @@ pub fn file_delete(conn: &Connection, id: &str) -> rusqlite::Result<()> {
         .map(|_| ())
 }
 
+/// How `folder_delete` ended.
+#[derive(Debug, PartialEq, Eq)]
+pub enum FolderDelete {
+    Deleted,
+    /// The folder still has files that are not trashed.
+    NotEmpty,
+    Missing,
+}
+
+/// Deletes a folder that has no live files, with its trashed files, in one
+/// transaction. `remove` is called with the relative path of each trashed file
+/// (to remove it from disk) before anything is committed; if it fails, nothing
+/// is changed.
+pub fn folder_delete<E: From<rusqlite::Error>>(
+    conn: &Connection,
+    name: &str,
+    mut remove: impl FnMut(&str) -> Result<(), E>,
+) -> Result<FolderDelete, E> {
+    let tx = conn.unchecked_transaction()?;
+    let live: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM files WHERE folder = ? AND trashed_at IS NULL",
+        [name],
+        |r| r.get(0),
+    )?;
+    if live > 0 {
+        return Ok(FolderDelete::NotEmpty);
+    }
+    let paths: Vec<String> = {
+        let mut stmt = tx.prepare("SELECT path FROM files WHERE folder = ?")?;
+        let rows = stmt.query_map([name], |r| r.get(0))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    for path in &paths {
+        remove(path)?;
+    }
+    tx.execute("DELETE FROM files WHERE folder = ?", [name])?;
+    if tx.execute("DELETE FROM folders WHERE name = ?", [name])? == 0 {
+        return Ok(FolderDelete::Missing);
+    }
+    tx.commit()?;
+    Ok(FolderDelete::Deleted)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -88,7 +88,7 @@ max_upload_mb: 10240              # the biggest upload, in MB (default 10 GB)
 
 The first disk is the default for new folders. Files sit at `<disk>/homelab-files/<folder>/<year>/<month>/<id>-<name>`. On mars without `storage:` that's `/var/lib/homelab/storage/homelab-files/`; with the 1 TB disk set up, `/mnt/storage/homelab/homelab-files/`.
 
-Folders can't be deleted or renamed yet. Files can (to the trash). The list of files lives in `files.db` in homelab-services' own folder.
+An empty folder can be deleted. Files in the trash are removed for good when their folder is deleted. Folders can't be renamed yet. The list of files lives in `files.db` in homelab-services' own folder.
 
 The **Files** screen in the companion shows how full each disk is, and the folders in `folders:` too. Homelab sends the "disk almost full" alert for each of them.
 
@@ -106,6 +106,7 @@ The **Files** screen in the companion shows how full each disk is, and the folde
 |---|---|
 | `GET /api/files/folders` | the folders you can see |
 | `POST /api/files/folders` `{"name","disk"?}` | make a folder. An app's folder is always its own |
+| `DELETE /api/files/folders/<folder>` | delete an empty folder (409 if it still has files). Files in its trash go with it |
 | `POST /api/files/<folder>?name=&tags=a,b&sha256=` | save a file. The body is the file itself, not JSON |
 | `GET /api/files/<folder>?tag=&type=image/&taken_after=&taken_before=&camera=&after=&limit=` | list files, newest first, 50 at a time. Pass `next` as `after` for more |
 | `GET /api/files/<folder>/<id>` | the file. Supports `Range` |

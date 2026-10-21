@@ -420,6 +420,13 @@ export const mockApi: Api = {
 		folderStore.push(f);
 		return delay({ ...f });
 	},
+	async deleteFileFolder(name) {
+		const i = folderStore.findIndex((f) => f.name === name);
+		if (i < 0) throw new ApiError(`There's no folder ${name}.`, 404);
+		if (fileStore.some((f) => f.folder === name)) throw new ApiError('The folder still has files. Delete them first.', 409);
+		folderStore.splice(i, 1);
+		await delay(null);
+	},
 	async files(folder, q = {}) {
 		folderOf(folder);
 		let rows = fileStore.filter((f) => f.folder === folder && (!q.tag || f.tags.includes(q.tag)) && (!q.type || f.content_type.startsWith(q.type)));

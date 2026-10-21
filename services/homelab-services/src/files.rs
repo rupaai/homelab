@@ -14,7 +14,7 @@ use axum::http::header::{
 };
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{delete, get};
 use axum::{Json, Router};
 use futures_util::StreamExt;
 use serde::Deserialize;
@@ -162,6 +162,10 @@ pub fn routes() -> Router<AppState> {
                 .post(create_folder)
                 .fallback(not_found)
                 .layer(DefaultBodyLimit::max(JSON_LIMIT)),
+        )
+        .route(
+            "/api/files/folders/{name}",
+            delete(delete_folder).fallback(not_found),
         )
         .route(
             "/api/files/{folder}",
@@ -360,6 +364,96 @@ async fn create_folder(State(s): State<AppState>, caller: Caller, body: Bytes) -
         }
         Err(e) => Err(e.into()),
     }
+}
+
+/// DELETE /api/files/folders/<name>: deletes an empty folder. Files in its
+/// trash go with it.
+async fn delete_folder(
+    State(s): State<AppState>,
+    caller: Caller,
+    Path(name): Path<String>,
+) -> Reply {
+    let folder = s.files.folder_for(&caller, &name, true).await?;
+    let Some(disk) = s.files.disks.iter().find(|d| d.name == folder.disk) else {
+        return Err(disk_error(
+            "cannot delete the folder",
+            format!("the disk {} is not configured", folder.disk),
+        ));
+    };
+    let root = disk.path.clone();
+    let key = name.clone();
+    let outcome = s
+        .files
+        .db
+        .run(move |c| {
+            Ok(db::folder_delete(
+                c,
+                &key,
+                |path| match std::fs::remove_file(root.join(path)) {
+                    Ok(()) => Ok(()),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    Err(e) => Err(disk_error("cannot remove a trashed file", e)),
+                },
+            ))
+        })
+        .await??;
+    match outcome {
+        db::FolderDelete::Deleted => {}
+        db::FolderDelete::NotEmpty => {
+            return Err(err(
+                StatusCode::CONFLICT,
+                "The folder still has files. Delete them first.",
+            ))
+        }
+        db::FolderDelete::Missing => {
+            return Err(err(
+                StatusCode::NOT_FOUND,
+                format!("There's no folder {name}."),
+            ))
+        }
+    }
+    let base = disk.path.join("homelab-files");
+    let _ = tokio::task::spawn_blocking(move || remove_empty_dirs(&base, &name)).await;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// Whether `path` is a real directory (not a link to one).
+fn is_real_dir(path: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir())
+}
+
+/// Best effort: removes the empty year/month folders and the folder itself
+/// under `<base>/<folder>`. Only `remove_dir`, so anything left in them stays.
+fn remove_empty_dirs(base: &std::path::Path, folder: &str) {
+    let top = base.join(folder);
+    if !is_real_dir(base) || !is_real_dir(&top) {
+        return;
+    }
+    let subdirs = |dir: &std::path::Path| -> Vec<PathBuf> {
+        match std::fs::read_dir(dir) {
+            Ok(entries) => entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| is_real_dir(p))
+                .collect(),
+            Err(e) => {
+                tracing::warn!(path = %dir.display(), "cannot list a storage folder: {e}");
+                Vec::new()
+            }
+        }
+    };
+    let remove = |dir: &std::path::Path| {
+        if let Err(e) = std::fs::remove_dir(dir) {
+            tracing::warn!(path = %dir.display(), "cannot remove a storage folder: {e}");
+        }
+    };
+    for year in subdirs(&top) {
+        for month in subdirs(&year) {
+            remove(&month);
+        }
+        remove(&year);
+    }
+    remove(&top);
 }
 
 // ---- tags and info ----
@@ -1658,6 +1752,184 @@ mod tests {
         ] {
             let (status, _, _) = call(&env, &person(), method, target, &[], &[]).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{method} {target}");
+        }
+    }
+
+    // ---- deleting folders ----
+
+    async fn folder_names(env: &TestEnv) -> Vec<String> {
+        let (_, list) = json_call(env, &person(), "GET", "/api/files/folders", Value::Null).await;
+        list["folders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["name"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    async fn delete_folder_call(env: &TestEnv, who: &Value, name: &str) -> (StatusCode, Value) {
+        json_call(
+            env,
+            who,
+            "DELETE",
+            &format!("/api/files/folders/{name}"),
+            Value::Null,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn an_empty_folder_is_deleted() {
+        let env = test_env(1 << 20);
+        make_folder(&env, &person(), "photos", "", "").await;
+        let (status, _) = delete_folder_call(&env, &person(), "photos").await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert!(folder_names(&env).await.is_empty());
+        let (status, body) = delete_folder_call(&env, &person(), "photos").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["error"], "There's no folder photos.");
+    }
+
+    #[tokio::test]
+    async fn a_folder_with_files_is_not_deleted() {
+        let env = test_env(1 << 20);
+        make_folder(&env, &person(), "photos", "", "").await;
+        put(&env, &person(), "", b"keep me").await;
+        let (status, body) = delete_folder_call(&env, &person(), "photos").await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(
+            body["error"],
+            "The folder still has files. Delete them first."
+        );
+        assert_eq!(folder_names(&env).await, ["photos"]);
+        assert_eq!(files_on_disk(&env), 1);
+    }
+
+    #[tokio::test]
+    async fn trashed_files_go_with_the_folder() {
+        let env = test_env(1 << 20);
+        make_folder(&env, &person(), "photos", "", "").await;
+        make_folder(&env, &person(), "other", "", "").await;
+        let (_, info) = put(&env, &person(), "", b"bye").await;
+        let id = info["id"].as_str().unwrap();
+        let (status, _, _) = call(
+            &env,
+            &person(),
+            "DELETE",
+            &format!("/api/files/photos/{id}"),
+            &[],
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert_eq!(files_on_disk(&env), 1);
+
+        let (status, _) = delete_folder_call(&env, &person(), "photos").await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert_eq!(files_on_disk(&env), 0);
+        assert!(!env.disk.join("homelab-files/photos").exists());
+        assert!(env.disk.join("homelab-files").is_dir());
+        assert_eq!(folder_names(&env).await, ["other"]);
+        let rows = env
+            .files
+            .db
+            .run(|c| c.query_row("SELECT COUNT(*) FROM files", [], |r| r.get::<_, i64>(0)))
+            .await
+            .unwrap();
+        assert_eq!(rows, 0);
+        // The purge has nothing left to do.
+        let later = unix_now() + 31 * 24 * 60 * 60;
+        assert_eq!(env.files.purge(later).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_missing_disk_file_does_not_block_deleting() {
+        let env = test_env(1 << 20);
+        make_folder(&env, &person(), "photos", "", "").await;
+        let (_, info) = put(&env, &person(), "", b"gone").await;
+        let id = info["id"].as_str().unwrap();
+        call(
+            &env,
+            &person(),
+            "DELETE",
+            &format!("/api/files/photos/{id}"),
+            &[],
+            &[],
+        )
+        .await;
+        for p in tree(&env.disk) {
+            if p.is_file() {
+                std::fs::remove_file(p).unwrap();
+            }
+        }
+        let (status, _) = delete_folder_call(&env, &person(), "photos").await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert!(folder_names(&env).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn leftover_things_in_a_deleted_folder_stay() {
+        let env = test_env(1 << 20);
+        make_folder(&env, &person(), "photos", "", "").await;
+        let stray = env.disk.join("homelab-files/photos/2020/01");
+        std::fs::create_dir_all(&stray).unwrap();
+        std::fs::write(stray.join("stray.txt"), b"not ours").unwrap();
+        let (status, _) = delete_folder_call(&env, &person(), "photos").await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert!(stray.join("stray.txt").is_file());
+    }
+
+    #[tokio::test]
+    async fn folder_delete_access() {
+        let env = test_env(1 << 20);
+        make_folder(&env, &person(), "mine", "blog", "prod").await;
+        make_folder(&env, &person(), "theirs", "shop", "prod").await;
+        make_folder(&env, &person(), "adm", "", "").await;
+        let blog = app_key("blog", "prod");
+        let (status, _) = delete_folder_call(&env, &blog, "theirs").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = delete_folder_call(&env, &blog, "adm").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = delete_folder_call(&env, &blog, "mine").await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+
+        let reader = admin(&["files:read"]);
+        let (status, _) = delete_folder_call(&env, &reader, "adm").await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(folder_names(&env).await, ["adm", "theirs"]);
+        let writer = admin(&["files:write"]);
+        let (status, _) = delete_folder_call(&env, &writer, "adm").await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn a_deleted_folder_name_can_be_used_again() {
+        let env = test_env(1 << 20);
+        make_folder(&env, &person(), "photos", "", "").await;
+        let (status, _) = delete_folder_call(&env, &person(), "photos").await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        make_folder(&env, &person(), "photos", "", "").await;
+        assert_eq!(
+            put(&env, &person(), "", b"again").await.0,
+            StatusCode::CREATED
+        );
+    }
+
+    #[tokio::test]
+    async fn folders_route_beats_the_file_routes() {
+        let env = test_env(1 << 20);
+        // DELETE goes to the folder delete (its message names a folder, the
+        // file delete would say "no file").
+        let (status, body) = delete_folder_call(&env, &person(), "x").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["error"], "There's no folder x.");
+        for method in ["GET", "POST", "PUT", "PATCH"] {
+            let (status, _, _) =
+                call(&env, &person(), method, "/api/files/folders/x", &[], &[]).await;
+            assert!(
+                status == StatusCode::NOT_FOUND || status == StatusCode::METHOD_NOT_ALLOWED,
+                "{method}: {status}"
+            );
         }
     }
 

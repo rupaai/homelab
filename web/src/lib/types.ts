@@ -225,6 +225,8 @@ export interface Api {
 	storage(): Promise<StorageDisk[]>;
 	fileFolders(): Promise<FileFolder[]>;
 	createFileFolder(name: string, disk?: string): Promise<FileFolder>;
+	/** Only an empty folder can be deleted; the server answers 409 otherwise. */
+	deleteFileFolder(name: string): Promise<void>;
 	files(folder: string, q?: FileQuery): Promise<FilePage>;
 	uploadFile(folder: string, file: File, tags?: string[]): Promise<UploadResult>;
 	fileBlob(folder: string, id: string): Promise<Blob>;
