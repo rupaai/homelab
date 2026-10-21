@@ -9,7 +9,9 @@ fn bin() -> Command {
         .env_remove("HOMELAB_SERVICES_DATA")
         .env_remove("HOMELAB_SERVICES_KEY")
         .env_remove("HOMELAB_SERVICES_STORAGE")
-        .env_remove("HOMELAB_SERVICES_MAX_UPLOAD");
+        .env_remove("HOMELAB_SERVICES_MAX_UPLOAD")
+        .env_remove("HOMELAB_SERVICES_SECRETS_KEY")
+        .env_remove("HOMELAB_SERVICES_SECRETS_IMPORT");
     cmd
 }
 

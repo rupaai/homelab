@@ -52,6 +52,12 @@ func (r *rig) adminKey(t *testing.T, scopes ...string) (string, state.APIKey) {
 // key the way the hub does: "hlk_" + 32 random bytes, only the SHA-256 kept.
 func (r *rig) appKey(t *testing.T, app, env string) (string, state.APIKey) {
 	t.Helper()
+	return r.appKeyScopes(t, app, env, "users:read")
+}
+
+// appKeyScopes is appKey with the scopes given.
+func (r *rig) appKeyScopes(t *testing.T, app, env string, scopes ...string) (string, state.APIKey) {
+	t.Helper()
 	ctx := context.Background()
 	r.ensureApp(t, app)
 	b := make([]byte, 32)
@@ -59,7 +65,7 @@ func (r *rig) appKey(t *testing.T, app, env string) (string, state.APIKey) {
 	tok := "hlk_" + base64.RawURLEncoding.EncodeToString(b)
 	sum := sha256.Sum256([]byte(tok))
 	k := state.APIKey{ID: app + "-" + env, Hash: sum[:], Prefix: tok[:8], Name: app + " " + env, Kind: hub.KeyKindApp, App: app, Env: env,
-		Scopes: []string{"users:read"}, CreatedAt: time.Now()}
+		Scopes: scopes, CreatedAt: time.Now()}
 	if err := r.store.PutAPIKey(ctx, k); err != nil {
 		t.Fatal(err)
 	}

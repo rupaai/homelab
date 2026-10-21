@@ -67,7 +67,12 @@ type Options struct {
 	Port      int         // it listens on 127.0.0.1:Port
 	Storage   []core.Disk // where it keeps files
 	MaxUpload int64       // the largest upload it takes, in bytes
-	Logger    *slog.Logger
+	// SecretsKey is the master key file for secrets. SecretsImport is the old secrets.db
+	// made by homelabd, which it imports once. Both are paths; the key itself never goes
+	// in its environment. Without SecretsKey the secrets service is off.
+	SecretsKey    string
+	SecretsImport string
+	Logger        *slog.Logger
 }
 
 // Services runs homelab-services and forwards calls to it.
@@ -77,6 +82,8 @@ type Services struct {
 	key   ed25519.PrivateKey
 	proxy *httputil.ReverseProxy
 	now   func() time.Time
+	// client makes homelabd's own (system) calls.
+	client *http.Client
 
 	mu      sync.Mutex
 	up      bool
@@ -95,6 +102,7 @@ func New(o Options) (*Services, error) {
 		o.Logger = slog.Default()
 	}
 	s := &Services{o: o, addr: net.JoinHostPort("127.0.0.1", strconv.Itoa(o.Port)), key: key, now: time.Now,
+		client:  &http.Client{Timeout: callTimeout},
 		problem: "Homelab's services are starting."}
 	target := &url.URL{Scheme: "http", Host: s.addr}
 	s.proxy = &httputil.ReverseProxy{
@@ -143,7 +151,16 @@ func (s *Services) PublicKey() string {
 }
 
 // Forward sends a call to homelab-services on behalf of c.
+//
+// A forwarded call is never a system call. Only homelabd's own calls (Call) are, and the
+// signing key that makes them valid never leaves this process.
 func (s *Services) Forward(w http.ResponseWriter, r *http.Request, c core.ServiceCaller) {
+	if c.Kind == core.ServiceKindSystem {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":"That caller can't be forwarded."}` + "\n"))
+		return
+	}
 	if !s.Up() {
 		unavailable(w)
 		return
@@ -230,6 +247,12 @@ func (s *Services) runOnce(ctx context.Context) error {
 	cmd.Env = append(cmd.Env, "HOMELAB_SERVICES_STORAGE="+string(storage))
 	if s.o.MaxUpload > 0 {
 		cmd.Env = append(cmd.Env, "HOMELAB_SERVICES_MAX_UPLOAD="+strconv.FormatInt(s.o.MaxUpload, 10))
+	}
+	if s.o.SecretsKey != "" {
+		cmd.Env = append(cmd.Env, "HOMELAB_SERVICES_SECRETS_KEY="+s.o.SecretsKey)
+	}
+	if s.o.SecretsImport != "" {
+		cmd.Env = append(cmd.Env, "HOMELAB_SERVICES_SECRETS_IMPORT="+s.o.SecretsImport)
 	}
 	logs := &lineLogger{log: s.o.Logger}
 	cmd.Stdout, cmd.Stderr = logs, logs

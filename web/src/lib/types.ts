@@ -81,9 +81,18 @@ export interface SecretView {
 	generated?: boolean;
 }
 
+/** A secret the app saved for itself while it runs. Never has its value. */
+export interface SavedSecretView {
+	name: string;
+	version: number;
+	updatedAt: string;
+}
+
 export interface EnvSecrets {
 	env: EnvName;
 	secrets: SecretView[];
+	/** "Saved by the app": made by the app, not set by a person. */
+	saved: SavedSecretView[];
 }
 
 /** An app's secrets. Never has values; canSeeValues says whether this person may ask for them. */
@@ -236,6 +245,8 @@ export interface Api {
 	setSecret(appId: string, env: EnvName, name: string, value: string): Promise<void>;
 	deleteSecret(appId: string, env: EnvName, name: string): Promise<void>;
 	regenerateSecret(appId: string, env: EnvName, name: string): Promise<void>;
+	revealSavedSecret(appId: string, env: EnvName, name: string): Promise<string>;
+	deleteSavedSecret(appId: string, env: EnvName, name: string): Promise<void>;
 	settings(): Promise<SettingView[]>;
 	setSetting(name: string, value: string): Promise<void>;
 	revealSetting(name: string): Promise<string>;

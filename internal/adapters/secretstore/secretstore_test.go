@@ -364,3 +364,85 @@ func TestOpenOldStoreMakesValuesVersionOne(t *testing.T) {
 		t.Fatalf("restored = %v", got)
 	}
 }
+
+// The Rust secrets service imports this fixture in its own tests (services/homelab-services).
+// Opening it here with the real store keeps the fixture honest: if the Go format changes, this
+// fails, and the fixture and the Rust import must change with it.
+func TestRustImportFixtureOpens(t *testing.T) {
+	src := filepath.Join("..", "..", "..", "services", "homelab-services", "tests", "fixtures", "go-secrets")
+	dir := t.TempDir()
+	for _, f := range []struct{ from, to string }{{"secrets.sqlite", "secrets.db"}, {"master.key", "master.key"}} {
+		b, err := os.ReadFile(filepath.Join(src, f.from))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, f.to), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := open(t, dir)
+	got, err := s.Inject("movies", "prod", []string{"TMDB_API_KEY", "HOMELAB_TOKEN"})
+	if err != nil || got["TMDB_API_KEY"] != "tmdb-v7" || got["HOMELAB_TOKEN"] != "hlk_fixture" {
+		t.Fatalf("movies/prod = %v, %v", got, err)
+	}
+	if v, ok := s.Platform("GITHUB_TOKEN"); !ok || v != "ghp_fixture_token" {
+		t.Fatalf("platform = %q %v", v, ok)
+	}
+	vs, err := s.Versions("movies", "prod", "TMDB_API_KEY")
+	if err != nil || len(vs) != 5 || vs[0].Version != 7 || vs[4].Version != 3 {
+		t.Fatalf("versions = %+v, %v", vs, err)
+	}
+}
+
+func TestEnsureMasterKey(t *testing.T) {
+	dir := t.TempDir()
+	key := filepath.Join(dir, "master.key")
+	goDB, rustDB := filepath.Join(dir, "secrets.db"), filepath.Join(dir, "rust.db")
+
+	// Nothing stored yet: a key is made, private, and kept on the next call.
+	if err := EnsureMasterKey(key, goDB, rustDB); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := os.ReadFile(key)
+	if st, _ := os.Stat(key); st.Mode().Perm() != 0o600 || len(first) == 0 {
+		t.Fatalf("key mode %v, %d bytes", st.Mode().Perm(), len(first))
+	}
+	if err := EnsureMasterKey(key, goDB, rustDB); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := os.ReadFile(key); string(again) != string(first) {
+		t.Fatal("the key changed")
+	}
+	// A key others can read, or a bad one, is refused.
+	_ = os.Chmod(key, 0o644)
+	if err := EnsureMasterKey(key, goDB); err == nil || !strings.Contains(err.Error(), "chmod 600") {
+		t.Fatalf("readable key: %v", err)
+	}
+	_ = os.Remove(key)
+	_ = os.WriteFile(key, []byte("c2hvcnQ=\n"), 0o600)
+	if err := EnsureMasterKey(key, goDB); err == nil || !strings.Contains(err.Error(), "isn't a valid key") {
+		t.Fatalf("short key: %v", err)
+	}
+
+	// A store with values and no key: no new key (it couldn't open them).
+	os.Remove(key)
+	s, err := Open(goDB, filepath.Join(dir, "other.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set("movies", "prod", "K", "v", "me"); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if err := EnsureMasterKey(key, goDB); err == nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("missing key with values: %v", err)
+	}
+	if _, err := os.Stat(key); err == nil {
+		t.Fatal("a key was made over a store that has values")
+	}
+	// An unreadable store file counts as having values.
+	_ = os.WriteFile(rustDB, []byte("not a database at all, just text"), 0o600)
+	if err := EnsureMasterKey(filepath.Join(dir, "k2"), rustDB); err == nil {
+		t.Fatal("a key was made over a file that couldn't be read")
+	}
+}

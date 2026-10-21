@@ -1,4 +1,12 @@
-// Package secretstore implements core.Secrets as an encrypted store (S1): one SQLite file
+// Package secretstore is homelabd's own encrypted secrets store (S1), the one that kept
+// secrets before they moved into homelab-services. homelabd no longer opens it to read or
+// write secrets: homelab-services imports it once on first start (see
+// services/homelab-services/src/secrets.rs; the sealing formats in aad and versionAAD are
+// copied there exactly) and then keeps its own store. This package stays for the master key
+// (EnsureMasterKey), for old-version rollback, and so the import has a real Go-made fixture
+// to be tested against.
+//
+// The store is one SQLite file
 // whose values are sealed with AES-256-GCM under a master key kept in its own file (S9).
 //
 // Every value has its own random nonce and is bound to its app, environment and name as
@@ -29,8 +37,6 @@ import (
 
 	"github.com/rupaai/homelab/internal/core"
 )
-
-var _ core.Secrets = (*Store)(nil)
 
 // MaxValueLen is the longest value accepted.
 const MaxValueLen = 8192
@@ -190,6 +196,43 @@ func (s *Store) backfillVersions() error {
 		}
 	}
 	return nil
+}
+
+// EnsureMasterKey makes sure the master key at keyPath exists and is usable, and makes one
+// if there is none. homelab-services reads this key to open the secrets; homelabd makes it
+// because homelab-services only reads. A missing key is made only while none of the stores
+// (the old secrets.db, the one in homelab-services) holds any value, because a new key
+// couldn't open old values: then it refuses, and says how to put the key back.
+func EnsureMasterKey(keyPath string, stores ...string) error {
+	mayCreate := true
+	for _, p := range stores {
+		if storeHasValues(p) {
+			mayCreate = false
+		}
+	}
+	key, err := loadKey(keyPath, mayCreate)
+	for i := range key {
+		key[i] = 0
+	}
+	return err
+}
+
+// storeHasValues says whether a secrets database holds any secret. A file that can't be
+// read counts as holding some, so a key is never made over it.
+func storeHasValues(path string) bool {
+	if _, err := os.Stat(path); err != nil {
+		return !errors.Is(err, os.ErrNotExist)
+	}
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(5000)")
+	if err != nil {
+		return true
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM secrets`).Scan(&n); err != nil {
+		return !strings.Contains(err.Error(), "no such table")
+	}
+	return n > 0
 }
 
 // loadKey reads the master key, or makes one when allowed.

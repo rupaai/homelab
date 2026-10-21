@@ -477,6 +477,15 @@ func (h *Hub) deployFailed(ctx context.Context, app, env string, err error, logI
 	}
 }
 
+// noSecrets gives the plain message when the secrets service is down, and any other error
+// as it is.
+func noSecrets(err error) error {
+	if errors.Is(err, core.ErrSecretsUnavailable) {
+		return core.ErrSecretsUnavailable
+	}
+	return err
+}
+
 // spec builds what the deploy adapter needs for one release in one environment.
 func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Release) (core.EnvSpec, error) {
 	m, err := h.parse(rel.Manifest, a.Repo)
@@ -484,12 +493,14 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 		return core.EnvSpec{}, err
 	}
 	vars := m.VarsFor(env)
+	// While the secrets service is down the deploy fails with its plain message. It never
+	// goes ahead without the app's secrets.
 	if err := h.ensureGenerated(m, a.ID, env); err != nil {
-		return core.EnvSpec{}, err
+		return core.EnvSpec{}, noSecrets(err)
 	}
 	secrets, err := h.ad.Secrets.Inject(a.ID, env, m.SecretNames())
 	if err != nil {
-		return core.EnvSpec{}, fmt.Errorf("read secrets: %w", err)
+		return core.EnvSpec{}, noSecrets(fmt.Errorf("read secrets: %w", err))
 	}
 	if m.SecretsAs != manifest.SecretsAsFiles {
 		for k, v := range secrets {
@@ -498,9 +509,9 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 	}
 	vars["HOMELAB_APP"], vars["HOMELAB_ENV"], vars["HOMELAB_COMMIT"] = a.ID, env, rel.Commit
 	// The app's own API key, and where to use it (platform services).
-	token, err := h.appKey(ctx, a.ID, env)
+	token, err := h.appKey(ctx, a.ID, env, appKeyScopes(m))
 	if err != nil {
-		return core.EnvSpec{}, err
+		return core.EnvSpec{}, noSecrets(err)
 	}
 	vars[AppTokenSecret] = token
 	if h.cfg.AppAPIURL != "" {

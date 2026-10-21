@@ -1,16 +1,21 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/rupaai/homelab/internal/adapters/secretstore"
+	"github.com/rupaai/homelab/internal/adapters/fake"
+	"github.com/rupaai/homelab/internal/adapters/services"
 	"github.com/rupaai/homelab/internal/core"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -144,12 +149,7 @@ func TestPasswordCommand(t *testing.T) {
 }
 
 func TestIdentityKeyMadeOnce(t *testing.T) {
-	dir := t.TempDir()
-	s, err := secretstore.Open(filepath.Join(dir, "secrets.db"), filepath.Join(dir, "master.key"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
+	s := fake.NewSecrets()
 	a, err := identitySigner(s)
 	if err != nil {
 		t.Fatal(err)
@@ -237,5 +237,28 @@ func TestParseConfigStorage(t *testing.T) {
 		if _, err := parseConfig([]byte(bad)); err == nil {
 			t.Errorf("%q was accepted", bad)
 		}
+	}
+}
+
+func TestWaitForSecretsGivesUpWhenTheServiceNeverComes(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close() // nothing listens here now
+	svc, err := services.New(services.Options{Port: port, DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	err = waitForSecrets(context.Background(), svc.Secrets(), svc, 300*time.Millisecond, log)
+	if !errors.Is(err, core.ErrSecretsUnavailable) {
+		t.Fatalf("want ErrSecretsUnavailable, got %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := waitForSecrets(ctx, svc.Secrets(), svc, time.Minute, log); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a stopped start should say so, got %v", err)
 	}
 }

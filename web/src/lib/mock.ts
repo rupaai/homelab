@@ -1,6 +1,6 @@
 // Fake data for developing the UI without the Go server (see api.ts for how it's switched on).
 import { ApiError } from './errors';
-import type { ActivityEvent, Api, AppView, FileFolder, StorageDisk, StoredFile, UploadResult, EnvName, EnvView, PersonInput, KeyView, PersonView, ReleaseView, SecretView, SettingView, SecretVersion } from './types';
+import type { ActivityEvent, Api, AppView, SavedSecretView, FileFolder, StorageDisk, StoredFile, UploadResult, EnvName, EnvView, PersonInput, KeyView, PersonView, ReleaseView, SecretView, SettingView, SecretVersion } from './types';
 
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 const delay = <T>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
@@ -139,6 +139,13 @@ const secretStore: SecretMap = {
 			{ name: 'OLD_ANALYTICS_KEY', declared: false, set: true, updatedAt: ago(60 * 24 * 40), updatedBy: 'rupaai' }
 		]
 	}
+};
+// Secrets the app saved itself, by "app/env". Values are kept apart from the list.
+const savedStore: Record<string, (SavedSecretView & { value: string })[]> = {
+	'movie-night/prod': [
+		{ name: 'google_token:user42', version: 3, updatedAt: ago(60 * 5), value: 'ya29.mock-token-user42' },
+		{ name: 'google_token:user77', version: 1, updatedAt: ago(60 * 24 * 2), value: 'ya29.mock-token-user77' }
+	]
 };
 // The mock keeps values and versions apart from the list, like the real server does.
 const mockValues: Record<string, (SecretVersion & { value: string })[]> = {
@@ -383,7 +390,8 @@ export const mockApi: Api = {
 		return delay({
 			envs: (['dev', 'prod'] as EnvName[]).map((e) => ({
 				env: e,
-				secrets: (secretStore[a.id]?.[e] ?? []).map((s) => ({ ...s }))
+				secrets: (secretStore[a.id]?.[e] ?? []).map((s) => ({ ...s })),
+				saved: (savedStore[`${a.id}/${e}`] ?? []).map(({ value: _value, ...rest }) => ({ ...rest }))
 			})),
 			canSeeValues: true
 		});
@@ -418,6 +426,16 @@ export const mockApi: Api = {
 		const list = secretStore[a.id]?.[e] ?? [];
 		secretStore[a.id][e] = list.filter((s) => s.name !== name);
 		delete mockValues[`${a.id}/${e}/${name}`];
+		await delay(null);
+	},
+	async revealSavedSecret(id, e, name) {
+		const hit = savedStore[`${find(id).id}/${e}`]?.find((s) => s.name === name);
+		if (!hit) throw new ApiError(`The app hasn't saved ${name} for ${e}.`, 400);
+		return delay(hit.value);
+	},
+	async deleteSavedSecret(id, e, name) {
+		const key = `${find(id).id}/${e}`;
+		savedStore[key] = (savedStore[key] ?? []).filter((s) => s.name !== name);
 		await delay(null);
 	},
 	async regenerateSecret(id, e, name) {

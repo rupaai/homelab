@@ -45,6 +45,33 @@
 		delete revealed[keyOf(env, name)];
 	}
 
+	async function removeSaved(env: EnvName, name: string) {
+		deleting = `saved/${env}/${name}`;
+		error = '';
+		hide(env, `saved/${name}`);
+		try {
+			await api.deleteSavedSecret(id, env, name);
+			await load();
+		} catch (e) {
+			error = messageOf(e);
+		} finally {
+			deleting = '';
+		}
+	}
+
+	async function showSaved(env: EnvName, name: string) {
+		const key = keyOf(env, `saved/${name}`);
+		revealing = key;
+		error = '';
+		try {
+			revealed[key] = await api.revealSavedSecret(id, env, name);
+		} catch (e) {
+			error = messageOf(e);
+		} finally {
+			revealing = '';
+		}
+	}
+
 	async function makeNew(env: EnvName, name: string) {
 		error = '';
 		hide(env, name);
@@ -188,6 +215,32 @@
 				{:else}
 					<p class="muted">This app doesn't need any secrets for {group.env}.</p>
 				{/if}
+				{#if group.saved.length}
+					<h3>Saved by the app</h3>
+					<p class="muted small">The app made these while it runs. They are not used when it starts.</p>
+					<ul>
+						{#each group.saved as s (s.name)}
+							{@const key = keyOf(group.env, `saved/${s.name}`)}
+							<SecretRow name={s.name} set={true} version={s.version} updatedAt={s.updatedAt}>
+								{#snippet actions()}
+									{#if canSeeValues}
+										<button class="btn small" type="button" disabled={revealing === key} onclick={() => (key in revealed ? hide(group.env, `saved/${s.name}`) : showSaved(group.env, s.name))}>
+											{key in revealed ? 'Hide' : revealing === key ? 'Showing…' : 'Show'}<span class="sr-only"> {s.name} saved by the app for {envLabel(group.env)}</span>
+										</button>
+										<button class="btn small" type="button" disabled={deleting === `saved/${group.env}/${s.name}`} onclick={() => removeSaved(group.env, s.name)}>
+											Delete<span class="sr-only"> {s.name} saved by the app for {envLabel(group.env)}</span>
+										</button>
+									{/if}
+								{/snippet}
+								{#snippet below()}
+									{#if key in revealed}
+										<RevealedValue value={revealed[key]} label="{s.name} saved by the app for {envLabel(group.env)}" onhide={() => hide(group.env, `saved/${s.name}`)} />
+									{/if}
+								{/snippet}
+							</SecretRow>
+						{/each}
+					</ul>
+				{/if}
 			</section>
 		{/each}
 	{/if}
@@ -231,6 +284,10 @@
 	}
 	h2 {
 		margin: 0 0 0.3rem;
+	}
+	h3 {
+		margin: 1rem 0 0.1rem;
+		font-size: 1rem;
 	}
 	ul {
 		list-style: none;

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rupaai/homelab/internal/core"
+	"github.com/rupaai/homelab/internal/manifest"
 )
 
 // keyRig is a rig with an admin, a member, and the movies app added.
@@ -256,7 +257,7 @@ func TestAPIKeysListNeverHoldsTheKey(t *testing.T) {
 	ctx := context.Background()
 	r, admin := keyRig(t)
 	tok, k, _ := r.hub.CreateAdminKey(ctx, "svc", []string{"users:read"}, nil, admin)
-	r.hub.appKey(ctx, "movies", core.Dev)
+	r.hub.appKey(ctx, "movies", core.Dev, appKeyScopes(&manifest.Manifest{}))
 	got, err := r.hub.APIKeys(ctx)
 	if err != nil || len(got[KeyKindAdmin]) != 1 || len(got[KeyKindApp]) != 1 {
 		t.Fatalf("%+v %v", got, err)
@@ -264,7 +265,7 @@ func TestAPIKeysListNeverHoldsTheKey(t *testing.T) {
 	if v := got[KeyKindAdmin][0]; v.ID != k.ID || v.CreatedByName != "Ada" {
 		t.Fatalf("view=%+v", v)
 	}
-	if !reflect.DeepEqual(got[KeyKindApp][0].Scopes, appKeyScopes()) {
+	if !reflect.DeepEqual(got[KeyKindApp][0].Scopes, appKeyScopes(&manifest.Manifest{})) {
 		t.Fatalf("app scopes=%v", got[KeyKindApp][0].Scopes)
 	}
 	_ = tok
@@ -309,7 +310,7 @@ func TestAppKeyIsInjectedAndStable(t *testing.T) {
 		t.Fatal("prod shares dev's token")
 	}
 	c, err := r.hub.Authenticate(ctx, tok)
-	if err != nil || c.Kind != KeyKindApp || c.App != "movies" || c.Env != core.Dev || !reflect.DeepEqual(c.Scopes, []string{ScopeUsersRead}) {
+	if err != nil || c.Kind != KeyKindApp || c.App != "movies" || c.Env != core.Dev || !reflect.DeepEqual(c.Scopes, []string{ScopeUsersRead, ScopeSecretsRead}) {
 		t.Fatalf("caller=%+v err=%v", c, err)
 	}
 	if got := c.Label(); got != "app key movies/dev" {

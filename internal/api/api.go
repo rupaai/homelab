@@ -163,6 +163,8 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("POST /api/apps/{id}/envs/{env}/secrets/{name}/reveal", s.revealSecret)
 	mux.HandleFunc("GET /api/apps/{id}/envs/{env}/secrets/{name}/versions", s.secretVersions)
 	mux.HandleFunc("POST /api/apps/{id}/envs/{env}/secrets/{name}/versions/{n}/restore", s.restoreSecret)
+	mux.HandleFunc("POST /api/apps/{id}/envs/{env}/saved/{name}/reveal", s.revealSavedSecret)
+	mux.HandleFunc("DELETE /api/apps/{id}/envs/{env}/saved/{name}", s.deleteSavedSecret)
 	mux.HandleFunc("GET /api/settings/secrets", s.settings)
 	mux.HandleFunc("PUT /api/settings/secrets/{name}", s.setSetting)
 	mux.HandleFunc("DELETE /api/settings/secrets/{name}", s.deleteSetting)
@@ -330,11 +332,12 @@ const msgSecretSession = "Secret values can only be seen or changed by signing i
 // replaces, regenerates, deletes or restores a secret value, or lists its versions:
 //
 //	/api/apps/{id}/envs/{env}/secrets/{name}[/...]
+//	/api/apps/{id}/envs/{env}/saved/{name}[/...]   (secrets the app saved itself)
 //	/api/settings/secrets/{name}[/...]
 //
 // The plain list of an app's secrets (names only) is not one.
 func secretValueRoute(parts []string) bool {
-	if len(parts) >= 7 && parts[1] == "apps" && parts[3] == "envs" && parts[5] == "secrets" {
+	if len(parts) >= 7 && parts[1] == "apps" && parts[3] == "envs" && (parts[5] == "secrets" || parts[5] == "saved") {
 		return true
 	}
 	return len(parts) >= 4 && parts[1] == "settings" && parts[2] == "secrets"
@@ -424,6 +427,8 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	var ue *hub.UserError
 	switch {
+	case errors.Is(err, core.ErrSecretsUnavailable):
+		writeErr(w, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, hub.ErrBusy):
 		writeErr(w, http.StatusConflict, err.Error())
 	case errors.As(err, &ue):
@@ -958,6 +963,26 @@ func (s *server) revealSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"value": v})
+}
+
+func (s *server) revealSavedSecret(w http.ResponseWriter, r *http.Request) {
+	if !decode(w, r, &struct{}{}, false) {
+		return
+	}
+	v, err := s.hub.RevealSavedSecret(actionCtx(r), r.PathValue("id"), r.PathValue("env"), r.PathValue("name"), viewer(r))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"value": v})
+}
+
+func (s *server) deleteSavedSecret(w http.ResponseWriter, r *http.Request) {
+	if err := s.hub.DeleteSavedSecret(actionCtx(r), r.PathValue("id"), r.PathValue("env"), r.PathValue("name"), viewer(r)); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	noContent(w)
 }
 
 func (s *server) secretVersions(w http.ResponseWriter, r *http.Request) {
