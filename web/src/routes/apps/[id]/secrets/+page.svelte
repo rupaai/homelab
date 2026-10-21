@@ -18,6 +18,27 @@
 	let error = $state('');
 	let editing = $state<null | { env: EnvName; secret: SecretView }>(null);
 	let deleting = $state('');
+	let copied = $state('');
+
+	async function copy(key: string, value: string) {
+		try {
+			await navigator.clipboard.writeText(value);
+			copied = key;
+			setTimeout(() => { if (copied === key) copied = ''; }, 2000);
+		} catch {
+			error = 'Your browser could not copy it. Select and copy it instead.';
+		}
+	}
+
+	async function makeNew(env: EnvName, name: string) {
+		error = '';
+		try {
+			await api.regenerateSecret(id, env, name);
+			await load();
+		} catch (e) {
+			error = messageOf(e);
+		}
+	}
 
 	async function load() {
 		try {
@@ -81,9 +102,20 @@
 								updatedAt={s.updatedAt}
 								updatedBy={s.updatedBy}
 								note={s.declared ? undefined : "This app doesn't list it any more."}
+								extra={s.generated ? (s.set ? 'Made by Homelab' : 'Made on next deploy') : undefined}
 							>
 								{#snippet actions()}
-									{#if s.declared}
+									{#if s.generated}
+										{#if s.value}
+											<code class="value">{s.value}</code>
+											<button class="btn small" type="button" onclick={() => copy(`${group.env}/${s.name}`, s.value ?? '')}>
+												{copied === `${group.env}/${s.name}` ? 'Copied' : 'Copy'}<span class="sr-only"> {s.name} for {envLabel(group.env)}</span>
+											</button>
+											<button class="btn small" type="button" onclick={() => makeNew(group.env, s.name)}>
+												Make new<span class="sr-only"> {s.name} for {envLabel(group.env)}</span>
+											</button>
+										{/if}
+									{:else if s.declared}
 										<button class="btn small" type="button" onclick={() => (editing = { env: group.env, secret: s })}>
 											{s.set ? 'Replace' : 'Set'}<span class="sr-only"> {s.name} for {envLabel(group.env)}</span>
 										</button>
@@ -132,6 +164,10 @@
 	}
 	h2 {
 		margin: 0 0 0.3rem;
+	}
+	.value {
+		align-self: center;
+		overflow-wrap: anywhere;
 	}
 	ul {
 		list-style: none;

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -38,7 +39,10 @@ type Manifest struct {
 	Env          map[string]string            `yaml:"env"`     // settings for every environment
 	EnvFor       map[string]map[string]string `yaml:"env_for"` // per-environment overrides: env_for.dev.X
 	Secrets      []string                     `yaml:"secrets"`
-	Memory       string                       `yaml:"memory"`
+	// GenerateSecrets are secrets Homelab makes itself, once per environment, the first
+	// time the app is deployed there. The owner never types them.
+	GenerateSecrets []string `yaml:"generate_secrets"`
+	Memory          string   `yaml:"memory"`
 
 	// Folders are the device's shared folders the app sees, e.g. its media library. The
 	// device names them in config.yaml (folders:), so an app can't reach anything else.
@@ -287,6 +291,20 @@ func (m *Manifest) validate() error {
 			add("%q is both a setting and a secret", s)
 		}
 	}
+	for _, s := range m.GenerateSecrets {
+		if !varPattern.MatchString(s) {
+			add("generated secret name %q isn't a valid variable name", s)
+		}
+		if strings.HasPrefix(s, "HOMELAB_") {
+			add("generated secret name %q: names starting with HOMELAB_ are Homelab's own", s)
+		}
+		if _, clash := m.Env[s]; clash {
+			add("%q is both a setting and a generated secret", s)
+		}
+		if slices.Contains(m.Secrets, s) {
+			add("%q is in both secrets and generate_secrets", s)
+		}
+	}
 	for _, a := range m.SmokeTest {
 		if a == "" {
 			add("smoke_test must be a list of non-empty words, e.g. [python, -m, app.smoke]")
@@ -371,4 +389,9 @@ func AddressName(app, env string) string {
 		return app
 	}
 	return app + "-" + env
+}
+
+// SecretNames is every secret the app gets: the ones the owner sets and the ones Homelab makes.
+func (m *Manifest) SecretNames() []string {
+	return append(slices.Clone(m.Secrets), m.GenerateSecrets...)
 }

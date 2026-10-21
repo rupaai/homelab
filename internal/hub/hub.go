@@ -483,7 +483,10 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 		return core.EnvSpec{}, err
 	}
 	vars := m.VarsFor(env)
-	secrets, err := h.ad.Secrets.Inject(a.ID, env, m.Secrets)
+	if err := h.ensureGenerated(m, a.ID, env); err != nil {
+		return core.EnvSpec{}, err
+	}
+	secrets, err := h.ad.Secrets.Inject(a.ID, env, m.SecretNames())
 	if err != nil {
 		return core.EnvSpec{}, fmt.Errorf("read secrets: %w", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -82,6 +83,10 @@ type SecretView struct {
 	Set       bool       `json:"set"`
 	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
 	UpdatedBy string     `json:"updatedBy,omitempty"`
+	// Generated secrets are made by Homelab. Their value is shown, to admins only: this
+	// list is only served behind the secrets permission.
+	Generated bool   `json:"generated,omitempty"`
+	Value     string `json:"value,omitempty"`
 }
 
 // EnvSecrets is the secrets of one environment.
@@ -112,9 +117,19 @@ func (h *Hub) AppSecrets(ctx context.Context, appID string) ([]EnvSecrets, error
 				byName[s.Name] = s
 			}
 		}
+		generated, err := h.ad.Secrets.Inject(appID, env, m.GenerateSecrets)
+		if err != nil {
+			return nil, err
+		}
 		es := EnvSecrets{Env: env, Secrets: []SecretView{}}
 		for _, n := range m.Secrets {
 			es.Secrets = append(es.Secrets, secretView(n, true, byName))
+			delete(byName, n)
+		}
+		for _, n := range m.GenerateSecrets {
+			v := secretView(n, true, byName)
+			v.Generated, v.Value = true, generated[n]
+			es.Secrets = append(es.Secrets, v)
 			delete(byName, n)
 		}
 		var extra []string
@@ -156,6 +171,32 @@ func (h *Hub) SetSecret(ctx context.Context, appID, env, name, value string, by 
 	}
 	h.logEvent(ctx, state.Event{Actor: by.Label(), App: appID, Env: env, Action: "secret.set",
 		Detail: fmt.Sprintf("Set %s for %s. It's used from the next deploy.", name, env)})
+	return nil
+}
+
+// RegenerateSecret replaces a generated secret with a fresh value. The app picks it up
+// the next time it is deployed.
+func (h *Hub) RegenerateSecret(ctx context.Context, appID, env, name string, by core.Viewer) error {
+	a, err := h.store.App(ctx, appID)
+	if err != nil {
+		return userErr("There's no app %q.", appID)
+	}
+	m, err := h.parse(a.Manifest, a.Repo)
+	if err != nil {
+		return &UserError{Msg: err.Error()}
+	}
+	if !slices.Contains(m.GenerateSecrets, name) || (env != core.Dev && env != core.Prod) {
+		return userErr("%s isn't a secret Homelab makes for %s.", name, appID)
+	}
+	v, err := newGeneratedSecret()
+	if err != nil {
+		return err
+	}
+	if err := h.ad.Secrets.Set(appID, env, name, v, by.Label()); err != nil {
+		return &UserError{Msg: secretErr(err)}
+	}
+	h.logEvent(ctx, state.Event{Actor: by.Label(), App: appID, Env: env, Action: "secret.set",
+		Detail: fmt.Sprintf("Made a new %s for %s", name, env)})
 	return nil
 }
 
@@ -292,7 +333,7 @@ func (h *Hub) DeletePlatformSetting(ctx context.Context, name string, by core.Vi
 func (h *Hub) mask(ctx context.Context, a state.App, env, text string) string {
 	var values []string
 	if m, err := h.parse(a.Manifest, a.Repo); err == nil {
-		if vals, err := h.ad.Secrets.Inject(a.ID, env, m.Secrets); err == nil {
+		if vals, err := h.ad.Secrets.Inject(a.ID, env, m.SecretNames()); err == nil {
 			for _, v := range vals {
 				values = append(values, v)
 			}

@@ -77,6 +77,19 @@ and the key file is missing, homelabd stops and says so rather than making a new
 If a secret exists but can't be read or decrypted, homelabd stops and says so. It only makes
 a new secret when it is really missing.
 
+### Secrets Homelab makes
+
+`generate_secrets: [ADMIN_TOKEN]` in homelab.yaml asks Homelab to make a secret itself, so
+nobody types one. The names follow the same rules as `secrets`, and a name can't be in both
+lists. Before each deploy, for every name with no value in that environment (dev and prod
+each get their own), Homelab makes one and keeps it in the secret store. It looks like
+`k7m3q-x9rt2-h4wpz-c8nfa` (letters and digits that are hard to mix up). A value that exists
+is never replaced. It reaches the containers like any other secret and is never "missing".
+On the app's **Secrets** page, admins see its value, can copy it, and can press **Make new**
+(`POST /api/apps/{id}/envs/{env}/secrets/{name}/regenerate`, 204; used from the next deploy).
+Only admins can open that page, so builders never see the values. An older Homelab ignores
+`generate_secrets`, so the app would start without that variable.
+
 Platform credentials: `GITHUB_TOKEN` (used right away) and `TS_AUTHKEY` (used at the next
 start). The identity signing key is a platform secret Homelab makes itself and never lists.
 
@@ -94,6 +107,7 @@ Every change (any method but GET) needs the `X-Homelab-Request: 1` header, as be
 | `GET /api/apps/{id}/secrets` | | `{"envs":[{"env":"dev","secrets":[SecretView]},{"env":"prod",...}]}` |
 | `PUT /api/apps/{id}/envs/{env}/secrets/{name}` | `{"value":"..."}` | 204 |
 | `DELETE /api/apps/{id}/envs/{env}/secrets/{name}` | | 204 |
+| `POST /api/apps/{id}/envs/{env}/secrets/{name}/regenerate` | | 204. Only for `generate_secrets` names |
 | `GET /api/settings/secrets` | | `[SettingView]` |
 | `PUT /api/settings/secrets/{name}` | `{"value":"..."}` | 204 |
 | `DELETE /api/settings/secrets/{name}` | | 204 |

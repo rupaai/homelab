@@ -159,6 +159,7 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("GET /api/apps/{id}/secrets", s.appSecrets)
 	mux.HandleFunc("PUT /api/apps/{id}/envs/{env}/secrets/{name}", s.setSecret)
 	mux.HandleFunc("DELETE /api/apps/{id}/envs/{env}/secrets/{name}", s.deleteSecret)
+	mux.HandleFunc("POST /api/apps/{id}/envs/{env}/secrets/{name}/regenerate", s.regenerateSecret)
 	mux.HandleFunc("GET /api/settings/secrets", s.settings)
 	mux.HandleFunc("PUT /api/settings/secrets/{name}", s.setSetting)
 	mux.HandleFunc("DELETE /api/settings/secrets/{name}", s.deleteSetting)
@@ -912,6 +913,14 @@ func (s *server) setSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.hub.SetSecret(actionCtx(r), r.PathValue("id"), r.PathValue("env"), r.PathValue("name"), in.Value, viewer(r)); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	noContent(w)
+}
+
+func (s *server) regenerateSecret(w http.ResponseWriter, r *http.Request) {
+	if err := s.hub.RegenerateSecret(actionCtx(r), r.PathValue("id"), r.PathValue("env"), r.PathValue("name"), viewer(r)); err != nil {
 		s.fail(w, r, err)
 		return
 	}

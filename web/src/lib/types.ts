@@ -77,6 +77,8 @@ export interface SecretView {
 	set: boolean;
 	updatedAt?: string;
 	updatedBy?: string;
+	generated?: boolean;
+	value?: string;
 }
 
 export interface EnvSecrets {
@@ -216,6 +218,7 @@ export interface Api {
 	appSecrets(appId: string): Promise<EnvSecrets[]>;
 	setSecret(appId: string, env: EnvName, name: string, value: string): Promise<void>;
 	deleteSecret(appId: string, env: EnvName, name: string): Promise<void>;
+	regenerateSecret(appId: string, env: EnvName, name: string): Promise<void>;
 	settings(): Promise<SettingView[]>;
 	setSetting(name: string, value: string): Promise<void>;
 	deleteSetting(name: string): Promise<void>;

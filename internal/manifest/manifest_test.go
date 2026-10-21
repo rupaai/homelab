@@ -46,19 +46,23 @@ func TestParseDefaults(t *testing.T) {
 
 func TestParseRejects(t *testing.T) {
 	cases := map[string]string{
-		"bad id":        strings.Replace(movies, "id: movies", "id: Movies!", 1),
-		"dev suffix":    strings.Replace(movies, "id: movies", "id: movies-dev", 1),
-		"reserved":      strings.Replace(movies, "id: movies", "id: homelab", 1),
-		"tagged image":  strings.Replace(movies, "smart-recommender-player", "smart-recommender-player:latest", 1),
-		"tag no commit": strings.Replace(movies, `"sha-{commit}"`, "latest", 1),
-		"no port":       strings.Replace(movies, "port: 8000", "port: 0", 1),
-		"bad promotion": movies + "promotion: sometimes\n",
-		"promote_after": movies + "promote_after: 10s\n",
-		"empty smoke":   movies + "smoke_test: [python, \"\"]\n",
-		"no id or repo": strings.Replace(movies, "id: movies", "", 1),
-		"secret clash":  strings.Replace(movies, "[TMDB_API_KEY]", "[CONFIG_PATH]", 1),
-		"bad memory":    strings.Replace(movies, "memory: 2g", "memory: lots", 1),
-		"relative data": strings.Replace(movies, "path: /data", "path: data", 1),
+		"bad id":             strings.Replace(movies, "id: movies", "id: Movies!", 1),
+		"dev suffix":         strings.Replace(movies, "id: movies", "id: movies-dev", 1),
+		"reserved":           strings.Replace(movies, "id: movies", "id: homelab", 1),
+		"tagged image":       strings.Replace(movies, "smart-recommender-player", "smart-recommender-player:latest", 1),
+		"tag no commit":      strings.Replace(movies, `"sha-{commit}"`, "latest", 1),
+		"no port":            strings.Replace(movies, "port: 8000", "port: 0", 1),
+		"bad promotion":      movies + "promotion: sometimes\n",
+		"promote_after":      movies + "promote_after: 10s\n",
+		"empty smoke":        movies + "smoke_test: [python, \"\"]\n",
+		"no id or repo":      strings.Replace(movies, "id: movies", "", 1),
+		"secret clash":       strings.Replace(movies, "[TMDB_API_KEY]", "[CONFIG_PATH]", 1),
+		"generated clash":    strings.Replace(movies, "secrets: [TMDB_API_KEY]", "secrets: [TMDB_API_KEY]\ngenerate_secrets: [TMDB_API_KEY]", 1),
+		"generated env":      strings.Replace(movies, "secrets: [TMDB_API_KEY]", "generate_secrets: [CONFIG_PATH]", 1),
+		"generated reserved": strings.Replace(movies, "secrets: [TMDB_API_KEY]", "generate_secrets: [HOMELAB_X]", 1),
+		"generated bad name": strings.Replace(movies, "secrets: [TMDB_API_KEY]", "generate_secrets: [\"a-b\"]", 1),
+		"bad memory":         strings.Replace(movies, "memory: 2g", "memory: lots", 1),
+		"relative data":      strings.Replace(movies, "path: /data", "path: data", 1),
 	}
 	for name, doc := range cases {
 		if _, err := Parse([]byte(doc), Defaults{}); err == nil {
@@ -148,5 +152,15 @@ func TestServices(t *testing.T) {
 		if _, err := Parse([]byte(movies+doc), Defaults{}); err == nil {
 			t.Errorf("%s: expected an error", name)
 		}
+	}
+}
+
+func TestGenerateSecrets(t *testing.T) {
+	m, err := Parse([]byte(strings.Replace(movies, "secrets: [TMDB_API_KEY]", "secrets: [TMDB_API_KEY]\ngenerate_secrets: [ADMIN_TOKEN]", 1)), Defaults{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(m.SecretNames(), ","); got != "TMDB_API_KEY,ADMIN_TOKEN" {
+		t.Fatalf("SecretNames = %s", got)
 	}
 }
