@@ -86,7 +86,9 @@ storage:
 max_upload_mb: 10240              # the biggest upload, in MB (default 10 GB)
 ```
 
-The first disk is the default for new folders. Files sit at `<disk>/homelab-files/<folder>/<year>/<month>/<id>-<name>`. The list of files lives in `files.db` in homelab-services' own folder.
+The first disk is the default for new folders. Files sit at `<disk>/homelab-files/<folder>/<year>/<month>/<id>-<name>`. On mars without `storage:` that's `/var/lib/homelab/storage/homelab-files/`; with the 1 TB disk set up, `/mnt/storage/homelab/homelab-files/`.
+
+Folders can't be deleted or renamed yet. Files can (to the trash). The list of files lives in `files.db` in homelab-services' own folder.
 
 The **Files** screen in the companion shows how full each disk is, and the folders in `folders:` too. Homelab sends the "disk almost full" alert for each of them.
 
@@ -125,3 +127,45 @@ curl -s -H "Authorization: Bearer $HOMELAB_TOKEN" -H "Content-Type: application/
 curl -s -H "Authorization: Bearer $HOMELAB_TOKEN" --data-binary @poster.jpg \
   "$HOMELAB_API_URL/api/files/posters?name=poster.jpg&tags=dune"
 ```
+
+### Use it from your code
+
+There's no package yet: it's plain web calls, so any language works. Inside a Homelab app, `HOMELAB_API_URL` and `HOMELAB_TOKEN` are already set. A server elsewhere uses the companion's address and a key from **Settings → API keys**.
+
+TypeScript (Node 18+):
+
+```ts
+const api = process.env.HOMELAB_API_URL!;
+const auth = { Authorization: `Bearer ${process.env.HOMELAB_TOKEN}` };
+
+// Once: make the folder (409 means it's already there).
+await fetch(`${api}/api/files/folders`, {
+  method: "POST",
+  headers: { ...auth, "Content-Type": "application/json" },
+  body: JSON.stringify({ name: "posters" }),
+});
+
+// Save a file. The answer has the id, size, type and meta (date taken, camera, ...).
+const bytes = await fs.promises.readFile("poster.jpg");
+const res = await fetch(`${api}/api/files/posters?name=poster.jpg&tags=dune`, { method: "POST", headers: auth, body: bytes });
+const file = await res.json();
+
+// List photos taken this year, and download one.
+const list = await (await fetch(`${api}/api/files/posters?taken_after=2026-01-01`, { headers: auth })).json();
+const data = await (await fetch(`${api}/api/files/posters/${file.id}`, { headers: auth })).arrayBuffer();
+```
+
+Python (`requests`):
+
+```python
+import os, requests
+api, auth = os.environ["HOMELAB_API_URL"], {"Authorization": f"Bearer {os.environ['HOMELAB_TOKEN']}"}
+
+requests.post(f"{api}/api/files/folders", json={"name": "posters"}, headers=auth)
+with open("poster.jpg", "rb") as f:
+    file = requests.post(f"{api}/api/files/posters", params={"name": "poster.jpg", "tags": "dune"}, data=f, headers=auth).json()
+files = requests.get(f"{api}/api/files/posters", params={"camera": "iphone"}, headers=auth).json()["files"]
+data = requests.get(f"{api}/api/files/posters/{file['id']}", headers=auth).content
+```
+
+Errors come back as `{"error": "..."}` with a plain message. A client can also be made from [files.openapi.yaml](files.openapi.yaml).
