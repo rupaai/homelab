@@ -1,0 +1,29 @@
+[package]
+name = "homelab-sdk"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Thin async client for Homelab's web API (Files service)."
+license = "MIT"
+repository = "https://github.com/rupaai/homelab"
+readme = "README.md"
+keywords = ["homelab", "files", "client", "sdk"]
+categories = ["api-bindings"]
+
+[lib]
+name = "homelab"
+path = "src/lib.rs"
+
+[dependencies]
+bytes = "1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", default-features = false, features = ["fs"] }
+tokio-util = { version = "0.7", default-features = false, features = ["io"] }
+
+[dev-dependencies]
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "fs"] }

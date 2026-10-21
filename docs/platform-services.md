@@ -131,7 +131,7 @@ curl -s -H "Authorization: Bearer $HOMELAB_TOKEN" --data-binary @poster.jpg \
 
 ### Use it from your code
 
-There's no package yet: it's plain web calls, so any language works. Inside a Homelab app, `HOMELAB_API_URL` and `HOMELAB_TOKEN` are already set. A server elsewhere uses the companion's address and a key from **Settings → API keys**.
+The easy way is a plugin: [TypeScript, Python or Rust](../plugins/README.md), for example `await homelab.files.upload("posters", bytes, { name: "poster.jpg" })`. Without a plugin it's plain web calls, so any language works; the examples below show them. Inside a Homelab app, `HOMELAB_API_URL` and `HOMELAB_TOKEN` are already set. A server elsewhere uses the companion's address and a key from **Settings → API keys**.
 
 TypeScript (Node 18+):
 
