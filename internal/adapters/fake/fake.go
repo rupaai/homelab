@@ -323,26 +323,71 @@ type Secrets struct {
 	mu             sync.Mutex
 	Values         map[string]string
 	PlatformValues map[string]string
+	versions       map[string][]fakeVersion // by "app/env/NAME", oldest first
+}
+
+type fakeVersion struct {
+	core.SecretVersion
+	value string
 }
 
 func NewSecrets() *Secrets {
-	return &Secrets{Values: map[string]string{}, PlatformValues: map[string]string{}}
+	return &Secrets{Values: map[string]string{}, PlatformValues: map[string]string{}, versions: map[string][]fakeVersion{}}
 }
 
-func (s *Secrets) Set(app, env, name, value, _ string) error {
+func (s *Secrets) Set(app, env, name, value, by string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.setLocked(app, env, name, value, by)
+	return nil
+}
+
+func (s *Secrets) setLocked(app, env, name, value, by string) int {
+	key := app + "/" + env + "/" + name
 	if app == "" {
 		s.PlatformValues[name] = value
-		return nil
+	} else {
+		s.Values[key] = value
 	}
-	s.Values[app+"/"+env+"/"+name] = value
-	return nil
+	list := s.versions[key]
+	n := 1
+	if len(list) > 0 {
+		n = list[len(list)-1].Version + 1
+	}
+	list = append(list, fakeVersion{core.SecretVersion{Version: n, SetBy: by, SetAt: time.Now()}, value})
+	if len(list) > core.SecretVersionsKept {
+		list = list[len(list)-core.SecretVersionsKept:]
+	}
+	s.versions[key] = list
+	return n
+}
+
+func (s *Secrets) Versions(app, env, name string) ([]core.SecretVersion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list := s.versions[app+"/"+env+"/"+name]
+	out := make([]core.SecretVersion, 0, len(list))
+	for i := len(list) - 1; i >= 0; i-- {
+		out = append(out, list[i].SecretVersion)
+	}
+	return out, nil
+}
+
+func (s *Secrets) Restore(app, env, name string, version int, by string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, v := range s.versions[app+"/"+env+"/"+name] {
+		if v.Version == version {
+			return s.setLocked(app, env, name, v.value, by), nil
+		}
+	}
+	return 0, fmt.Errorf("there's no version %d of %s", version, name)
 }
 
 func (s *Secrets) Delete(app, env, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	delete(s.versions, app+"/"+env+"/"+name)
 	if app == "" {
 		delete(s.PlatformValues, name)
 		return nil
@@ -377,6 +422,11 @@ func (s *Secrets) DeleteApp(app string) error {
 	for k := range s.Values {
 		if strings.HasPrefix(k, app+"/") {
 			delete(s.Values, k)
+		}
+	}
+	for k := range s.versions {
+		if strings.HasPrefix(k, app+"/") {
+			delete(s.versions, k)
 		}
 	}
 	return nil

@@ -83,10 +83,10 @@ type SecretView struct {
 	Set       bool       `json:"set"`
 	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
 	UpdatedBy string     `json:"updatedBy,omitempty"`
-	// Generated secrets are made by Homelab. Their value is shown, to admins only: this
-	// list is only served behind the secrets permission.
-	Generated bool   `json:"generated,omitempty"`
-	Value     string `json:"value,omitempty"`
+	Version   int        `json:"version,omitempty"`
+	// Generated secrets are made by Homelab. Like any secret, their value is only given by
+	// RevealSecret.
+	Generated bool `json:"generated,omitempty"`
 }
 
 // EnvSecrets is the secrets of one environment.
@@ -117,10 +117,6 @@ func (h *Hub) AppSecrets(ctx context.Context, appID string) ([]EnvSecrets, error
 				byName[s.Name] = s
 			}
 		}
-		generated, err := h.ad.Secrets.Inject(appID, env, m.GenerateSecrets)
-		if err != nil {
-			return nil, err
-		}
 		es := EnvSecrets{Env: env, Secrets: []SecretView{}}
 		for _, n := range m.Secrets {
 			es.Secrets = append(es.Secrets, secretView(n, true, byName))
@@ -128,7 +124,7 @@ func (h *Hub) AppSecrets(ctx context.Context, appID string) ([]EnvSecrets, error
 		}
 		for _, n := range m.GenerateSecrets {
 			v := secretView(n, true, byName)
-			v.Generated, v.Value = true, generated[n]
+			v.Generated = true
 			es.Secrets = append(es.Secrets, v)
 			delete(byName, n)
 		}
@@ -149,14 +145,110 @@ func secretView(name string, declared bool, stored map[string]core.SecretInfo) S
 	v := SecretView{Name: name, Declared: declared}
 	if s, ok := stored[name]; ok {
 		t := s.UpdatedAt
-		v.Set, v.UpdatedAt, v.UpdatedBy = true, &t, s.UpdatedBy
+		v.Set, v.UpdatedAt, v.UpdatedBy, v.Version = true, &t, s.UpdatedBy, s.Version
 	}
 	return v
 }
 
-// SetSecret stores a value for one app environment. Only admins may set secrets, and values
-// are never read back (S4).
+// msgSecretValues is what people get when they may not see or change secret values.
+const msgSecretValues = "Only the owner, or people the owner allows, can see or change secret values."
+
+// CanSeeSecretValues says whether a person may see and change secret values.
+func (h *Hub) CanSeeSecretValues(ctx context.Context, personID string) bool {
+	p, err := h.store.Person(ctx, personID)
+	return err == nil && Can(p, ActionSecretValues, "")
+}
+
+// requireSecretValues refuses anyone who may not see or change secret values. The API checks
+// this too; it is here as well so no other caller can skip it.
+func (h *Hub) requireSecretValues(ctx context.Context, by core.Viewer) error {
+	if !by.Session || !h.CanSeeSecretValues(ctx, by.PersonID) {
+		return userErr("%s", msgSecretValues)
+	}
+	return nil
+}
+
+// RevealSecret returns one secret's value, and records in Activity that it was looked at
+// (never the value).
+func (h *Hub) RevealSecret(ctx context.Context, appID, env, name string, by core.Viewer) (string, error) {
+	if err := h.requireSecretValues(ctx, by); err != nil {
+		return "", err
+	}
+	if _, err := h.store.App(ctx, appID); err != nil {
+		return "", userErr("There's no app %q.", appID)
+	}
+	if env != core.Dev && env != core.Prod {
+		return "", userErr("There's no environment %q.", env)
+	}
+	if reservedSecret(name) {
+		return "", userErr("Names starting with HOMELAB_ are Homelab's own and can't be shown.")
+	}
+	vals, err := h.ad.Secrets.Inject(appID, env, []string{name})
+	if err != nil {
+		return "", &UserError{Msg: secretErr(err)}
+	}
+	v, ok := vals[name]
+	if !ok {
+		return "", userErr("%s isn't set for %s.", name, env)
+	}
+	h.logEvent(ctx, state.Event{Actor: by.Label(), App: appID, Env: env, Action: "secret.viewed",
+		Detail: fmt.Sprintf("Viewed %s for %s", name, env)})
+	return v, nil
+}
+
+// SecretVersions lists the kept versions of a secret, newest first. There are no values.
+func (h *Hub) SecretVersions(ctx context.Context, appID, env, name string, by core.Viewer) ([]core.SecretVersion, error) {
+	if err := h.requireSecretValues(ctx, by); err != nil {
+		return nil, err
+	}
+	if _, err := h.store.App(ctx, appID); err != nil {
+		return nil, userErr("There's no app %q.", appID)
+	}
+	if env != core.Dev && env != core.Prod {
+		return nil, userErr("There's no environment %q.", env)
+	}
+	if reservedSecret(name) {
+		return nil, userErr("Names starting with HOMELAB_ are Homelab's own.")
+	}
+	list, err := h.ad.Secrets.Versions(appID, env, name)
+	if err != nil {
+		return nil, &UserError{Msg: secretErr(err)}
+	}
+	if list == nil {
+		list = []core.SecretVersion{}
+	}
+	return list, nil
+}
+
+// RestoreSecret makes an older version the current value, as a new version.
+func (h *Hub) RestoreSecret(ctx context.Context, appID, env, name string, version int, by core.Viewer) error {
+	if err := h.requireSecretValues(ctx, by); err != nil {
+		return err
+	}
+	if _, err := h.store.App(ctx, appID); err != nil {
+		return userErr("There's no app %q.", appID)
+	}
+	if env != core.Dev && env != core.Prod {
+		return userErr("There's no environment %q.", env)
+	}
+	if reservedSecret(name) {
+		return userErr("Names starting with HOMELAB_ are Homelab's own.")
+	}
+	n, err := h.ad.Secrets.Restore(appID, env, name, version, by.Label())
+	if err != nil {
+		return &UserError{Msg: secretErr(err)}
+	}
+	h.logEvent(ctx, state.Event{Actor: by.Label(), App: appID, Env: env, Action: "secret.restored",
+		Detail: fmt.Sprintf("Put back version %d of %s for %s, as version %d. It's used from the next deploy.", version, name, env, n)})
+	return nil
+}
+
+// SetSecret stores a value for one app environment. Only people who may see secret values
+// can set them.
 func (h *Hub) SetSecret(ctx context.Context, appID, env, name, value string, by core.Viewer) error {
+	if err := h.requireSecretValues(ctx, by); err != nil {
+		return err
+	}
 	if _, err := h.store.App(ctx, appID); err != nil {
 		return userErr("There's no app %q.", appID)
 	}
@@ -177,6 +269,9 @@ func (h *Hub) SetSecret(ctx context.Context, appID, env, name, value string, by 
 // RegenerateSecret replaces a generated secret with a fresh value. The app picks it up
 // the next time it is deployed.
 func (h *Hub) RegenerateSecret(ctx context.Context, appID, env, name string, by core.Viewer) error {
+	if err := h.requireSecretValues(ctx, by); err != nil {
+		return err
+	}
 	a, err := h.store.App(ctx, appID)
 	if err != nil {
 		return userErr("There's no app %q.", appID)
@@ -202,6 +297,9 @@ func (h *Hub) RegenerateSecret(ctx context.Context, appID, env, name string, by 
 
 // DeleteSecret removes a value from one app environment.
 func (h *Hub) DeleteSecret(ctx context.Context, appID, env, name string, by core.Viewer) error {
+	if err := h.requireSecretValues(ctx, by); err != nil {
+		return err
+	}
 	if _, err := h.store.App(ctx, appID); err != nil {
 		return userErr("There's no app %q.", appID)
 	}
@@ -265,6 +363,65 @@ type SettingView struct {
 	Set       bool       `json:"set"`
 	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
 	UpdatedBy string     `json:"updatedBy,omitempty"`
+	Version   int        `json:"version,omitempty"`
+}
+
+// RevealPlatformSetting returns a platform credential's value, and records that it was
+// looked at (never the value).
+func (h *Hub) RevealPlatformSetting(ctx context.Context, name string, by core.Viewer) (string, error) {
+	if err := h.requireSecretValues(ctx, by); err != nil {
+		return "", err
+	}
+	if !knownSetting(name) {
+		return "", userErr("There's no setting %q.", name)
+	}
+	v, err := h.ad.Secrets.LoadPlatform(name)
+	if err != nil {
+		return "", &UserError{Msg: secretErr(err)}
+	}
+	if v == "" {
+		return "", userErr("%s isn't set.", name)
+	}
+	h.logEvent(ctx, state.Event{Actor: by.Label(), Action: "setting.viewed", Detail: "Viewed " + name})
+	return v, nil
+}
+
+// PlatformSettingVersions lists the kept versions of a platform credential, newest first.
+func (h *Hub) PlatformSettingVersions(ctx context.Context, name string, by core.Viewer) ([]core.SecretVersion, error) {
+	if err := h.requireSecretValues(ctx, by); err != nil {
+		return nil, err
+	}
+	if !knownSetting(name) {
+		return nil, userErr("There's no setting %q.", name)
+	}
+	list, err := h.ad.Secrets.Versions("", "", name)
+	if err != nil {
+		return nil, &UserError{Msg: secretErr(err)}
+	}
+	if list == nil {
+		list = []core.SecretVersion{}
+	}
+	return list, nil
+}
+
+// RestorePlatformSetting makes an older version of a platform credential the current one.
+func (h *Hub) RestorePlatformSetting(ctx context.Context, name string, version int, by core.Viewer) error {
+	if err := h.requireSecretValues(ctx, by); err != nil {
+		return err
+	}
+	if !knownSetting(name) {
+		return userErr("There's no setting %q.", name)
+	}
+	n, err := h.ad.Secrets.Restore("", "", name, version, by.Label())
+	if err != nil {
+		return &UserError{Msg: secretErr(err)}
+	}
+	h.logEvent(ctx, state.Event{Actor: by.Label(), Action: "setting.restored",
+		Detail: fmt.Sprintf("Put back version %d of %s, as version %d", version, name, n)})
+	if name == "GITHUB_TOKEN" {
+		go h.CheckBuilds(context.WithoutCancel(ctx))
+	}
+	return nil
 }
 
 func knownSetting(name string) bool {
@@ -291,7 +448,7 @@ func (h *Hub) PlatformSettings(ctx context.Context) ([]SettingView, error) {
 		v := SettingView{Setting: s}
 		if i, ok := byName[s.Name]; ok {
 			t := i.UpdatedAt
-			v.Set, v.UpdatedAt, v.UpdatedBy = true, &t, i.UpdatedBy
+			v.Set, v.UpdatedAt, v.UpdatedBy, v.Version = true, &t, i.UpdatedBy, i.Version
 		}
 		out = append(out, v)
 	}
@@ -300,6 +457,9 @@ func (h *Hub) PlatformSettings(ctx context.Context) ([]SettingView, error) {
 
 // SetPlatformSetting stores a platform credential.
 func (h *Hub) SetPlatformSetting(ctx context.Context, name, value string, by core.Viewer) error {
+	if err := h.requireSecretValues(ctx, by); err != nil {
+		return err
+	}
 	if !knownSetting(name) {
 		return userErr("There's no setting %q.", name)
 	}
@@ -318,6 +478,9 @@ func (h *Hub) SetPlatformSetting(ctx context.Context, name, value string, by cor
 
 // DeletePlatformSetting removes a platform credential.
 func (h *Hub) DeletePlatformSetting(ctx context.Context, name string, by core.Viewer) error {
+	if err := h.requireSecretValues(ctx, by); err != nil {
+		return err
+	}
 	if !knownSetting(name) {
 		return userErr("There's no setting %q.", name)
 	}
@@ -328,28 +491,47 @@ func (h *Hub) DeletePlatformSetting(ctx context.Context, name string, by core.Vi
 	return nil
 }
 
-// mask replaces every known secret value of an app environment (and the platform
-// credentials) in text with dots, so logs shown in the companion don't leak them (S6).
+// mask replaces every secret value of an app environment (and the platform credentials) in
+// text with [secret NAME], so logs shown in the companion or the API don't leak them (S6).
+// Values under 6 characters are left alone, so ordinary words aren't mangled.
 func (h *Hub) mask(ctx context.Context, a state.App, env, text string) string {
-	var values []string
-	if m, err := h.parse(a.Manifest, a.Repo); err == nil {
-		if vals, err := h.ad.Secrets.Inject(a.ID, env, m.SecretNames()); err == nil {
-			for _, v := range vals {
-				values = append(values, v)
+	byValue := map[string]string{} // value -> name
+	if stored, err := h.ad.Secrets.List(a.ID, env); err == nil {
+		names := make([]string, 0, len(stored))
+		for _, s := range stored {
+			names = append(names, s.Name)
+		}
+		if vals, err := h.ad.Secrets.Inject(a.ID, env, names); err == nil {
+			for n, v := range vals {
+				byValue[v] = n
 			}
 		}
 	}
 	for _, s := range Settings {
 		if v, ok := h.ad.Secrets.Platform(s.Name); ok {
+			byValue[v] = s.Name
+		}
+	}
+	values := make([]string, 0, len(byValue))
+	for v := range byValue {
+		if len(v) >= minMaskLen {
 			values = append(values, v)
 		}
 	}
 	// Longest first, so a value that contains another is masked whole.
-	sort.Slice(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
-	for _, v := range values {
-		if len(v) >= 4 {
-			text = strings.ReplaceAll(text, v, "••••••")
-		}
+	sort.Slice(values, func(i, j int) bool {
+		return len(values[i]) > len(values[j]) || (len(values[i]) == len(values[j]) && values[i] < values[j])
+	})
+	if len(values) == 0 {
+		return text
 	}
-	return text
+	// One pass, so a replacement is never searched again.
+	pairs := make([]string, 0, 2*len(values))
+	for _, v := range values {
+		pairs = append(pairs, v, "[secret "+byValue[v]+"]")
+	}
+	return strings.NewReplacer(pairs...).Replace(text)
 }
+
+// minMaskLen is the shortest secret value that is hidden in logs.
+const minMaskLen = 6

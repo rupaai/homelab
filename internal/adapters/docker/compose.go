@@ -114,6 +114,8 @@ type composeMount struct {
 	Type   string `json:"type"`
 	Source string `json:"source"`
 	Target string `json:"target"`
+	// ReadOnly is false for data and shared folders.
+	ReadOnly bool `json:"read_only,omitempty"`
 }
 
 type composeLogging struct {
@@ -121,9 +123,12 @@ type composeLogging struct {
 	Options map[string]string `json:"options"`
 }
 
-// composeYAML renders the compose project for spec. The output is JSON, which is valid
+// secretsMount is where an app sees its secrets, one file per secret.
+const secretsMount = "/run/secrets"
+
+// composeYAML renders the compose project for spec; envDir is the environment's folder. The output is JSON, which is valid
 // YAML, so quoting is always right and the result is the same every time.
-func composeYAML(spec core.EnvSpec) ([]byte, error) {
+func composeYAML(spec core.EnvSpec, envDir string) ([]byte, error) {
 	if err := checkNames(spec.App, spec.Env); err != nil {
 		return nil, err
 	}
@@ -157,6 +162,9 @@ func composeYAML(spec core.EnvSpec) ([]byte, error) {
 	var err error
 	if svc.Volumes, err = mounts(spec.Mounts); err != nil {
 		return nil, err
+	}
+	if len(spec.Secrets) > 0 {
+		svc.Volumes = append(svc.Volumes, composeMount{Type: "bind", Source: dollars(filepath.Join(envDir, secretsDir)), Target: secretsMount, ReadOnly: true})
 	}
 	for _, p := range spec.Ports {
 		svc.Ports = append(svc.Ports, publish(p, spec.OpenPorts))

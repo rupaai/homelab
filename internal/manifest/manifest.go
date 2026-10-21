@@ -23,6 +23,12 @@ import (
 // FileName is where Homelab looks for the manifest in an app's repo.
 const FileName = "homelab.yaml"
 
+// How an app gets its secrets (secrets_as).
+const (
+	SecretsAsEnv   = "env"
+	SecretsAsFiles = "files"
+)
+
 // Manifest is a parsed homelab.yaml.
 type Manifest struct {
 	ID           string                       `yaml:"id"`
@@ -42,7 +48,10 @@ type Manifest struct {
 	// GenerateSecrets are secrets Homelab makes itself, once per environment, the first
 	// time the app is deployed there. The owner never types them.
 	GenerateSecrets []string `yaml:"generate_secrets"`
-	Memory          string   `yaml:"memory"`
+	// SecretsAs is how the app gets its secrets: "env" (the default) gives them as files in
+	// /run/secrets and as environment variables; "files" gives only the files.
+	SecretsAs string `yaml:"secrets_as"`
+	Memory    string `yaml:"memory"`
 
 	// Folders are the device's shared folders the app sees, e.g. its media library. The
 	// device names them in config.yaml (folders:), so an app can't reach anything else.
@@ -183,6 +192,9 @@ func Parse(b []byte, d Defaults) (*Manifest, error) {
 	if m.Promotion == "" {
 		m.Promotion = core.PromotionAutoDev
 	}
+	if m.SecretsAs == "" {
+		m.SecretsAs = SecretsAsEnv
+	}
 	if len(m.Environments) == 0 {
 		m.Environments = []string{core.Dev, core.Prod}
 	}
@@ -220,6 +232,9 @@ func (m *Manifest) validate() error {
 	}
 	if !strings.HasPrefix(m.Health, "/") {
 		add("health must be a path such as /health")
+	}
+	if m.SecretsAs != SecretsAsEnv && m.SecretsAs != SecretsAsFiles {
+		add("secrets_as must be env or files")
 	}
 	switch m.Promotion {
 	case core.PromotionManual, core.PromotionAutoDev, core.PromotionAuto:

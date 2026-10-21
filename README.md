@@ -39,6 +39,11 @@ Secrets are set in the companion: platform credentials (the GitHub token) under
 of that key somewhere safe. Plain `KEY=VALUE` files from milestone 1 are imported once at
 start and renamed to `*.imported`.
 
+Only the owner, and people the owner allows ("Can see secrets" on the People screen), can
+show or change a secret's value. Other admins see which secrets are set. API keys never can.
+Apps get their secrets as files in `/run/secrets`, and as environment variables too unless
+`secrets_as: files` is in `homelab.yaml`.
+
 ## On a Linux device
 
 Every merge to `main` publishes a release with `homelabd-linux-amd64`. Copy it to the device

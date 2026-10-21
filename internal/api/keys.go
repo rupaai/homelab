@@ -91,6 +91,11 @@ func (s *server) serveKey(w http.ResponseWriter, r *http.Request, door bool) {
 		writeErr(w, http.StatusUnauthorized, msgBadKey)
 		return
 	}
+	// No API key, whatever its scopes, ever shows or changes a secret value.
+	if isSecretValueRoute(r) {
+		writeErr(w, http.StatusForbidden, msgSecretSession)
+		return
+	}
 	if door && c.Kind != hub.KeyKindApp {
 		writeErr(w, http.StatusForbidden, "Only an app's own key (HOMELAB_TOKEN) works here. Use admin keys on the companion's own address.")
 		return

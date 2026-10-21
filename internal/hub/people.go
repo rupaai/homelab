@@ -133,6 +133,11 @@ func (h *Hub) invitePerson(ctx context.Context, pp *core.Person) (string, error)
 	if err := h.validatePersonAccess(ctx, p, false); err != nil {
 		return "", err
 	}
+	if contains(p.Roles, RoleSecrets) {
+		if err := h.requireOwnerActor(ctx); err != nil {
+			return "", err
+		}
+	}
 	if p.ID == "" {
 		var b [16]byte
 		if _, err := rand.Read(b[:]); err != nil {
@@ -243,6 +248,11 @@ func (h *Hub) UpdatePerson(ctx context.Context, p core.Person) error {
 	if err := h.validatePersonAccess(ctx, p, contains(old.Roles, "owner")); err != nil {
 		return err
 	}
+	if contains(old.Roles, RoleSecrets) != contains(p.Roles, RoleSecrets) {
+		if err := h.requireOwnerActor(ctx); err != nil {
+			return err
+		}
+	}
 	p.Email = strings.ToLower(strings.TrimSpace(p.Email))
 	p.Status = old.Status
 	p.IdentityID = old.IdentityID
@@ -259,6 +269,20 @@ func (h *Hub) UpdatePerson(ctx context.Context, p core.Person) error {
 	return nil
 }
 
+// RoleSecrets lets a person see and change secret values. Only the owner can give or take it.
+const RoleSecrets = "secrets"
+
+// requireOwnerActor refuses unless the person making this change (the viewer in ctx) is the
+// household owner.
+func (h *Hub) requireOwnerActor(ctx context.Context) error {
+	if v, ok := core.ViewerFrom(ctx); ok && v.PersonID != "" {
+		if p, err := h.store.Person(ctx, v.PersonID); err == nil && p.Status == "signed_in" && contains(p.Roles, "owner") {
+			return nil
+		}
+	}
+	return userErr("Only the owner can let someone see secrets, or stop them.")
+}
+
 func providerID(p core.Person) string {
 	if p.IdentityID != "" {
 		return p.IdentityID
@@ -270,7 +294,7 @@ func (h *Hub) validatePersonAccess(ctx context.Context, p core.Person, keepOwner
 	if len(p.Roles) == 0 {
 		return userErr("Choose at least one role.")
 	}
-	allowed := map[string]bool{"admin": true, "builder": true, "member": true}
+	allowed := map[string]bool{"admin": true, "builder": true, "member": true, RoleSecrets: true}
 	if keepOwner {
 		allowed["owner"] = true
 	}

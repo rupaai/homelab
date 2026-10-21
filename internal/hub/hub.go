@@ -490,8 +490,10 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 	if err != nil {
 		return core.EnvSpec{}, fmt.Errorf("read secrets: %w", err)
 	}
-	for k, v := range secrets {
-		vars[k] = v
+	if m.SecretsAs != manifest.SecretsAsFiles {
+		for k, v := range secrets {
+			vars[k] = v
+		}
 	}
 	vars["HOMELAB_APP"], vars["HOMELAB_ENV"], vars["HOMELAB_COMMIT"] = a.ID, env, rel.Commit
 	// The app's own API key, and where to use it (platform services).
@@ -517,6 +519,7 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 	spec := core.EnvSpec{
 		App: a.ID, Env: env, Release: rel, Port: m.Port, HostPort: h.hostPort(a.Slot, env),
 		Memory: m.Memory, Mounts: mounts, Vars: vars, Auth: auth, OpenPorts: h.cfg.OpenApps,
+		Secrets: secrets, SecretsAsFiles: m.SecretsAs == manifest.SecretsAsFiles,
 	}
 	// Ports are fixed numbers on the device, so only one environment can have them: prod.
 	if env == core.Prod {

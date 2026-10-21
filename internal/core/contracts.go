@@ -117,6 +117,21 @@ type Secrets interface {
 	List(app, env string) ([]SecretInfo, error)
 	// DeleteApp removes every value of an app, in every environment.
 	DeleteApp(app string) error
+	// Versions lists the kept values of one secret (the last SecretVersionsKept), newest
+	// first, without the values.
+	Versions(app, env, name string) ([]SecretVersion, error)
+	// Restore stores an old version's value again as a new version, and returns its number.
+	Restore(app, env, name string, version int, by string) (int, error)
+}
+
+// SecretVersionsKept is how many values of each secret are kept.
+const SecretVersionsKept = 5
+
+// SecretVersion describes one kept value of a secret, never the value itself.
+type SecretVersion struct {
+	Version int       `json:"version"`
+	SetBy   string    `json:"setBy"`
+	SetAt   time.Time `json:"setAt"`
 }
 
 // SecretInfo describes one stored secret without its value.
@@ -124,6 +139,7 @@ type SecretInfo struct {
 	Name      string    `json:"name"`
 	UpdatedAt time.Time `json:"updatedAt"`
 	UpdatedBy string    `json:"updatedBy"`
+	Version   int       `json:"version"`
 }
 
 // SmokeTest is one run of an app's own smoke test (C6) against one of its environments.

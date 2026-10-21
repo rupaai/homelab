@@ -28,6 +28,7 @@ func TestGeneratedSecretFormat(t *testing.T) {
 func TestGeneratedSecrets(t *testing.T) {
 	ctx := context.Background()
 	r := newRig(t)
+	r.addPeople()
 	doc := strings.Replace(manifestDoc, "secrets: [TMDB_API_KEY]", "secrets: [TMDB_API_KEY]\ngenerate_secrets: [ADMIN_TOKEN]", 1)
 	r.src.Push(repo, "main", "aaaaaaa1", "change", []byte(doc))
 	r.reg.Put("ghcr.io/rupaai/movies", "sha-aaaaaaa1", "sha256:aaaaaaa1")
@@ -49,7 +50,7 @@ func TestGeneratedSecrets(t *testing.T) {
 			prod = s
 		}
 	}
-	if !prod.Generated || prod.Set || prod.Value != "" {
+	if !prod.Generated || prod.Set {
 		t.Fatalf("prod before deploy: %+v", prod)
 	}
 	if e := r.env(core.Dev); len(e.MissingSecrets) != 1 || e.MissingSecrets[0] != "TMDB_API_KEY" {
@@ -65,7 +66,7 @@ func TestGeneratedSecrets(t *testing.T) {
 	if v == "" {
 		t.Fatal("dev did not get ADMIN_TOKEN")
 	}
-	if envs, _ = r.hub.AppSecrets(ctx, "movies"); !envs[0].Secrets[1].Generated || envs[0].Secrets[1].Value != v {
+	if envs, _ = r.hub.AppSecrets(ctx, "movies"); !envs[0].Secrets[1].Generated || !envs[0].Secrets[1].Set {
 		t.Fatalf("dev view: %+v", envs[0].Secrets)
 	}
 

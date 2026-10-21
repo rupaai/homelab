@@ -1,6 +1,6 @@
 // Fake data for developing the UI without the Go server (see api.ts for how it's switched on).
 import { ApiError } from './errors';
-import type { ActivityEvent, Api, AppView, EnvName, EnvView, PersonInput, KeyView, PersonView, ReleaseView, SecretView, SettingView } from './types';
+import type { ActivityEvent, Api, AppView, EnvName, EnvView, PersonInput, KeyView, PersonView, ReleaseView, SecretVersion, SecretView, SettingView } from './types';
 
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 const delay = <T>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
@@ -130,7 +130,7 @@ const secretStore: SecretMap = {
 		dev: [
 			{ name: 'TMDB_API_KEY', declared: true, set: true, updatedAt: ago(60 * 24 * 3), updatedBy: 'rupaai' },
 			{ name: 'SESSION_SECRET', declared: true, set: true, updatedAt: ago(60 * 24 * 9), updatedBy: 'rupaai' },
-			{ name: 'ADMIN_TOKEN', declared: true, set: true, generated: true, value: 'k7m3q-x9rt2-h4wpz-c8nfa', updatedAt: ago(60 * 24), updatedBy: 'homelab' }
+			{ name: 'ADMIN_TOKEN', declared: true, set: true, generated: true, updatedAt: ago(60 * 24), updatedBy: 'homelab' }
 		],
 		prod: [
 			{ name: 'ADMIN_TOKEN', declared: true, set: false, generated: true },
@@ -140,6 +140,28 @@ const secretStore: SecretMap = {
 		]
 	}
 };
+// The mock keeps values and versions apart from the list, like the real server does.
+const mockValues: Record<string, (SecretVersion & { value: string })[]> = {
+	'movie-night/dev/TMDB_API_KEY': [{ version: 1, setBy: 'rupaai', setAt: ago(60 * 24 * 8), value: 'tmdb-old-1234' }, { version: 2, setBy: 'rupaai', setAt: ago(60 * 24 * 3), value: 'tmdb-dev-5678' }],
+	'movie-night/dev/ADMIN_TOKEN': [{ version: 1, setBy: 'homelab', setAt: ago(60 * 24), value: 'k7m3q-x9rt2-h4wpz-c8nfa' }],
+	'movie-night/prod/SESSION_SECRET': [{ version: 1, setBy: 'rupaai', setAt: ago(60 * 24 * 9), value: 'session-prod-abcdef' }],
+	'settings/GITHUB_TOKEN': [{ version: 1, setBy: 'rupaai', setAt: ago(60 * 24 * 12), value: 'ghp_mockmockmock' }]
+};
+function addVersion(key: string, value: string, by: string): number {
+	const list = (mockValues[key] ??= []);
+	const n = (list.at(-1)?.version ?? 0) + 1;
+	list.push({ version: n, setBy: by, setAt: new Date().toISOString(), value });
+	if (list.length > 5) list.splice(0, list.length - 5);
+	return n;
+}
+function mockVersions(key: string): SecretVersion[] {
+	return [...(mockValues[key] ?? [])].reverse().map(({ version, setBy, setAt }) => ({ version, setBy, setAt }));
+}
+function mockRestore(key: string, version: number, by: string): void {
+	const hit = mockValues[key]?.find((v) => v.version === version);
+	if (!hit) throw new ApiError(`There's no version ${version} of that secret.`, 400);
+	addVersion(key, hit.value, by);
+}
 const settingStore: SettingView[] = [
 	{ name: 'GITHUB_TOKEN', description: 'Lets Homelab read your repos and builds on GitHub. Make one at github.com/settings/tokens.', set: true, updatedAt: ago(60 * 24 * 12), updatedBy: 'rupaai', appliesAfterRestart: false },
 ];
@@ -190,7 +212,7 @@ function work(a: AppView, e: EnvName, busy: string, kind: 'deploy' | 'promote' |
 export const mockApi: Api = {
 	bootstrap: () => delay({ needsSetup: false, signInReady: true }),
 	initialOwnerPasskeyLink: () => delay({ url: 'http://localhost:7081/lc/mock-token' }),
-	me: () => delay({ personId: 'owner', login: 'rupa@example.test', name: 'Rupa', local: true, roles: ['owner', 'admin'] }),
+	me: () => delay({ personId: 'owner', login: 'rupa@example.test', name: 'Rupa', local: true, roles: ['owner', 'admin'], canSeeSecrets: true }),
 	passkeyLink: () => delay({ url: 'http://localhost:7081/mock-passkey-link' }),
 	setupOwner: async () => delay({ loginUrl: 'http://localhost:7081', recoveryCode: '' }),
 	recover: async () => delay(undefined),
@@ -330,12 +352,25 @@ export const mockApi: Api = {
 	},
 	async appSecrets(id) {
 		const a = find(id);
-		return delay(
-			(['dev', 'prod'] as EnvName[]).map((e) => ({
+		return delay({
+			envs: (['dev', 'prod'] as EnvName[]).map((e) => ({
 				env: e,
 				secrets: (secretStore[a.id]?.[e] ?? []).map((s) => ({ ...s }))
-			}))
-		);
+			})),
+			canSeeValues: true
+		});
+	},
+	async revealSecret(id, e, name) {
+		const list = mockValues[`${find(id).id}/${e}/${name}`];
+		if (!list?.length) throw new ApiError(`${name} isn't set for ${e}.`, 400);
+		return delay(list[list.length - 1].value);
+	},
+	secretVersions: async (id, e, name) => delay(mockVersions(`${find(id).id}/${e}/${name}`)),
+	async restoreSecret(id, e, name, version) {
+		mockRestore(`${find(id).id}/${e}/${name}`, version, 'rupaai');
+		const hit = secretStore[find(id).id]?.[e]?.find((s) => s.name === name);
+		if (hit) Object.assign(hit, { updatedAt: new Date().toISOString(), updatedBy: 'rupaai' });
+		await delay(null);
 	},
 	async setSecret(id, e, name, value) {
 		const a = find(id);
@@ -343,6 +378,7 @@ export const mockApi: Api = {
 		const list = (((secretStore[a.id] ??= { dev: [], prod: [] })[e]) ??= []);
 		const hit = list.find((s) => s.name === name);
 		const now = new Date().toISOString();
+		addVersion(`${a.id}/${e}/${name}`, value, 'rupaai');
 		if (hit) Object.assign(hit, { set: true, updatedAt: now, updatedBy: 'rupaai' });
 		else list.push({ name, declared: false, set: true, updatedAt: now, updatedBy: 'rupaai' });
 		const ev = envOf(a, e);
@@ -353,11 +389,13 @@ export const mockApi: Api = {
 		const a = find(id);
 		const list = secretStore[a.id]?.[e] ?? [];
 		secretStore[a.id][e] = list.filter((s) => s.name !== name);
+		delete mockValues[`${a.id}/${e}/${name}`];
 		await delay(null);
 	},
 	async regenerateSecret(id, e, name) {
-		const hit = secretStore[find(id).id]?.[e]?.find((s) => s.name === name && s.generated);
-		if (hit) hit.value = 'k7m3q-x9rt2-h4wpz-c8nfa';
+		const a = find(id);
+		const hit = secretStore[a.id]?.[e]?.find((s) => s.name === name && s.generated);
+		if (hit) addVersion(`${a.id}/${e}/${name}`, 'n3w-t0k3n-x9rt2-h4wpz', 'rupaai');
 		await delay(null);
 	},
 	settings: () => delay(settingStore.map((s) => ({ ...s }))),
@@ -365,12 +403,24 @@ export const mockApi: Api = {
 		const s = settingStore.find((x) => x.name === name);
 		if (!s) throw new ApiError(`There's no setting "${name}".`, 404);
 		if (!value) throw new ApiError('Type a value first.', 400);
+		addVersion(`settings/${name}`, value, 'rupaai');
 		Object.assign(s, { set: true, updatedAt: new Date().toISOString(), updatedBy: 'rupaai' });
+		await delay(null);
+	},
+	async revealSetting(name) {
+		const list = mockValues[`settings/${name}`];
+		if (!list?.length) throw new ApiError(`${name} isn't set.`, 400);
+		return delay(list[list.length - 1].value);
+	},
+	settingVersions: async (name) => delay(mockVersions(`settings/${name}`)),
+	async restoreSetting(name, version) {
+		mockRestore(`settings/${name}`, version, 'rupaai');
 		await delay(null);
 	},
 	async deleteSetting(name) {
 		const s = settingStore.find((x) => x.name === name);
 		if (s) Object.assign(s, { set: false, updatedAt: undefined, updatedBy: undefined });
+		delete mockValues[`settings/${name}`];
 		await delay(null);
 	},
 	keys: () => delay({ admin: keyStore.filter((k) => !k.revoked).map((k) => ({ ...k })), app: appKeys.map((k) => ({ ...k })) }),

@@ -3,15 +3,18 @@ package hub
 import "github.com/rupaai/homelab/internal/core"
 
 const (
-	ActionApps       = "apps"
-	ActionProjects   = "projects"
-	ActionLogs       = "logs"
-	ActionSecrets    = "secrets"
-	ActionPeople     = "people"
-	ActionSettings   = "settings"
-	ActionRemoveUser = "remove-person"
-	ActionManage     = "manage"
-	ActionSelf       = "self"
+	ActionApps     = "apps"
+	ActionProjects = "projects"
+	ActionLogs     = "logs"
+	ActionSecrets  = "secrets"
+	// ActionSecretValues is seeing, setting, regenerating, deleting or restoring a secret's
+	// value. Only the owner, and people the owner gave the "secrets" role, may.
+	ActionSecretValues = "secret-values"
+	ActionPeople       = "people"
+	ActionSettings     = "settings"
+	ActionRemoveUser   = "remove-person"
+	ActionManage       = "manage"
+	ActionSelf         = "self"
 )
 
 // Can is the API access policy shared by every request and proxy check.
@@ -43,6 +46,8 @@ func Can(p core.Person, action, app string) bool {
 		return admin || (app != "" && build)
 	case ActionSecrets:
 		return admin
+	case ActionSecretValues:
+		return roles["owner"] || roles["secrets"]
 	case ActionPeople, ActionSettings:
 		return admin
 	case ActionRemoveUser:

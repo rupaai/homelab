@@ -79,6 +79,21 @@ func newRig(t *testing.T) *rig {
 	return r
 }
 
+// addPeople saves signed-in people: the owner (the `owner` viewer) and, for each role given,
+// one person whose ID is that role and who has only that role.
+func (r *rig) addPeople(roles ...string) {
+	r.t.Helper()
+	people := []core.Person{{ID: "owner", Name: "Labiba", Email: "labiba@example.com", Status: "signed_in", Roles: []string{"owner", "admin"}}}
+	for _, role := range roles {
+		people = append(people, core.Person{ID: role, Name: role, Email: role + "@example.test", Status: "signed_in", Roles: []string{role}})
+	}
+	for _, p := range people {
+		if err := r.store.SavePerson(context.Background(), p); err != nil {
+			r.t.Fatal(err)
+		}
+	}
+}
+
 // open (re)creates the hub on the same state file, like restarting homelabd.
 func (r *rig) open() {
 	if r.store != nil {
@@ -147,7 +162,7 @@ func (r *rig) running(env string) string {
 	return ""
 }
 
-var owner = core.Viewer{Login: "labiba@example.com"}
+var owner = core.Viewer{Login: "labiba@example.com", PersonID: "owner", Session: true}
 
 func TestDeployLoop(t *testing.T) {
 	ctx := context.Background()

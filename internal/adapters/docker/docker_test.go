@@ -2,6 +2,8 @@ package docker
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -20,7 +22,7 @@ func testSpec() core.EnvSpec {
 }
 
 func TestComposeYAML(t *testing.T) {
-	b, err := composeYAML(testSpec())
+	b, err := composeYAML(testSpec(), "/srv/homelab/movies/prod")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +46,7 @@ func TestComposeYAML(t *testing.T) {
 			t.Errorf("compose file is missing %s:\n%s", want, got)
 		}
 	}
-	again, _ := composeYAML(testSpec())
+	again, _ := composeYAML(testSpec(), "/srv/homelab/movies/prod")
 	if string(again) != got {
 		t.Error("compose file isn't the same on a second run")
 	}
@@ -54,7 +56,7 @@ func TestComposeYAMLOmitsEmptyAndEscapes(t *testing.T) {
 	s := testSpec()
 	s.Memory, s.Mounts = "", nil
 	s.Release.Commit = "a$b"
-	b, err := composeYAML(s)
+	b, err := composeYAML(s, "/srv/homelab/movies/prod")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +74,7 @@ func TestComposeYAMLRejects(t *testing.T) {
 		t.Helper()
 		s := testSpec()
 		f(&s)
-		if _, err := composeYAML(s); err == nil {
+		if _, err := composeYAML(s, "/srv/homelab/movies/prod"); err == nil {
 			t.Error("expected an error")
 		}
 	}
@@ -176,7 +178,7 @@ func TestComposeYAMLServices(t *testing.T) {
 			Mounts: []core.Mount{{HostPath: "/data/jellyfin-config", ContainerPath: "/config"}}},
 		{Name: "prowlarr", Image: "lscr.io/linuxserver/prowlarr:2.6", Vars: map[string]string{"PUID": "1000"}},
 	}
-	b, err := composeYAML(s)
+	b, err := composeYAML(s, "/srv/homelab/movies/prod")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +203,7 @@ func TestComposeYAMLServices(t *testing.T) {
 
 	s.OpenPorts = true
 	renderGroup = func() string { return "" }
-	b, _ = composeYAML(s)
+	b, _ = composeYAML(s, "/srv/homelab/movies/prod")
 	f = composeFile{}
 	json.Unmarshal(b, &f)
 	if got := f.Services["jellyfin"]; got.Ports[0] != "8096:8096" || len(got.Devices) != 0 {
@@ -209,7 +211,7 @@ func TestComposeYAMLServices(t *testing.T) {
 	}
 
 	s.Services = append(s.Services, core.Service{Name: "app", Image: "x:1"})
-	if _, err := composeYAML(s); err == nil {
+	if _, err := composeYAML(s, "/srv/homelab/movies/prod"); err == nil {
 		t.Error("a service named app should be refused")
 	}
 }
@@ -255,7 +257,7 @@ func TestComposeYAMLHostGateway(t *testing.T) {
 	defer func() { addHostGateway = old }()
 	for _, on := range []bool{false, true} {
 		addHostGateway = on
-		b, err := composeYAML(testSpec())
+		b, err := composeYAML(testSpec(), "/srv/homelab/movies/prod")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -267,5 +269,80 @@ func TestComposeYAMLHostGateway(t *testing.T) {
 		if on != (len(got) == 1 && got[0] == "host.docker.internal:host-gateway") || (!on && len(got) != 0) {
 			t.Errorf("addHostGateway=%v: extra_hosts %v", on, got)
 		}
+	}
+}
+
+func TestComposeMountsSecretsReadOnly(t *testing.T) {
+	s := testSpec()
+	s.Secrets = map[string]string{"TMDB_API_KEY": "tmdb-value-123"}
+	b, err := composeYAML(s, "/srv/homelab/movies/dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		Services map[string]struct {
+			Volumes     []map[string]any  `json:"volumes"`
+			Environment map[string]string `json:"environment"`
+		} `json:"services"`
+	}
+	if err := json.Unmarshal(b, &f); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, v := range f.Services["app"].Volumes {
+		if v["target"] == "/run/secrets" {
+			found = v["source"] == "/srv/homelab/movies/dev/secrets" && v["read_only"] == true && v["type"] == "bind"
+		}
+	}
+	if !found {
+		t.Fatalf("secrets folder isn't mounted read-only at /run/secrets:\n%s", b)
+	}
+	if strings.Contains(string(b), "tmdb-value-123") || len(f.Services["app"].Environment) != 0 {
+		t.Fatalf("a secret is in the compose file:\n%s", b)
+	}
+	// Without secrets there is nothing to mount.
+	b, _ = composeYAML(testSpec(), "/srv/homelab/movies/dev")
+	if strings.Contains(string(b), "/run/secrets") {
+		t.Fatalf("mounted secrets when there are none:\n%s", b)
+	}
+}
+
+func TestWriteSecretFiles(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "secrets")
+	if err := writeSecretFiles(dir, map[string]string{"A": "one", "B": "two"}); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o755 {
+		t.Fatalf("folder = %v, %v", info, err)
+	}
+	for name, want := range map[string]string{"A": "one", "B": "two"} {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || string(b) != want {
+			t.Fatalf("%s = %q, %v", name, b, err)
+		}
+		if info, _ := os.Stat(filepath.Join(dir, name)); info.Mode().Perm() != 0o444 {
+			t.Errorf("%s mode = %v", name, info.Mode().Perm())
+		}
+	}
+	// A second deploy replaces values and removes files of secrets that are gone.
+	_ = os.WriteFile(filepath.Join(dir, ".stale.tmp"), []byte("x"), 0o600)
+	if err := writeSecretFiles(dir, map[string]string{"A": "uno"}); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 || entries[0].Name() != "A" {
+		t.Fatalf("files = %v", entries)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "A")); string(b) != "uno" {
+		t.Fatalf("A = %q", b)
+	}
+	if err := writeSecretFiles(dir, map[string]string{"../evil": "x"}); err == nil {
+		t.Fatal("accepted a name that could leave the folder")
+	}
+	if err := writeSecretFiles(dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("files left: %v", entries)
 	}
 }

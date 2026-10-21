@@ -325,7 +325,7 @@ func testSite() fstest.MapFS {
 	}
 }
 
-var local = core.Viewer{Local: true, PersonID: "owner"}
+var local = core.Viewer{Local: true, PersonID: "owner", Session: true}
 
 func do(h http.Handler, method, path, body string, v *core.Viewer, hdr ...string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -367,7 +367,7 @@ func post(h http.Handler, path, body string, v *core.Viewer) *httptest.ResponseR
 
 func TestAuth(t *testing.T) {
 	r := newRig(t)
-	owner := &core.Viewer{Login: "Labiba@Example.com", PersonID: "owner"}
+	owner := &core.Viewer{Login: "Labiba@Example.com", PersonID: "owner", Session: true}
 	stranger := &core.Viewer{Login: "eve@example.com"}
 	anon := &core.Viewer{}
 	cases := []struct {

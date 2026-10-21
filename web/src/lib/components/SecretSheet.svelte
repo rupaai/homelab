@@ -2,7 +2,7 @@
 	import { messageOf } from '#lib/errors.ts';
 	import Sheet from './Sheet.svelte';
 
-	// Asks for a new value for one secret. The value is only ever sent, never shown back.
+	// Asks for a new value for one secret. The value is sent, and not shown again here.
 	let {
 		title,
 		name,
@@ -57,7 +57,7 @@
 				/>
 				<button class="btn" type="button" aria-pressed={reveal} onclick={() => (reveal = !reveal)}>{reveal ? 'Hide' : 'Show'}<span class="sr-only"> what I'm typing</span></button>
 			</div>
-			<p class="hint" id="{inputId}-hint">One line only. Once saved it can be replaced but never shown again.</p>
+			<p class="hint" id="{inputId}-hint">One line only. Homelab keeps the last 5 values in History.</p>
 			{#if error}<p class="notice bad" role="alert">{error}</p>{/if}
 		</form>
 	{/snippet}

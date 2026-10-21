@@ -3,12 +3,13 @@
 	import QRCode from 'qrcode';
 	import { api } from '#lib/api.ts';
 	import { messageOf } from '#lib/errors.ts';
-	import type { AppView, HouseholdRole, PersonInput, PersonView, RemovalStep } from '#lib/types.ts';
+	import type { AppView, HouseholdRole, MeView, PersonInput, PersonView, RemovalStep } from '#lib/types.ts';
 	import Sheet from '#lib/components/Sheet.svelte';
 	import Spinner from '#lib/components/Spinner.svelte';
 
 	let people = $state<PersonView[]>([]);
 	let apps = $state<AppView[]>([]);
+	let me = $state<MeView | null>(null);
 	let loaded = $state(false);
 	let error = $state('');
 	let saving = $state(false);
@@ -26,7 +27,7 @@
 	let steps = $state<RemovalStep[]>([]);
 
 	async function load() {
-		try { [people, apps] = await Promise.all([api.people(), api.apps()]); error = ''; }
+		try { [people, apps, me] = await Promise.all([api.people(), api.apps(), api.me()]); error = ''; }
 		catch (e) { error = messageOf(e); }
 		finally { loaded = true; }
 	}
@@ -38,6 +39,8 @@
 		grants = Object.fromEntries(apps.map((a) => [a.id, person?.grants[a.id] ?? '']));
 		error = ''; editor = true;
 	}
+	const isOwner = $derived(!!me?.roles.includes('owner'));
+	function roleLabel(role: string) { return role === 'secrets' ? 'can see secrets' : role; }
 	function toggleRole(role: HouseholdRole, checked: boolean) {
 		if (checked) { if (!roles.includes(role)) roles = [...roles, role]; }
 		else roles = roles.filter((r) => r !== role);
@@ -88,7 +91,7 @@
 	{#if !loaded}<p class="muted loading"><Spinner /> Loading people…</p>{:else if people.length === 0}<div class="card"><p>No one has been invited yet.</p></div>{/if}
 	{#each people as person (person.id)}
 		<article class="card person-card">
-			<div class="person-main"><div class="avatar" aria-hidden="true">{person.name.slice(0,1).toUpperCase()}</div><div class="person-copy"><h2>{person.name}</h2><p class="muted">{person.email || 'No email'} · {labelStatus(person.status)}</p><p class="small">{person.roles.join(', ')} · {accessLabel(person)}</p>{#if person.lastSignIn}<p class="muted small">Last signed in {new Date(person.lastSignIn).toLocaleString()}</p>{/if}</div></div>
+			<div class="person-main"><div class="avatar" aria-hidden="true">{person.name.slice(0,1).toUpperCase()}</div><div class="person-copy"><h2>{person.name}</h2><p class="muted">{person.email || 'No email'} · {labelStatus(person.status)}</p><p class="small">{person.roles.map(roleLabel).join(', ')} · {accessLabel(person)}</p>{#if person.lastSignIn}<p class="muted small">Last signed in {new Date(person.lastSignIn).toLocaleString()}</p>{/if}</div></div>
 			<div class="person-actions"><button class="btn small" type="button" onclick={() => openEditor(person)}>Edit access<span class="sr-only"> for {person.name}</span></button>{#if person.status === 'invited'}<button class="btn small" type="button" disabled={saving} onclick={() => resend(person)}>Resend invite</button><button class="btn danger small" type="button" onclick={() => (pendingRemoval = person)}>Cancel invite</button>{:else if !person.roles.includes('owner')}<button class="btn danger small" type="button" onclick={() => (removing = person)}>Remove</button>{/if}</div>
 		</article>
 	{/each}
@@ -100,7 +103,9 @@
 			<form id="person-form" onsubmit={save}>
 				<label for="person-name">Name</label><input id="person-name" bind:value={name} autocomplete="name" required />
 				<label for="person-email">Email <span class="muted">(optional)</span></label><input id="person-email" type="email" bind:value={email} autocomplete="email" />
-					<fieldset><legend>Roles</legend>{#each ['owner','admin','builder','member'] as role}<label class="check"><input type="checkbox" checked={roles.includes(role)} disabled={role === 'owner' && (!editing || editing.roles.includes('owner'))} onchange={(e) => toggleRole(role, e.currentTarget.checked)} />{role}{#if role === 'owner'} <span class="muted">(cannot be assigned)</span>{/if}</label>{/each}</fieldset>
+					<fieldset><legend>Roles</legend>{#each ['owner','admin','builder','member'] as role}<label class="check"><input type="checkbox" checked={roles.includes(role)} disabled={role === 'owner' && (!editing || editing.roles.includes('owner'))} onchange={(e) => toggleRole(role, e.currentTarget.checked)} />{role}{#if role === 'owner'} <span class="muted">(cannot be assigned)</span>{/if}</label>{/each}
+					<label class="check"><input type="checkbox" checked={roles.includes('secrets')} disabled={!isOwner || !!editing?.roles.includes('owner')} onchange={(e) => toggleRole('secrets', e.currentTarget.checked)} />Can see secrets</label>
+					<p class="hint">{#if editing?.roles.includes('owner')}The owner can always see secrets.{:else if isOwner}They can see, change and restore secret values. Every look is written to Activity.{:else}Only the owner can change this.{/if}</p></fieldset>
 				<fieldset><legend>App access</legend>{#if !apps.length}<p class="muted">Add an app before granting access.</p>{/if}{#each apps as app (app.id)}<label for="access-{app.id}">{app.name}</label><select id="access-{app.id}" bind:value={grants[app.id]}><option value="">No access</option><option value="use">Use prod</option><option value="build">Build and manage dev</option></select>{/each}</fieldset>
 				{#if editing?.roles.includes('owner')}<p class="hint">The owner role stays on this account.</p>{/if}
 				{#if error}<p class="notice bad" role="alert">{error}</p>{/if}
