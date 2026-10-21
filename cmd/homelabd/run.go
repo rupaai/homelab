@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -77,6 +78,9 @@ func cmdRun(args []string) error {
 	cfg, err := loadConfig(home)
 	if err != nil {
 		return err
+	}
+	if len(cfg.Unknown) > 0 {
+		log.Warn("config.yaml has settings this version of Homelab doesn't know, so it skips them. Update Homelab to use them.", "settings", strings.Join(cfg.Unknown, ", "))
 	}
 	if err := checkListen(cfg); err != nil {
 		return err
