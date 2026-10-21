@@ -148,3 +148,42 @@ func TestPushSubscriptions(t *testing.T) {
 		t.Fatal("someone else's device was removed")
 	}
 }
+
+func TestStorageDisksAreListedAndAlerted(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	r.household()
+	r.res.SetDisk(10, 100) // Homelab's own data disk is fine
+	r.hub.cfg.Storage = []core.Disk{{Name: "main", Path: "/mnt/storage"}}
+	r.hub.cfg.Folders = map[string]string{"media": "/mnt/movies", "music": "/mnt/storage/music"}
+	r.res.Disks = map[string]core.DiskSpace{
+		"/mnt/storage":       {Used: 95, Total: 1000},
+		"/mnt/storage/music": {Used: 95, Total: 1000}, // the same disk as main
+		"/mnt/movies":        {Used: 950, Total: 1000},
+	}
+	got := map[string]DiskView{}
+	for _, d := range r.hub.Disks(ctx) {
+		got[d.Name] = d
+	}
+	if got["homelab"].Kind != DiskData || got["main"].Kind != DiskStorage || got["media"].Kind != DiskFolder || got["main"].Total != 1000 {
+		t.Fatalf("disks %+v", got)
+	}
+	if got["main"].Shared || !got["music"].Shared {
+		t.Fatalf("shared: main %v music %v", got["main"].Shared, got["music"].Shared)
+	}
+	r.hub.checkAlerts(ctx)
+	r.settle()
+	// The movie drive is 95% full: one alert, to the admin.
+	if got := r.to("almost full"); len(got) != 1 || got[0] != "o" {
+		t.Fatalf("movie drive alert went to %v (all %v)", got, r.pusher.Titles())
+	}
+	// Storage fills up too: one more alert, and none for music on the same disk.
+	r.res.Disks["/mnt/storage"] = core.DiskSpace{Used: 900, Total: 1000}
+	r.res.Disks["/mnt/storage/music"] = core.DiskSpace{Used: 900, Total: 1000}
+	r.advance(10 * time.Minute)
+	r.hub.checkAlerts(ctx)
+	r.settle()
+	if got := r.to("almost full"); len(got) != 2 {
+		t.Fatalf("alerts went to %v (all %v)", got, r.pusher.Titles())
+	}
+}

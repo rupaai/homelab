@@ -36,7 +36,9 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - name: Rust targets for homelab-services
-        run: rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+        run: |
+          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+          pip install ziglang==0.17.0 cargo-zigbuild
       - name: Build the companion
         working-directory: web
         run: npm ci && npm run build

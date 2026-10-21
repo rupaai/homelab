@@ -79,29 +79,38 @@ func (h *Hub) checkDisk(ctx context.Context) {
 	if !due {
 		return
 	}
-	u, err := h.ad.Resources.Device(ctx, h.cfg.DataDir)
-	if err != nil || u.DiskTotal == 0 {
-		return
+	for _, d := range h.Disks(ctx) {
+		if d.Total == 0 || d.Shared {
+			continue
+		}
+		key, what := alertDiskFull, "The disk Homelab keeps its data on"
+		if d.Kind != DiskData {
+			key, what = alertDiskFull+":"+d.Name, "The disk "+d.Name+" ("+d.Path+")"
+		}
+		h.diskAlert(ctx, key, what, float64(d.Used)/float64(d.Total))
 	}
-	full := float64(u.DiskUsed) / float64(u.DiskTotal)
+}
+
+// diskAlert opens or closes one disk's full-disk alert.
+func (h *Hub) diskAlert(ctx context.Context, key, what string, full float64) {
 	if full < diskFullAt-0.05 { // a little slack, so hovering around 85% doesn't flap
-		_, _ = h.store.CloseAlert(ctx, alertDiskFull)
+		_, _ = h.store.CloseAlert(ctx, key)
 		return
 	}
 	if full < diskFullAt {
 		return
 	}
-	_, sent, err := h.store.OpenAlert(ctx, alertDiskFull, h.cfg.Now())
+	_, sent, err := h.store.OpenAlert(ctx, key, h.cfg.Now())
 	if err != nil || sent {
 		return
 	}
-	h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, Action: "disk.full", Detail: fmt.Sprintf("The disk is %.0f%% full", full*100)})
+	h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, Action: "disk.full", Detail: fmt.Sprintf("%s is %.0f%% full", what, full*100)})
 	h.notify(ctx, h.adminAudience(ctx), core.Notification{
-		Title: "The disk is almost full",
-		Body:  fmt.Sprintf("The disk Homelab keeps its data on is %.0f%% full. Remove old apps or backups before it runs out.", full*100),
-		URL:   "/resources", Tag: alertDiskFull,
+		Title: "A disk is almost full",
+		Body:  fmt.Sprintf("%s is %.0f%% full. Remove old apps, files or backups before it runs out.", what, full*100),
+		URL:   "/resources", Tag: key,
 	})
-	_ = h.store.MarkAlertSent(ctx, alertDiskFull, h.cfg.Now())
+	_ = h.store.MarkAlertSent(ctx, key, h.cfg.Now())
 }
 
 // alertRollback tells people prod went back on its own.

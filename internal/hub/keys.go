@@ -55,8 +55,13 @@ var ErrBadKey = errors.New("that API key isn't valid")
 
 // Scopes.
 const (
-	ScopeUsersRead = "users:read"
+	ScopeUsersRead  = "users:read"
+	ScopeFilesRead  = "files:read"  // read every folder's files
+	ScopeFilesWrite = "files:write" // also make folders, save, change and delete files
 )
+
+// scopes are the scopes an admin key may have.
+var scopes = []string{ScopeUsersRead, ScopeFilesRead, ScopeFilesWrite}
 
 // Caller is who is calling with an API key.
 type Caller struct {
@@ -76,15 +81,15 @@ func (c Caller) Label() string {
 	return "key " + c.KeyName
 }
 
-// Allows says whether the caller has a scope. A write scope includes reading.
+// Allows says whether the caller has a scope.
 func (c Caller) Allows(scope string) bool {
 	return slices.Contains(c.Scopes, scope)
 }
 
-// checkScope validates one scope an admin asked for. Only users:read exists so far.
+// checkScope validates one scope an admin asked for.
 func checkScope(s string) error {
-	if s != ScopeUsersRead {
-		return userErr("%q isn't a scope Homelab knows. The only one so far is users:read.", s)
+	if !slices.Contains(scopes, s) {
+		return userErr("%q isn't a scope Homelab knows. Use %s.", s, strings.Join(scopes, ", "))
 	}
 	return nil
 }

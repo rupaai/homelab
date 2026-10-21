@@ -1,34 +1,59 @@
 import { ApiError, NETWORK_MESSAGE, errorMessage } from './errors';
 import { SIGN_IN_MESSAGE, sessionLost } from './session';
 import { clearToken, getToken, setToken } from './token';
-import type { Api, AppView, BootstrapView, CreatedKey, KeysView, DeviceView, EnvSecrets, Invitation, KeyView, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult, TestVersion } from './types';
+import type { Api, AppView, FileFolder, FilePage, FileQuery, StorageDisk, StoredFile, UploadResult, FileMeta, BootstrapView, CreatedKey, KeysView, DeviceView, EnvSecrets, Invitation, KeyView, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult, TestVersion } from './types';
 
 /** Mock mode: `?mock` in the URL or VITE_MOCK=1 gives fake data, no server needed. Dev builds only, so the mock data is dropped from the real companion. */
 export const useMock: boolean =
 	import.meta.env.DEV && (import.meta.env.VITE_MOCK === '1' || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('mock')));
 
-async function request<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<T> {
-	const headers: Record<string, string> = { Accept: 'application/json' };
+/** The headers every call carries: the session token, and the CSRF header on anything that changes things. */
+function authHeaders(change: boolean): Record<string, string> {
+	const headers: Record<string, string> = {};
 	const token = getToken();
 	if (token) headers.Authorization = `Bearer ${token}`;
-	if (method !== 'GET') {
-		headers['X-Homelab-Request'] = '1';
-		if (method !== 'DELETE' || body !== undefined) headers['Content-Type'] = 'application/json';
-	}
-	let res: Response;
+	if (change) headers['X-Homelab-Request'] = '1';
+	return headers;
+}
+
+async function send(path: string, init: RequestInit): Promise<Response> {
 	try {
-		res = await fetch(path, { method, headers, body: method === 'POST' || method === 'PUT' || body !== undefined ? JSON.stringify(body ?? {}) : undefined });
+		return await fetch(path, init);
 	} catch {
 		throw new ApiError(NETWORK_MESSAGE, 0);
 	}
+}
+
+/** Turns a failed response into an ApiError. An expired session sends the layout back to sign-in. */
+function failure(res: Response, text: string): ApiError {
+	const err = new ApiError(errorMessage(res.status, text), res.status);
+	if (res.status === 403 && err.message === SIGN_IN_MESSAGE) { clearToken(); sessionLost(); }
+	return err;
+}
+
+async function request<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<T> {
+	const headers: Record<string, string> = { Accept: 'application/json', ...authHeaders(method !== 'GET') };
+	if (method !== 'GET' && (method !== 'DELETE' || body !== undefined)) headers['Content-Type'] = 'application/json';
+	const res = await send(path, { method, headers, body: method === 'POST' || method === 'PUT' || body !== undefined ? JSON.stringify(body ?? {}) : undefined });
 	const text = await res.text();
-	if (!res.ok) {
-		const err = new ApiError(errorMessage(res.status, text), res.status);
-		// An expired session: let the layout go back to the sign-in screen.
-		if (res.status === 403 && err.message === SIGN_IN_MESSAGE) { clearToken(); sessionLost(); }
-		throw err;
-	}
+	if (!res.ok) throw failure(res, text);
 	return (text ? JSON.parse(text) : undefined) as T;
+}
+
+/** The raw file as the body, not JSON. */
+async function upload(path: string, file: File): Promise<UploadResult> {
+	const headers = { Accept: 'application/json', 'Content-Type': file.type || 'application/octet-stream', ...authHeaders(true) };
+	const res = await send(path, { method: 'POST', headers, body: file });
+	const text = await res.text();
+	if (!res.ok) throw failure(res, text);
+	return { file: fixFile(JSON.parse(text) as StoredFile), duplicate: res.headers.get('X-Homelab-Duplicate') === 'true' };
+}
+
+/** A file's bytes. A plain <img src> or link can't send the token, so the screens fetch it here. */
+async function download(path: string): Promise<Blob> {
+	const res = await send(path, { method: 'GET', headers: authHeaders(false) });
+	if (!res.ok) throw failure(res, await res.text());
+	return res.blob();
 }
 
 const enc = encodeURIComponent;
@@ -47,6 +72,9 @@ function fixApp(a: AppView): AppView {
 		envs: list(a.envs).map((e) => ({ ...e, missingSecrets: list(e.missingSecrets) }))
 	};
 }
+
+// Older servers send no meta; the screens want an object.
+const fixFile = (f: StoredFile): StoredFile => ({ ...f, tags: list(f.tags), info: f.info ?? {}, meta: (f.meta ?? {}) as FileMeta });
 
 const realApi: Api = {
 	bootstrap: () => request<BootstrapView>('GET', '/api/bootstrap'),
@@ -122,7 +150,30 @@ const realApi: Api = {
 		const r = await request<CreatedKey>('POST', '/api/keys', input);
 		return { ...r, info: { ...r.info, scopes: list(r.info.scopes) } };
 	},
-	revokeKey: (id) => request('DELETE', `/api/keys/${enc(id)}`)
+	revokeKey: (id) => request('DELETE', `/api/keys/${enc(id)}`),
+	storage: async () => list(await request<StorageDisk[]>('GET', '/api/storage')),
+	fileFolders: async () => list((await request<{ folders: FileFolder[] | null }>('GET', '/api/files/folders')).folders),
+	createFileFolder: (name, disk) => request<FileFolder>('POST', '/api/files/folders', disk ? { name, disk } : { name }),
+	deleteFileFolder: (name) => request('DELETE', `/api/files/folders/${enc(name)}`),
+	files: async (folder, q = {}) => {
+		const p = new URLSearchParams();
+		if (q.tag) p.set('tag', q.tag);
+		if (q.type) p.set('type', q.type);
+		if (q.after) p.set('after', q.after);
+		if (q.limit) p.set('limit', String(q.limit));
+		if (q.takenAfter) p.set('taken_after', q.takenAfter);
+		if (q.takenBefore) p.set('taken_before', q.takenBefore);
+		if (q.camera) p.set('camera', q.camera);
+		const r = await request<FilePage>('GET', `/api/files/${enc(folder)}?${p}`);
+		return { files: list(r.files).map(fixFile), next: r.next ?? null };
+	},
+	uploadFile: (folder, file, tags = []) => {
+		const p = new URLSearchParams({ name: file.name });
+		if (tags.length) p.set('tags', tags.join(','));
+		return upload(`/api/files/${enc(folder)}?${p}`, file);
+	},
+	fileBlob: (folder, id) => download(`/api/files/${enc(folder)}/${enc(id)}`),
+	deleteFile: (folder, id) => request('DELETE', `/api/files/${enc(folder)}/${enc(id)}`)
 };
 
 // The import sits inside the DEV check, so production builds leave mock.ts out.

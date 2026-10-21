@@ -173,13 +173,15 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	svc, err := services.New(services.Options{Program: services.Program(exe), DataDir: filepath.Join(home, "services"), Port: cfg.ServicesPort, Logger: log})
+	storage := storageOrDefault(cfg, home)
+	svc, err := services.New(services.Options{Program: services.Program(exe), DataDir: filepath.Join(home, "services"), Port: cfg.ServicesPort,
+		Storage: storage, MaxUpload: cfg.MaxUploadMB << 20, Logger: log})
 	if err != nil {
 		return err
 	}
 	appAPIURL := "http://host.docker.internal:" + strconv.Itoa(cfg.AppAPIPort)
 	h := hub.New(hub.Config{DataDir: home, Logger: log, Identity: signer, PushPublicKey: pushPublic,
-		AppAPIURL: appAPIURL, OpenApps: cfg.Addresses == "ip", Folders: cfg.Folders}, store, hub.Adapters{
+		AppAPIURL: appAPIURL, OpenApps: cfg.Addresses == "ip", Folders: cfg.Folders, Storage: storage}, store, hub.Adapters{
 		Source: gh, Builder: gh, Registry: gh, Deployer: deployer,
 		Addresses: addrs, Health: httphealth.New(nil), Secrets: secrets,
 		Smoke: deployer, Mirror: mirror, Identity: idp, Email: noop.Email{},

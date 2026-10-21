@@ -39,7 +39,9 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Rust targets
-        run: rustup component add rustfmt clippy && rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+        run: |
+          rustup component add rustfmt clippy && rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+          pip install ziglang==0.17.0 cargo-zigbuild
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
@@ -49,8 +51,8 @@ jobs:
           cd .. && HOMELAB_SERVICES_BIN=$PWD/services/target/release/homelab-services go test ./internal/adapters/services -run Integration -v
       - name: Builds for the device (static Linux, amd64 and arm64)
         run: |
-          cargo build --locked --release --target x86_64-unknown-linux-musl
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld cargo build --locked --release --target aarch64-unknown-linux-musl
+          cargo zigbuild --locked --release --target x86_64-unknown-linux-musl
+          cargo zigbuild --locked --release --target aarch64-unknown-linux-musl
 
   companion:
     runs-on: ubuntu-latest

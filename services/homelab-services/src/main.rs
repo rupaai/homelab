@@ -4,7 +4,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use homelab_services::app::{app, AppState};
-use homelab_services::config::{prepare_data_dir, Config};
+use homelab_services::config::{prepare_data_dir, prepare_storage, Config};
+use homelab_services::files::{spawn_purge, Files};
 use homelab_services::VERSION;
 
 const USAGE: &str = "usage: homelab-services [version]\n\
@@ -12,7 +13,9 @@ const USAGE: &str = "usage: homelab-services [version]\n\
 With no arguments, runs the server. It is configured with:\n\
   HOMELAB_SERVICES_LISTEN  loopback ip:port to listen on\n\
   HOMELAB_SERVICES_DATA    folder for this program's own state\n\
-  HOMELAB_SERVICES_KEY     homelabd's public key (base64url, no padding)";
+  HOMELAB_SERVICES_KEY     homelabd's public key (base64url, no padding)\n\
+  HOMELAB_SERVICES_STORAGE JSON list of disks: [{\"name\":\"main\",\"path\":\"/mnt/storage\"}]\n\
+  HOMELAB_SERVICES_MAX_UPLOAD  biggest upload in bytes (optional, default 10 GiB)";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -29,7 +32,11 @@ fn main() -> ExitCode {
     }
 
     // Check the settings before starting anything.
-    let config = match Config::from_env().and_then(|c| prepare_data_dir(&c.data_dir).map(|_| c)) {
+    let config = match Config::from_env().and_then(|c| {
+        prepare_data_dir(&c.data_dir)?;
+        prepare_storage(&c.storage)?;
+        Ok(c)
+    }) {
         Ok(config) => config,
         Err(message) => {
             eprintln!("homelab-services: {message}");
@@ -65,9 +72,16 @@ async fn serve(config: Config) -> Result<(), String> {
         .map_err(|e| format!("cannot listen on {}: {e}", config.listen))?;
     tracing::info!(listen = %config.listen, version = VERSION, "homelab-services starting");
 
+    let files = Arc::new(Files::open(
+        &config.data_dir,
+        config.storage,
+        config.max_upload,
+    )?);
+    spawn_purge(files.clone());
     let state = AppState {
         key: Arc::new(config.key),
         version: VERSION,
+        files,
     };
     axum::serve(listener, app(state))
         .with_graceful_shutdown(shutdown_signal())

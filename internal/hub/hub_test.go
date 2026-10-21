@@ -107,10 +107,11 @@ func (r *rig) push(sha string) {
 	r.build.Set(repo, core.Build{Commit: sha, Status: core.BuildPassed, URL: "https://ci/" + sha})
 }
 
-// settle waits until no action is running on the app.
+// settle waits until no action is running on the app. A failed promote waits the full
+// HealthyWait (3s) and then rolls back, so the limit leaves room for a slow CI runner.
 func (r *rig) settle() {
 	r.t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		l := r.hub.appLock("movies")
 		if l.TryLock() {

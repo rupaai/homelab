@@ -1,10 +1,18 @@
 //! Helpers shared by the tests: fixed keys and a signer that acts like homelabd.
 
-use axum::http::{HeaderMap, HeaderValue};
+use std::sync::Arc;
+
+use axum::body::Body;
+use axum::http::{HeaderMap, HeaderValue, Request};
+use axum::Router;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
 
+use crate::config::Disk;
+use crate::files::Files;
+
+use crate::app::{app, AppState};
 use crate::caller::{CALLER_HEADER, SIGNATURE_HEADER, SIGNING_PREFIX};
 
 /// The "homelabd" key used by most tests.
@@ -57,4 +65,73 @@ pub fn headers_for_text(key: &SigningKey, text: &str) -> HeaderMap {
 pub fn signed_headers(key: &SigningKey, caller: &serde_json::Value) -> HeaderMap {
     let text = URL_SAFE_NO_PAD.encode(serde_json::to_vec(caller).unwrap());
     headers_for_text(key, &text)
+}
+
+/// A person (a signed-in Homelab admin).
+pub fn person() -> serde_json::Value {
+    serde_json::json!({ "v": 1, "kind": "person", "person": "p1" })
+}
+
+/// An admin API key with the given scopes.
+pub fn admin(scopes: &[&str]) -> serde_json::Value {
+    serde_json::json!({ "v": 1, "kind": "admin", "key": "k1", "scopes": scopes })
+}
+
+/// An app key.
+pub fn app_key(app: &str, env: &str) -> serde_json::Value {
+    serde_json::json!({ "v": 1, "kind": "app", "key": "k2", "app": app, "env": env })
+}
+
+/// A signed request from `who`, with extra headers.
+pub fn request(
+    who: &serde_json::Value,
+    method: &str,
+    target: &str,
+    body: Vec<u8>,
+    extra: &[(&str, &str)],
+) -> Request<Body> {
+    let mut caller = who.clone();
+    caller["method"] = method.into();
+    caller["path"] = target.into();
+    caller["ts"] = crate::app::unix_now().into();
+    let mut req = Request::builder().method(method).uri(target);
+    for (name, value) in signed_headers(&test_key(), &caller).iter() {
+        req = req.header(name, value);
+    }
+    for (name, value) in extra {
+        req = req.header(*name, *value);
+    }
+    req.body(Body::from(body)).unwrap()
+}
+
+/// A router with its own temp data folder and one disk called "main".
+pub struct TestEnv {
+    pub dir: tempfile::TempDir,
+    pub disk: std::path::PathBuf,
+    pub files: Arc<Files>,
+    pub router: Router,
+}
+
+pub fn test_env(max_upload: u64) -> TestEnv {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let disk = dir.path().join("disk");
+    std::fs::create_dir(&data).unwrap();
+    std::fs::create_dir(&disk).unwrap();
+    let disks = vec![Disk {
+        name: "main".to_string(),
+        path: disk.clone(),
+    }];
+    let files = Arc::new(Files::open(&data, disks, max_upload).unwrap());
+    let router = app(AppState {
+        key: Arc::new(test_key().verifying_key()),
+        version: "test",
+        files: files.clone(),
+    });
+    TestEnv {
+        dir,
+        disk,
+        files,
+        router,
+    }
 }

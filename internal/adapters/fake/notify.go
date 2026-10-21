@@ -3,6 +3,7 @@ package fake
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/rupaai/homelab/internal/core"
@@ -49,6 +50,7 @@ type Resources struct {
 	mu     sync.Mutex
 	Usage  core.DeviceUsage
 	AppUse []core.AppUsage
+	Disks  map[string]core.DiskSpace // by path; other paths get Usage's disk numbers
 }
 
 func (r *Resources) Device(context.Context, string) (core.DeviceUsage, error) {
@@ -61,6 +63,18 @@ func (r *Resources) Apps(context.Context) ([]core.AppUsage, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]core.AppUsage{}, r.AppUse...), nil
+}
+
+func (r *Resources) Disk(_ context.Context, path string) (core.DiskSpace, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if d, ok := r.Disks[path]; ok {
+		return d, nil
+	}
+	if r.Usage.DiskTotal == 0 {
+		return core.DiskSpace{}, fmt.Errorf("couldn't read how full the disk holding %s is", path)
+	}
+	return core.DiskSpace{Used: r.Usage.DiskUsed, Total: r.Usage.DiskTotal}, nil
 }
 
 // SetDisk changes the disk numbers.

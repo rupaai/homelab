@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use ed25519_dalek::VerifyingKey;
+use serde::Deserialize;
+
+use crate::disk::valid_name;
 
 /// Everything the server needs to start.
 #[derive(Debug)]
@@ -16,7 +19,22 @@ pub struct Config {
     pub data_dir: PathBuf,
     /// homelabd's public key, used to check caller signatures.
     pub key: VerifyingKey,
+    /// The disks files can be stored on. The first is the default.
+    pub storage: Vec<Disk>,
+    /// Biggest upload in bytes.
+    pub max_upload: u64,
 }
+
+/// One storage disk.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Disk {
+    pub name: String,
+    pub path: PathBuf,
+}
+
+/// The upload limit when HOMELAB_SERVICES_MAX_UPLOAD is not set: 10 GiB.
+const DEFAULT_MAX_UPLOAD: u64 = 10 * 1024 * 1024 * 1024;
 
 impl Config {
     /// Reads the settings from the environment.
@@ -26,12 +44,20 @@ impl Config {
             &read_var("HOMELAB_SERVICES_LISTEN")?,
             &read_var("HOMELAB_SERVICES_DATA")?,
             &read_var("HOMELAB_SERVICES_KEY")?,
+            &read_var("HOMELAB_SERVICES_STORAGE")?,
+            std::env::var("HOMELAB_SERVICES_MAX_UPLOAD").ok().as_deref(),
         )
     }
 
-    /// Checks the three raw values and builds a Config.
-    /// This does not touch the disk; see `prepare_data_dir`.
-    pub fn parse(listen: &str, data_dir: &str, key: &str) -> Result<Config, String> {
+    /// Checks the raw values and builds a Config.
+    /// This does not touch the disk; see `prepare_data_dir` and `prepare_storage`.
+    pub fn parse(
+        listen: &str,
+        data_dir: &str,
+        key: &str,
+        storage: &str,
+        max_upload: Option<&str>,
+    ) -> Result<Config, String> {
         let listen: SocketAddr = listen.trim().parse().map_err(|_| {
             "HOMELAB_SERVICES_LISTEN must look like 127.0.0.1:8080 (an IP and a port)".to_string()
         })?;
@@ -46,12 +72,88 @@ impl Config {
             return Err("HOMELAB_SERVICES_DATA must not be empty".to_string());
         }
 
+        let storage = parse_storage(storage)?;
+        let max_upload = parse_max_upload(max_upload)?;
         Ok(Config {
             listen,
             data_dir: PathBuf::from(data_dir),
             key: parse_key(key)?,
+            storage,
+            max_upload,
         })
     }
+}
+
+/// Reads the disks: a JSON array like `[{"name":"main","path":"/mnt/storage"}]`.
+fn parse_storage(text: &str) -> Result<Vec<Disk>, String> {
+    let bad = |why: &str| {
+        format!(
+            "HOMELAB_SERVICES_STORAGE must be a JSON list like \
+             [{{\"name\":\"main\",\"path\":\"/mnt/storage\"}}]: {why}"
+        )
+    };
+    let disks: Vec<Disk> = serde_json::from_str(text).map_err(|e| bad(&e.to_string()))?;
+    if disks.is_empty() {
+        return Err(bad("it needs at least one disk"));
+    }
+    for (i, d) in disks.iter().enumerate() {
+        if !valid_name(&d.name, 32) {
+            return Err(bad(&format!(
+                "disk name \"{}\" must be 1-32 lowercase letters, digits, _ or -",
+                d.name
+            )));
+        }
+        if disks[..i].iter().any(|o| o.name == d.name) {
+            return Err(bad(&format!("disk name \"{}\" is used twice", d.name)));
+        }
+        if !d.path.is_absolute() {
+            return Err(bad(&format!("the path of \"{}\" must be absolute", d.name)));
+        }
+    }
+    Ok(disks)
+}
+
+/// Reads the upload limit in bytes. Unset means the default.
+fn parse_max_upload(text: Option<&str>) -> Result<u64, String> {
+    match text.map(str::trim) {
+        None | Some("") => Ok(DEFAULT_MAX_UPLOAD),
+        Some(t) => match t.parse::<u64>() {
+            Ok(n) if n > 0 => Ok(n),
+            _ => Err("HOMELAB_SERVICES_MAX_UPLOAD must be a number of bytes above 0".to_string()),
+        },
+    }
+}
+
+/// Checks that every disk path is a real folder (not a symlink).
+/// A missing one is created (private) if its parent folder exists.
+pub fn prepare_storage(disks: &[Disk]) -> Result<(), String> {
+    for d in disks {
+        let path = &d.path;
+        match std::fs::symlink_metadata(path) {
+            Ok(m) if m.is_dir() => {}
+            Ok(_) => {
+                return Err(format!(
+                    "disk \"{}\": {} is not a folder (links are not allowed)",
+                    d.name,
+                    path.display()
+                ))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if !path.parent().is_some_and(|p| p.is_dir()) {
+                    return Err(format!(
+                        "disk \"{}\": {} is missing and so is its parent folder",
+                        d.name,
+                        path.display()
+                    ));
+                }
+                crate::disk::ensure_dir(path).map_err(|e| {
+                    format!("disk \"{}\": cannot create {}: {e}", d.name, path.display())
+                })?;
+            }
+            Err(e) => return Err(format!("disk \"{}\": {}: {e}", d.name, path.display())),
+        }
+    }
+    Ok(())
 }
 
 /// Reads one required environment variable.
@@ -96,11 +198,21 @@ mod tests {
     use super::*;
     use crate::testutil::test_key_text;
 
+    const DISKS: &str = r#"[{"name":"main","path":"/mnt/storage"}]"#;
+
+    fn ok(listen: &str, key: &str) -> Result<Config, String> {
+        Config::parse(listen, "/tmp/x", key, DISKS, None)
+    }
+
+    fn storage(text: &str) -> Result<Vec<Disk>, String> {
+        parse_storage(text)
+    }
+
     #[test]
     fn accepts_loopback_v4_and_v6() {
-        assert!(Config::parse("127.0.0.1:8080", "/tmp/x", &test_key_text()).is_ok());
-        assert!(Config::parse("127.5.5.5:1", "/tmp/x", &test_key_text()).is_ok());
-        assert!(Config::parse("[::1]:8080", "/tmp/x", &test_key_text()).is_ok());
+        assert!(ok("127.0.0.1:8080", &test_key_text()).is_ok());
+        assert!(ok("127.5.5.5:1", &test_key_text()).is_ok());
+        assert!(ok("[::1]:8080", &test_key_text()).is_ok());
     }
 
     #[test]
@@ -111,22 +223,22 @@ mod tests {
             "[::]:8080",
             "8.8.8.8:80",
         ] {
-            let err = Config::parse(addr, "/tmp/x", &test_key_text()).unwrap_err();
+            let err = ok(addr, &test_key_text()).unwrap_err();
             assert!(err.contains("loopback"), "{addr}: {err}");
         }
     }
 
     #[test]
     fn refuses_unparsable_listen() {
-        assert!(Config::parse("localhost:8080", "/tmp/x", &test_key_text()).is_err());
-        assert!(Config::parse("127.0.0.1", "/tmp/x", &test_key_text()).is_err());
+        assert!(ok("localhost:8080", &test_key_text()).is_err());
+        assert!(ok("127.0.0.1", &test_key_text()).is_err());
     }
 
     #[test]
     fn refuses_bad_keys() {
         let short = URL_SAFE_NO_PAD.encode([1u8; 31]);
         for key in ["", "not base64 !!", "AAAA", short.as_str()] {
-            let err = Config::parse("127.0.0.1:8080", "/tmp/x", key).unwrap_err();
+            let err = ok("127.0.0.1:8080", key).unwrap_err();
             assert!(err.contains("HOMELAB_SERVICES_KEY"), "{key}: {err}");
         }
     }
@@ -144,5 +256,67 @@ mod tests {
             assert_eq!(mode & 0o777, 0o700);
         }
         std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn reads_storage() {
+        let disks =
+            storage(r#"[{"name":"main","path":"/mnt/a"},{"name":"b_2","path":"/b"}]"#).unwrap();
+        assert_eq!(disks.len(), 2);
+        assert_eq!(disks[0].name, "main");
+        assert_eq!(disks[1].path, PathBuf::from("/b"));
+    }
+
+    #[test]
+    fn refuses_bad_storage() {
+        for text in [
+            "",
+            "not json",
+            "[]",
+            r#"{"name":"a","path":"/a"}"#,
+            r#"[{"name":"Main","path":"/a"}]"#,
+            r#"[{"name":"","path":"/a"}]"#,
+            r#"[{"name":"a","path":"relative/path"}]"#,
+            r#"[{"name":"a","path":"/a"},{"name":"a","path":"/b"}]"#,
+            r#"[{"name":"a"}]"#,
+            r#"[{"name":"a","path":"/a","extra":1}]"#,
+        ] {
+            let err = storage(text).unwrap_err();
+            assert!(err.contains("HOMELAB_SERVICES_STORAGE"), "{text}: {err}");
+        }
+    }
+
+    #[test]
+    fn max_upload_default_and_errors() {
+        assert_eq!(parse_max_upload(None).unwrap(), 10 * 1024 * 1024 * 1024);
+        assert_eq!(parse_max_upload(Some(" 500 ")).unwrap(), 500);
+        for bad in ["0", "-1", "ten", "1.5"] {
+            assert!(parse_max_upload(Some(bad)).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn storage_folders_are_checked_and_created() {
+        let base = tempfile::tempdir().unwrap();
+        let disk = |name: &str, path: PathBuf| Disk {
+            name: name.to_string(),
+            path,
+        };
+        // A missing folder whose parent exists is created.
+        let new = base.path().join("new");
+        prepare_storage(&[disk("a", new.clone())]).unwrap();
+        assert!(new.is_dir());
+        // Existing is fine.
+        prepare_storage(&[disk("a", new.clone())]).unwrap();
+        // Missing parent is an error.
+        assert!(prepare_storage(&[disk("a", base.path().join("x/y"))]).is_err());
+        // A file is an error.
+        let file = base.path().join("file");
+        std::fs::write(&file, "x").unwrap();
+        assert!(prepare_storage(&[disk("a", file)]).is_err());
+        // A symlink to a folder is an error.
+        let link = base.path().join("link");
+        std::os::unix::fs::symlink(&new, &link).unwrap();
+        assert!(prepare_storage(&[disk("a", link)]).is_err());
     }
 }
