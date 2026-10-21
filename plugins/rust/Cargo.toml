@@ -3,11 +3,11 @@ name = "homelab-sdk"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
-description = "Thin async client for Homelab's web API (Files service)."
+description = "Thin async client for Homelab's web API (Files and Secrets services)."
 license = "MIT"
 repository = "https://github.com/rupaai/homelab"
 readme = "README.md"
-keywords = ["homelab", "files", "client", "sdk"]
+keywords = ["homelab", "files", "secrets", "client", "sdk"]
 categories = ["api-bindings"]
 
 [lib]

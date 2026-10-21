@@ -1,6 +1,6 @@
 # homelab-sdk (Python)
 
-A small Python client for Homelab's **Files** service. Standard library only (no runtime
+A small Python client for Homelab's **Files** and **Secrets** services. Standard library only (no runtime
 dependencies), Python 3.9+, fully typed.
 
 ## Install
@@ -27,10 +27,14 @@ homelab = Homelab()   # reads HOMELAB_API_URL and HOMELAB_TOKEN
 homelab.files.ensure_folder("posters")
 file, duplicate = homelab.files.upload("posters", "poster.jpg", tags=["dune"])
 data = homelab.files.download("posters", file.id)
+
+homelab.secrets.set("google_token:user42", token)            # needs secrets_api: write
+saved = homelab.secrets.get_or_none("google_token:user42")   # None if missing
+api_key = homelab.secrets.get("STRIPE_KEY")                  # reads /run/secrets/STRIPE_KEY first
 ```
 
 Inside a Homelab app both variables are already set. To pass them yourself:
-`Homelab(url="http://host:7085", token="hlk_...", timeout=60)`. A trailing slash on the
+`Homelab(url="http://host:7085", token="hlk_...", timeout=60, secrets_dir="/run/secrets")`. A trailing slash on the
 url is fine. A missing url or token raises `HomelabError` right away. `timeout` (default
 60 seconds) covers normal calls; uploads and downloads have no timeout. The token is never
 shown in `repr()`, `str()` or errors.
@@ -118,9 +122,58 @@ Moves the file to the trash.
 homelab.files.delete("posters", file_id)
 ```
 
+## Secrets
+
+All on `homelab.secrets`. Names are checked before anything is sent or read: 1 to 200 of
+`A-Z a-z 0-9 _ . : -`, never `.` or `..`. A bad name raises `HomelabError` (status 0).
+`:` and the like are URL-encoded for you. A value never appears in an error or in `repr()`.
+
+### `get(name, *, version=None, fresh=False) -> str`
+Without `version`, it reads the file `<secrets_dir>/<name>` first when there is one (only for
+names like `STRIPE_KEY`: letters, digits and `_`, not starting with a digit). The contents are
+returned exactly as written. With no file, or with `fresh=True`, it asks Homelab. A `version`
+(1 or more) always asks Homelab. A missing secret raises `HomelabError` with status 404.
+```python
+key = homelab.secrets.get("STRIPE_KEY")
+live = homelab.secrets.get("STRIPE_KEY", fresh=True)
+old = homelab.secrets.get("google_token:user42", version=2)
+```
+
+### `get_or_none(name, *, version=None, fresh=False) -> str | None`
+The same, but `None` when there is no such secret (404). Other errors still raise.
+```python
+token = homelab.secrets.get_or_none("google_token:user42")
+```
+
+### `set(name, value) -> SecretSaved`
+Needs `secrets_api: write` in `homelab.yaml`. A secret the owner set (`config`) cannot be changed (403).
+```python
+saved = homelab.secrets.set("google_token:user42", token)   # saved.name, saved.version
+```
+
+### `delete(name) -> None`
+Deleting a secret that is not there is fine.
+```python
+homelab.secrets.delete("google_token:user42")
+```
+
+### `list() -> list[SecretInfo]`
+Names, kinds and versions. Never values.
+```python
+for s in homelab.secrets.list():
+    print(s.name, s.kind, s.version, s.updated_at)
+```
+
+### `versions(name) -> list[SecretVersion]`
+The last 5 versions, newest first (`version`, `set_at`). 404 if the secret does not exist.
+```python
+for v in homelab.secrets.versions("google_token:user42"):
+    print(v.version, v.set_at)
+```
+
 ## Types
 
-`Folder`, `File`, `Meta` (with `Gps`) are frozen dataclasses. `File` has `id, folder, name,
+`Folder`, `File`, `Meta` (with `Gps`), `SecretInfo`, `SecretVersion` and `SecretSaved` are frozen dataclasses. `File` has `id, folder, name,
 content_type, size, sha256, created_at, created_by, tags, info, meta`; `Meta` has
 `width, height, taken_at, camera_make, camera_model, lens, orientation, gps, duration_s,
 title, artist, album, year, pages, author` (each `None` when the server did not find it).

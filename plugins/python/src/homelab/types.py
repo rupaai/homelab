@@ -158,3 +158,50 @@ class FileList(NamedTuple):
 
     files: List[File]
     next: Optional[str]
+
+
+@dataclass(frozen=True)
+class SecretInfo:
+    """One secret in the list. Never holds the value."""
+
+    name: str
+    kind: str  # "config" (set by the owner) or "app" (saved by the app)
+    version: int
+    updated_at: int  # unix seconds
+    raw: Dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "SecretInfo":
+        return cls(
+            name=_str(d.get("name")),
+            kind=_str(d.get("kind")),
+            version=_int(d.get("version")),
+            updated_at=_int(d.get("updated_at")),
+            raw=d,
+        )
+
+
+@dataclass(frozen=True)
+class SecretVersion:
+    """One kept version of a secret. Never holds the value."""
+
+    version: int
+    set_at: int  # unix seconds
+    raw: Dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "SecretVersion":
+        return cls(version=_int(d.get("version")), set_at=_int(d.get("set_at")), raw=d)
+
+
+@dataclass(frozen=True)
+class SecretSaved:
+    """The answer to ``secrets.set``."""
+
+    name: str
+    version: int
+    raw: Dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "SecretSaved":
+        return cls(name=_str(d.get("name")), version=_int(d.get("version")), raw=d)

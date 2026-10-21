@@ -233,3 +233,58 @@ impl DownloadOptions {
         self
     }
 }
+
+/// One secret in the list. Never holds the value. Unknown fields end up in `extra`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SecretInfo {
+    pub name: String,
+    /// `config` (set by the owner) or `app` (saved by the app).
+    pub kind: String,
+    pub version: u64,
+    /// Unix time in seconds.
+    pub updated_at: i64,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// One kept version of a secret. Never holds the value.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SecretVersion {
+    pub version: u64,
+    /// Unix time in seconds.
+    pub set_at: i64,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// The answer to `set`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SecretSaved {
+    pub name: String,
+    pub version: u64,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// Options for `Secrets::get`.
+#[derive(Debug, Clone, Default)]
+pub struct GetSecretOptions {
+    /// An older kept version (1 or more). Always asks Homelab, never reads a file.
+    pub version: Option<u64>,
+    /// Skip the `/run/secrets/<name>` file and always ask Homelab.
+    pub fresh: bool,
+}
+
+impl GetSecretOptions {
+    pub fn version(mut self, version: u64) -> Self {
+        self.version = Some(version);
+        self
+    }
+    pub fn fresh(mut self) -> Self {
+        self.fresh = true;
+        self
+    }
+}

@@ -87,7 +87,7 @@ class FakeServer:
                     except OSError:
                         pass
 
-            do_GET = do_POST = do_PATCH = do_DELETE = _handle
+            do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = _handle
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.httpd.daemon_threads = True

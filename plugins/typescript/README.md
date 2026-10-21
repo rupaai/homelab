@@ -1,7 +1,7 @@
 # @homelab/sdk (TypeScript)
 
-Thin TypeScript client for the Homelab API. Today: Files (`homelab.files`). Databases
-and data (`homelab.db`, `homelab.data`) will be added next to it.
+Thin TypeScript client for the Homelab API. Today: Files (`homelab.files`) and Secrets
+(`homelab.secrets`). Databases and data (`homelab.db`, `homelab.data`) will be added next to them.
 
 Zero runtime dependencies. Uses the global `fetch` (Node 18+ and browsers). ESM only.
 
@@ -28,13 +28,17 @@ const { file, duplicate } = await homelab.files.upload("posters", bytes, {
 });
 console.log(file.id, file.meta.width, duplicate);
 for await (const f of homelab.files.all("posters", { tag: "dune" })) console.log(f.name);
+
+await homelab.secrets.set("google_token:user42", token); // needs secrets_api: write
+const saved = await homelab.secrets.getOrNull("google_token:user42"); // null if missing
+const apiKey = await homelab.secrets.get("STRIPE_KEY"); // reads /run/secrets/STRIPE_KEY first
 ```
 
 In a browser there is no environment: `new Homelab({ url, token })`. Do not ship an
 admin token to a browser.
 
 Options: `url`, `token`, `timeoutMs` (default 60000; uploads and downloads have no
-timeout), `fetch` (custom implementation). The token is kept in a private field and never
+timeout), `secretsDir` (default `/run/secrets`), `fetch` (custom implementation). The token is kept in a private field and never
 appears in errors, `JSON.stringify` or `console.log`.
 
 ## Methods
@@ -122,10 +126,59 @@ Moves the file to the trash (removed for good after 30 days).
 await homelab.files.delete("posters", id);
 ```
 
+## Secrets
+
+All on `homelab.secrets`. Names are checked before anything is sent or read: 1 to 200 of
+`A-Z a-z 0-9 _ . : -`, never `.` or `..`. A bad name throws `HomelabError` (status 0).
+`:` and the like are URL-encoded for you. A value never appears in an error, `JSON.stringify`
+or `console.log`.
+
+### `secrets.get(name, { version?, fresh? }): Promise<string>`
+Without `version`, it reads the file `<secretsDir>/<name>` first when there is one (only for
+names like `STRIPE_KEY`: letters, digits and `_`, not starting with a digit). The contents are
+returned exactly as written. With no file, or with `fresh: true`, it asks Homelab. A `version`
+(1 or more) always asks Homelab. A missing secret throws `HomelabError` with status 404.
+```ts
+const key = await homelab.secrets.get("STRIPE_KEY");
+const live = await homelab.secrets.get("STRIPE_KEY", { fresh: true });
+const old = await homelab.secrets.get("google_token:user42", { version: 2 });
+```
+
+### `secrets.getOrNull(name, { version?, fresh? }): Promise<string | null>`
+The same, but `null` when there is no such secret (404). Other errors still throw.
+```ts
+const t = await homelab.secrets.getOrNull("google_token:user42");
+```
+
+### `secrets.set(name, value): Promise<{ name, version }>`
+Needs `secrets_api: write` in `homelab.yaml`. A secret the owner set (`config`) cannot be changed (403).
+```ts
+const { version } = await homelab.secrets.set("google_token:user42", token);
+```
+
+### `secrets.delete(name): Promise<void>`
+Deleting a secret that is not there is fine.
+```ts
+await homelab.secrets.delete("google_token:user42");
+```
+
+### `secrets.list(): Promise<SecretInfo[]>`
+Names, kinds and versions. Never values.
+```ts
+for (const s of await homelab.secrets.list()) console.log(s.name, s.kind, s.version, s.updated_at);
+```
+
+### `secrets.versions(name): Promise<SecretVersion[]>`
+The last 5 versions, newest first, as `{ version, set_at }`. 404 if the secret does not exist.
+```ts
+const vs = await homelab.secrets.versions("google_token:user42");
+```
+
 ## Types
 
 `Folder`, `File`, `Meta` (every key optional; unknown keys are kept), `ListFilters`,
-`ListResult`, `UploadOptions`, `UploadResult`, `UpdateFileOptions` and more are exported.
+`ListResult`, `UploadOptions`, `UploadResult`, `UpdateFileOptions`, `SecretInfo`, `SecretVersion`,
+`SecretSaved`, `GetSecretOptions` and more are exported.
 Note that `File` shadows the DOM `File` when imported; use `import type { File as HomelabFile }`.
 
 ## Errors
