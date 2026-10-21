@@ -1,6 +1,6 @@
 # homelab-sdk (Rust)
 
-A thin async client for [Homelab](../../README.md)'s Files service. It builds the
+A thin async client for [Homelab](../../README.md)'s Files and Secrets services. It builds the
 request, reads the answer and turns errors into one `Error` type. Nothing else.
 
 The crate is named `homelab-sdk`; you use it as `homelab`.
@@ -36,6 +36,11 @@ async fn main() -> Result<(), homelab::Error> {
                 UploadOptions::new("dune.jpg").tags(["dune", "poster"]))
         .await?;
     println!("{} ({} bytes), duplicate: {}", up.file.id, up.file.size, up.duplicate);
+
+    let secrets = homelab.secrets();
+    secrets.set("google_token:user42", "ya29.example").await?;   // needs secrets_api: write
+    let saved = secrets.get_opt("google_token:user42", Default::default()).await?; // None if missing
+    let api_key = secrets.get("STRIPE_KEY", Default::default()).await?; // reads /run/secrets/STRIPE_KEY first
     Ok(())
 }
 ```
@@ -47,6 +52,7 @@ Normal calls time out after 60 s (`homelab.with_timeout(Duration)` changes it); 
 and downloads have no timeout.
 
 Folder names and ids are percent-encoded for you, and so are query values.
+`homelab.with_secrets_dir(dir)` changes where `secrets().get` looks for files (default `/run/secrets`).
 
 ## Methods
 
@@ -180,9 +186,69 @@ Moves the file to the trash (emptied after 30 days).
 files.delete("photos", &id).await?;
 ```
 
+## Secrets
+
+All are on `homelab.secrets()`. Names are checked before anything is sent or read: 1 to 200 of
+`A-Z a-z 0-9 _ . : -`, never `.` or `..`. A bad name is `Error::Config`. `:` and the like are
+percent-encoded for you. A value never appears in an error or in `{:?}` output.
+
+### get
+
+Without `version`, it reads the file `<secrets dir>/<name>` first when there is one (only for
+names like `STRIPE_KEY`: letters, digits and `_`, not starting with a digit). The contents are
+returned exactly as written. With no file, or with `.fresh()`, it asks Homelab. A `.version(n)`
+(1 or more) always asks Homelab. A missing secret is `Error::Api { status: 404, .. }`.
+
+```rust
+use homelab::GetSecretOptions;
+let key = secrets.get("STRIPE_KEY", GetSecretOptions::default()).await?;
+let live = secrets.get("STRIPE_KEY", GetSecretOptions::default().fresh()).await?;
+let old = secrets.get("google_token:user42", GetSecretOptions::default().version(2)).await?;
+```
+
+### get_opt
+
+The same, but `Ok(None)` when there is no such secret (404). Other errors are still errors.
+
+```rust
+let token = secrets.get_opt("google_token:user42", GetSecretOptions::default()).await?;
+```
+
+### set
+
+Needs `secrets_api: write` in `homelab.yaml`. A secret the owner set (`config`) cannot be changed (403).
+
+```rust
+let saved = secrets.set("google_token:user42", &token).await?;   // saved.name, saved.version
+```
+
+### delete
+
+Deleting a secret that is not there is fine.
+
+```rust
+secrets.delete("google_token:user42").await?;
+```
+
+### list
+
+Names, kinds and versions. Never values.
+
+```rust
+for s in secrets.list().await? { println!("{} {} v{} {}", s.name, s.kind, s.version, s.updated_at); }
+```
+
+### versions
+
+The last 5 versions, newest first (`version`, `set_at`). 404 if the secret does not exist.
+
+```rust
+for v in secrets.versions("google_token:user42").await? { println!("{} {}", v.version, v.set_at); }
+```
+
 ## Types
 
-`Folder`, `File` and `Meta` (with `Gps`) mirror the API. Every field has a default, and
+`Folder`, `File` and `Meta` (with `Gps`), `SecretInfo`, `SecretVersion` and `SecretSaved` mirror the API. Every field has a default, and
 anything the server adds later lands in the `extra` map of each type, so decoding never
 breaks when the server grows. `File.info` is a `serde_json::Map`; `Meta` fields are
 `Option`s, `None` when the server did not find them.
@@ -195,7 +261,7 @@ Every call returns `homelab::Result<T>`, with one error enum:
 |---|---|
 | `Error::Api { status, message }` | the server answered with an error. `message` is its `{"error": "..."}` text, or `HTTP 502 Bad Gateway` when the body is not JSON |
 | `Error::Network(reqwest::Error)` | no connection, a timeout, or an unreadable answer |
-| `Error::Config(String)` | missing or bad url/token (`Set HOMELAB_API_URL or pass url`), a file path that cannot be opened, or a folder/id of `.` or `..` |
+| `Error::Config(String)` | missing or bad url/token (`Set HOMELAB_API_URL or pass url`), a file path that cannot be opened, a folder/id of `.` or `..`, a bad secret name, or an unreadable secret file |
 
 `err.status()` gives the HTTP status, or 0 for network and config errors.
 

@@ -118,3 +118,33 @@ export interface DownloadOptions {
   /** A Range header value such as "bytes=0-99". */
   range?: string;
 }
+
+/** One secret in the list. Never holds the value. */
+export interface SecretInfo {
+  name: string;
+  /** "config" was set by the owner in the companion; "app" was saved by the app. */
+  kind: "config" | "app";
+  version: number;
+  /** Unix time in seconds. */
+  updated_at: number;
+}
+
+/** One kept version of a secret. Never holds the value. */
+export interface SecretVersion {
+  version: number;
+  /** Unix time in seconds. */
+  set_at: number;
+}
+
+/** The answer to `secrets.set`. */
+export interface SecretSaved {
+  name: string;
+  version: number;
+}
+
+export interface GetSecretOptions {
+  /** An older kept version (1 or more). Always asks Homelab, never reads a file. */
+  version?: number;
+  /** Skip the `/run/secrets/<name>` file and always ask Homelab. */
+  fresh?: boolean;
+}

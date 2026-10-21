@@ -212,3 +212,33 @@ curl -X DELETE -H "Authorization: Bearer $HOMELAB_TOKEN" "$HOMELAB_API_URL/api/s
 ```
 
 A value can be up to 64 KiB. Each secret keeps its last 5 versions (`GET /api/secrets/{name}?version=2`). If the secrets service is not running, calls answer 503 and nothing is saved. A client can be made from [secrets.openapi.yaml](secrets.openapi.yaml).
+
+### Using it from code
+
+The Homelab plugins wrap these calls. Inside an app, `HOMELAB_API_URL` and `HOMELAB_TOKEN` are already set.
+
+```ts
+// TypeScript
+const homelab = new Homelab();
+await homelab.secrets.set("google_token:user42", token);
+const t = await homelab.secrets.getOrNull("google_token:user42"); // null if missing
+const key = await homelab.secrets.get("STRIPE_KEY");              // config secret
+```
+
+```python
+# Python
+homelab = Homelab()
+homelab.secrets.set("google_token:user42", token)
+t = homelab.secrets.get_or_none("google_token:user42")   # None if missing
+key = homelab.secrets.get("STRIPE_KEY")
+```
+
+```rust
+// Rust
+let homelab = Homelab::from_env()?;
+homelab.secrets().set("google_token:user42", &token).await?;
+let t = homelab.secrets().get_opt("google_token:user42", Default::default()).await?; // None if missing
+let key = homelab.secrets().get("STRIPE_KEY", Default::default()).await?;
+```
+
+`get` reads the file `/run/secrets/<name>` first when there is one, so a config secret costs no web call. Pass `fresh` (`{ fresh: true }`, `fresh=True`, `.fresh()`) to always ask Homelab, for example to see a value that changed. Asking for a `version` always asks Homelab. Names are checked before anything is sent. A value never appears in an error or in debug output. See [plugins](../plugins/README.md).

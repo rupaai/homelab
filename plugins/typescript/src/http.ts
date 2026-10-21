@@ -7,6 +7,8 @@ export interface HomelabOptions {
   token?: string;
   /** Timeout for normal calls in ms (default 60000). Upload and download bodies have none. */
   timeoutMs?: number;
+  /** Where config secrets are files (default /run/secrets). Used by `secrets.get`. */
+  secretsDir?: string;
   /** Custom fetch (for tests or special runtimes). Defaults to global fetch. */
   fetch?: typeof fetch;
 }

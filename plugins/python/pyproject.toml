@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "homelab-sdk"
 version = "0.1.0"
-description = "Python client for the Homelab Files API (standard library only)."
+description = "Python client for the Homelab API (Files, Secrets) (standard library only)."
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = []

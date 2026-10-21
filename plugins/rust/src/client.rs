@@ -1,4 +1,5 @@
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,6 +7,7 @@ use reqwest::{RequestBuilder, Response};
 
 use crate::error::{Error, Result};
 use crate::files::Files;
+use crate::secrets::{Secrets, DEFAULT_SECRETS_DIR};
 
 /// Env var holding the API address.
 pub const ENV_URL: &str = "HOMELAB_API_URL";
@@ -19,6 +21,7 @@ pub(crate) struct Inner {
     base: String,
     token: String,
     pub(crate) timeout: Duration,
+    pub(crate) secrets_dir: PathBuf,
 }
 
 /// The Homelab client. Cheap to clone; share it freely.
@@ -89,6 +92,7 @@ impl Homelab {
                 base,
                 token,
                 timeout: DEFAULT_TIMEOUT,
+                secrets_dir: PathBuf::from(DEFAULT_SECRETS_DIR),
             }),
         })
     }
@@ -102,6 +106,21 @@ impl Homelab {
                 base: self.inner.base.clone(),
                 token: self.inner.token.clone(),
                 timeout,
+                secrets_dir: self.inner.secrets_dir.clone(),
+            }),
+        }
+    }
+
+    /// A copy of this client that looks for secret files in `dir` instead of
+    /// `/run/secrets` (used by `secrets().get`).
+    pub fn with_secrets_dir(&self, dir: impl Into<PathBuf>) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                http: self.inner.http.clone(),
+                base: self.inner.base.clone(),
+                token: self.inner.token.clone(),
+                timeout: self.inner.timeout,
+                secrets_dir: dir.into(),
             }),
         }
     }
@@ -109,6 +128,10 @@ impl Homelab {
     /// The Files service.
     pub fn files(&self) -> Files {
         Files::new(self.inner.clone())
+    }
+    /// The Secrets service.
+    pub fn secrets(&self) -> Secrets {
+        Secrets::new(self.inner.clone())
     }
     // Room for `db()` and `data()` later: each will be a small handle like
     // `Files` that shares `Inner`.
