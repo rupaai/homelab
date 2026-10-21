@@ -37,6 +37,11 @@ pub enum Kind {
     Person,
     Admin,
     App,
+    /// homelabd itself, acting for Homelab (not for a person, key or app). Only homelabd
+    /// can sign one: the signing key exists only inside the running homelabd, and homelabd
+    /// builds a system caller only for its own calls, never from a request it forwards.
+    /// Homelab's own rules (who may see or change secrets) are applied before it calls.
+    System,
 }
 
 /// The signed description of who is calling and for which request.

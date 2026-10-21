@@ -172,3 +172,43 @@ data = requests.get(f"{api}/api/files/posters/{file['id']}", headers=auth).conte
 ```
 
 Errors come back as `{"error": "..."}` with a plain message. A client can also be made from [files.openapi.yaml](files.openapi.yaml).
+
+## Secrets
+
+An app can keep secrets of its own while it runs, such as the sign-in token of one of its users. Homelab keeps them encrypted, separate for dev and prod.
+
+There are two kinds:
+
+- **Config secrets** are the ones the owner sets in the companion and the app lists in `homelab.yaml`. They are put in the app's environment at deploy. The app can read them here, but cannot change or delete them.
+- **App secrets** are the ones the app saves itself. They are never put in the environment. The owner can see their names, and can show or delete them under **Secrets** in the companion ("Saved by the app").
+
+An app sees only its own secrets for its own environment. Homelab's own credentials (like the GitHub token) are never visible to an app.
+
+### Scopes
+
+- `secrets:read`: list, read and see the versions.
+- `secrets:write`: also save and delete app secrets.
+
+Every app key has `secrets:read`. To let the app save secrets, add this to `homelab.yaml`:
+
+```yaml
+secrets_api: write   # read (the default), write or none
+```
+
+`none` gives the key no secrets scopes at all. A key made earlier gets its new scopes at the next deploy. Admin keys and signed-in people cannot use this API; they get 403.
+
+### Use it
+
+```sh
+# Save a secret (needs secrets_api: write). Names use A-Z a-z 0-9 _ . : -
+curl -X PUT "$HOMELAB_API_URL/api/secrets/google_token:user42" \
+  -H "Authorization: Bearer $HOMELAB_TOKEN" -H "Content-Type: application/json" \
+  -d '{"value":"ya29.example"}'
+
+# Read it, list the names, delete it.
+curl -H "Authorization: Bearer $HOMELAB_TOKEN" "$HOMELAB_API_URL/api/secrets/google_token:user42"
+curl -H "Authorization: Bearer $HOMELAB_TOKEN" "$HOMELAB_API_URL/api/secrets"
+curl -X DELETE -H "Authorization: Bearer $HOMELAB_TOKEN" "$HOMELAB_API_URL/api/secrets/google_token:user42"
+```
+
+A value can be up to 64 KiB. Each secret keeps its last 5 versions (`GET /api/secrets/{name}?version=2`). If the secrets service is not running, calls answer 503 and nothing is saved. A client can be made from [secrets.openapi.yaml](secrets.openapi.yaml).

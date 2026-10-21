@@ -10,19 +10,20 @@
 		updatedBy,
 		note,
 		extra,
+		version,
 		actions,
 		below
-	}: { name: string; set: boolean; updatedAt?: string; updatedBy?: string; note?: string; extra?: string; actions?: Snippet; below?: Snippet } = $props();
+	}: { name: string; set: boolean; updatedAt?: string; updatedBy?: string; note?: string; extra?: string; version?: number; actions?: Snippet; below?: Snippet } = $props();
 </script>
 
 <li>
 	<div class="info">
 		<code>{name}</code>
-		<span class="chip" class:missing={!set}>{set ? 'Set' : 'Missing'}</span>
+		{#if version === undefined}<span class="chip" class:missing={!set}>{set ? 'Set' : 'Missing'}</span>{/if}
 		{#if note}<p class="muted small">{note}</p>{/if}
 		{#if extra}<p class="small extra">{extra}</p>{/if}
 		{#if set && updatedAt}
-			<p class="muted small">Updated <Time at={updatedAt} />{updatedBy ? ` by ${updatedBy === 'homelab' ? 'Homelab' : updatedBy}` : ''}</p>
+			<p class="muted small">Updated <Time at={updatedAt} />{updatedBy ? ` by ${updatedBy === 'homelab' ? 'Homelab' : updatedBy}` : ''}{version !== undefined ? ` · version ${version}` : ''}</p>
 		{/if}
 	</div>
 	{#if actions}<div class="actions">{@render actions()}</div>{/if}

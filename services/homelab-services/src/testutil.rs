@@ -11,6 +11,7 @@ use ed25519_dalek::{Signer, SigningKey};
 
 use crate::config::Disk;
 use crate::files::Files;
+use crate::secrets::Secrets;
 
 use crate::app::{app, AppState};
 use crate::caller::{CALLER_HEADER, SIGNATURE_HEADER, SIGNING_PREFIX};
@@ -82,6 +83,33 @@ pub fn app_key(app: &str, env: &str) -> serde_json::Value {
     serde_json::json!({ "v": 1, "kind": "app", "key": "k2", "app": app, "env": env })
 }
 
+/// homelabd itself.
+pub fn system() -> serde_json::Value {
+    serde_json::json!({ "v": 1, "kind": "system" })
+}
+
+/// An app key with scopes.
+pub fn app_scoped(app: &str, env: &str, scopes: &[&str]) -> serde_json::Value {
+    serde_json::json!({ "v": 1, "kind": "app", "key": "k2", "app": app, "env": env, "scopes": scopes })
+}
+
+/// Writes a master key file the way homelabd does (base64, then a new line, mode 0600).
+pub fn write_master_key(path: &std::path::Path, key: &[u8]) {
+    std::fs::write(
+        path,
+        format!(
+            "{}\n",
+            base64::engine::general_purpose::STANDARD.encode(key)
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+/// The master key most tests use.
+pub const TEST_MASTER_KEY: [u8; 32] = [3u8; 32];
+
 /// A signed request from `who`, with extra headers.
 pub fn request(
     who: &serde_json::Value,
@@ -109,6 +137,7 @@ pub struct TestEnv {
     pub dir: tempfile::TempDir,
     pub disk: std::path::PathBuf,
     pub files: Arc<Files>,
+    pub secrets: Arc<Secrets>,
     pub router: Router,
 }
 
@@ -123,15 +152,21 @@ pub fn test_env(max_upload: u64) -> TestEnv {
         path: disk.clone(),
     }];
     let files = Arc::new(Files::open(&data, disks, max_upload).unwrap());
+    let key = data.join("master.key");
+    write_master_key(&key, &TEST_MASTER_KEY);
+    let secrets = Arc::new(Secrets::open(&data.join("secrets.db"), &key, None).unwrap());
     let router = app(AppState {
         key: Arc::new(test_key().verifying_key()),
         version: "test",
         files: files.clone(),
+        secrets: Some(secrets.clone()),
+        secrets_problem: String::new(),
     });
     TestEnv {
         dir,
         disk,
         files,
+        secrets,
         router,
     }
 }

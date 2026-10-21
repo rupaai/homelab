@@ -44,6 +44,7 @@ type rig struct {
 	fail  *atomic.Bool
 	store *state.Store
 	idp   *fake.Identity
+	sec   *fake.Secrets
 }
 
 // flakySource fails every read while fail is set.
@@ -73,15 +74,16 @@ func newRig(t *testing.T) *rig {
 	src := fake.NewSource()
 	fail := &atomic.Bool{}
 	idp := fake.NewIdentity()
+	sec := fake.NewSecrets()
 	h := hub.New(hub.Config{DataDir: dir}, st, hub.Adapters{
 		Source: flakySource{src, fail}, Builder: fake.NewBuilder(), Registry: fake.NewRegistry(), Deployer: fake.NewDeployer(),
-		Addresses: fake.NewAddresses(), Health: fake.NewHealth(), Secrets: fake.NewSecrets(), Identity: idp, Email: fake.Email{},
+		Addresses: fake.NewAddresses(), Health: fake.NewHealth(), Secrets: sec, Identity: idp, Email: fake.Email{},
 		Notifier: fake.NewNotifier(), Resources: &fake.Resources{Usage: core.DeviceUsage{DiskUsed: 1, DiskTotal: 2}},
 		System: &fake.System{Report: core.SystemInfo{OS: "Ubuntu 24.04.4 LTS", UpdatesPending: -1, SecurityPending: -1}},
 		Updater: &fake.Updater{State: core.UpdateStatus{Managed: true, Current: "build-1", Latest: "build-2", Available: true},
 			TestList: []core.TestVersion{{Version: "pr-7-abc1234", PR: 7, Title: "Better sign-in"}}},
 	})
-	return &rig{h: h, src: src, fail: fail, store: st, idp: idp}
+	return &rig{h: h, src: src, fail: fail, store: st, idp: idp, sec: sec}
 }
 
 func TestBootstrapCreatesOwnerAndOneTimeRecoveryCode(t *testing.T) {

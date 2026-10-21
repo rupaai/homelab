@@ -23,6 +23,10 @@ pub struct Config {
     pub storage: Vec<Disk>,
     /// Biggest upload in bytes.
     pub max_upload: u64,
+    /// The master key file for secrets. Without it the secrets service is off.
+    pub secrets_key: Option<PathBuf>,
+    /// The old secrets database made by homelabd, imported once on first start.
+    pub secrets_import: Option<PathBuf>,
 }
 
 /// One storage disk.
@@ -46,6 +50,12 @@ impl Config {
             &read_var("HOMELAB_SERVICES_KEY")?,
             &read_var("HOMELAB_SERVICES_STORAGE")?,
             std::env::var("HOMELAB_SERVICES_MAX_UPLOAD").ok().as_deref(),
+            std::env::var("HOMELAB_SERVICES_SECRETS_KEY")
+                .ok()
+                .as_deref(),
+            std::env::var("HOMELAB_SERVICES_SECRETS_IMPORT")
+                .ok()
+                .as_deref(),
         )
     }
 
@@ -57,6 +67,8 @@ impl Config {
         key: &str,
         storage: &str,
         max_upload: Option<&str>,
+        secrets_key: Option<&str>,
+        secrets_import: Option<&str>,
     ) -> Result<Config, String> {
         let listen: SocketAddr = listen.trim().parse().map_err(|_| {
             "HOMELAB_SERVICES_LISTEN must look like 127.0.0.1:8080 (an IP and a port)".to_string()
@@ -74,13 +86,27 @@ impl Config {
 
         let storage = parse_storage(storage)?;
         let max_upload = parse_max_upload(max_upload)?;
+        let secrets_key = parse_path("HOMELAB_SERVICES_SECRETS_KEY", secrets_key)?;
+        let secrets_import = parse_path("HOMELAB_SERVICES_SECRETS_IMPORT", secrets_import)?;
         Ok(Config {
             listen,
             data_dir: PathBuf::from(data_dir),
             key: parse_key(key)?,
             storage,
             max_upload,
+            secrets_key,
+            secrets_import,
         })
+    }
+}
+
+/// Reads an optional file path setting. Unset or empty means none. It must be absolute.
+/// The path is where a file is, never the secret itself.
+fn parse_path(name: &str, text: Option<&str>) -> Result<Option<PathBuf>, String> {
+    match text.map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(t) if Path::new(t).is_absolute() => Ok(Some(PathBuf::from(t))),
+        Some(_) => Err(format!("{name} must be an absolute path")),
     }
 }
 
@@ -201,7 +227,7 @@ mod tests {
     const DISKS: &str = r#"[{"name":"main","path":"/mnt/storage"}]"#;
 
     fn ok(listen: &str, key: &str) -> Result<Config, String> {
-        Config::parse(listen, "/tmp/x", key, DISKS, None)
+        Config::parse(listen, "/tmp/x", key, DISKS, None, None, None)
     }
 
     fn storage(text: &str) -> Result<Vec<Disk>, String> {
@@ -284,6 +310,30 @@ mod tests {
             let err = storage(text).unwrap_err();
             assert!(err.contains("HOMELAB_SERVICES_STORAGE"), "{text}: {err}");
         }
+    }
+
+    #[test]
+    fn secrets_paths_are_optional_and_absolute() {
+        let parse = |key: Option<&str>, import: Option<&str>| {
+            Config::parse(
+                "127.0.0.1:8080",
+                "/tmp/x",
+                &test_key_text(),
+                DISKS,
+                None,
+                key,
+                import,
+            )
+        };
+        let c = parse(None, None).unwrap();
+        assert!(c.secrets_key.is_none() && c.secrets_import.is_none());
+        let c = parse(Some(" /h/secrets/master.key "), Some("")).unwrap();
+        assert_eq!(c.secrets_key, Some(PathBuf::from("/h/secrets/master.key")));
+        assert!(c.secrets_import.is_none());
+        let err = parse(Some("master.key"), None).unwrap_err();
+        assert!(err.contains("HOMELAB_SERVICES_SECRETS_KEY"), "{err}");
+        let err = parse(None, Some("relative/secrets.db")).unwrap_err();
+        assert!(err.contains("HOMELAB_SERVICES_SECRETS_IMPORT"), "{err}");
     }
 
     #[test]

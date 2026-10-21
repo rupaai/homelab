@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/rupaai/homelab/internal/core"
+	"github.com/rupaai/homelab/internal/manifest"
 	"github.com/rupaai/homelab/internal/state"
 )
 
@@ -58,6 +59,11 @@ const (
 	ScopeUsersRead  = "users:read"
 	ScopeFilesRead  = "files:read"  // read every folder's files
 	ScopeFilesWrite = "files:write" // also make folders, save, change and delete files
+
+	// Secrets scopes belong to an app's own key and never to an admin key: no admin key can
+	// be made with them, and homelab-services refuses admin keys on every secrets route.
+	ScopeSecretsRead  = "secrets:read"  // list and read the app's own secrets
+	ScopeSecretsWrite = "secrets:write" // also save and delete the app's own secrets
 )
 
 // scopes are the scopes an admin key may have.
@@ -94,7 +100,20 @@ func checkScope(s string) error {
 	return nil
 }
 
-func appKeyScopes() []string { return []string{ScopeUsersRead} }
+// appKeyScopes are the scopes an app's own key has. secrets_api in homelab.yaml decides the
+// secrets ones: read (the default) gives secrets:read, write also gives secrets:write, and
+// none gives neither.
+func appKeyScopes(m *manifest.Manifest) []string {
+	out := []string{ScopeUsersRead}
+	switch m.SecretsAPI {
+	case manifest.SecretsAPINone:
+	case manifest.SecretsAPIWrite:
+		out = append(out, ScopeSecretsRead, ScopeSecretsWrite)
+	default:
+		out = append(out, ScopeSecretsRead)
+	}
+	return out
+}
 
 func hashKey(token string) []byte {
 	d := sha256.Sum256([]byte(token))
@@ -221,8 +240,10 @@ func (h *Hub) RevokeKey(ctx context.Context, id string, by core.Viewer) error {
 	return nil
 }
 
-// appKey returns an app environment's key, making one if it has none that works.
-func (h *Hub) appKey(ctx context.Context, app, env string) (string, error) {
+// appKey returns an app environment's key, making one if it has none that works. The key's
+// scopes follow the manifest: if they have changed (secrets_api, or a key made before the
+// secrets API existed), they are updated on the same key, so the app keeps its token.
+func (h *Hub) appKey(ctx context.Context, app, env string, scopes []string) (string, error) {
 	vals, err := h.ad.Secrets.Inject(app, env, []string{AppTokenSecret})
 	if err != nil {
 		return "", fmt.Errorf("read the app's API key: %w", err)
@@ -230,6 +251,13 @@ func (h *Hub) appKey(ctx context.Context, app, env string) (string, error) {
 	if token := vals[AppTokenSecret]; token != "" {
 		k, err := h.store.APIKeyByHash(ctx, hashKey(token))
 		if err == nil && k.Kind == KeyKindApp && k.App == app && k.Env == env && k.Revoked == nil {
+			if !slices.Equal(k.Scopes, scopes) {
+				if err := h.store.SetAPIKeyScopes(ctx, k.ID, scopes); err != nil {
+					return "", err
+				}
+				h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: app, Env: env, Action: "key.scopes",
+					Detail: "Changed what the app's own API key may do: " + strings.Join(scopes, ", ")})
+			}
 			return token, nil
 		}
 		if err != nil && !errors.Is(err, core.ErrNotFound) {
@@ -246,7 +274,7 @@ func (h *Hub) appKey(ctx context.Context, app, env string) (string, error) {
 		return "", fmt.Errorf("save the app's API key: %w", err)
 	}
 	k := state.APIKey{ID: id, Hash: hashKey(token), Prefix: keyPrefixOf(token), Name: app + " " + env, Kind: KeyKindApp,
-		App: app, Env: env, Scopes: appKeyScopes(), CreatedAt: h.cfg.Now()}
+		App: app, Env: env, Scopes: scopes, CreatedAt: h.cfg.Now()}
 	if err := h.store.PutAPIKey(ctx, k); err != nil {
 		return "", err
 	}

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use homelab_services::app::{app, AppState};
 use homelab_services::config::{prepare_data_dir, prepare_storage, Config};
 use homelab_services::files::{spawn_purge, Files};
+use homelab_services::secrets::Secrets;
 use homelab_services::VERSION;
 
 const USAGE: &str = "usage: homelab-services [version]\n\
@@ -15,7 +16,9 @@ With no arguments, runs the server. It is configured with:\n\
   HOMELAB_SERVICES_DATA    folder for this program's own state\n\
   HOMELAB_SERVICES_KEY     homelabd's public key (base64url, no padding)\n\
   HOMELAB_SERVICES_STORAGE JSON list of disks: [{\"name\":\"main\",\"path\":\"/mnt/storage\"}]\n\
-  HOMELAB_SERVICES_MAX_UPLOAD  biggest upload in bytes (optional, default 10 GiB)";
+  HOMELAB_SERVICES_MAX_UPLOAD  biggest upload in bytes (optional, default 10 GiB)\n\
+  HOMELAB_SERVICES_SECRETS_KEY    path of the master key file for secrets (optional; no secrets without it)\n\
+  HOMELAB_SERVICES_SECRETS_IMPORT path of homelabd's old secrets.db, imported once (optional)";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -72,6 +75,7 @@ async fn serve(config: Config) -> Result<(), String> {
         .map_err(|e| format!("cannot listen on {}: {e}", config.listen))?;
     tracing::info!(listen = %config.listen, version = VERSION, "homelab-services starting");
 
+    let (secrets, secrets_problem) = open_secrets(&config);
     let files = Arc::new(Files::open(
         &config.data_dir,
         config.storage,
@@ -82,11 +86,43 @@ async fn serve(config: Config) -> Result<(), String> {
         key: Arc::new(config.key),
         version: VERSION,
         files,
+        secrets,
+        secrets_problem,
     };
     axum::serve(listener, app(state))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(|e| format!("server error: {e}"))
+}
+
+/// Opens the secrets store. If that is not possible the files service still runs, and the
+/// secrets routes answer 503 with the reason.
+fn open_secrets(config: &Config) -> (Option<Arc<Secrets>>, String) {
+    let Some(key) = &config.secrets_key else {
+        tracing::warn!("secrets are off: HOMELAB_SERVICES_SECRETS_KEY is not set");
+        return (None, "no master key is set".to_string());
+    };
+    match Secrets::open(
+        &config.data_dir.join("secrets.db"),
+        key,
+        config.secrets_import.as_deref(),
+    ) {
+        Ok(store) => {
+            if let Some(done) = &store.imported {
+                tracing::info!(
+                    secrets = done.secrets,
+                    versions = done.versions,
+                    "imported the old secrets; the old file was left where it was"
+                );
+            }
+            tracing::info!("secrets are ready");
+            (Some(Arc::new(store)), String::new())
+        }
+        Err(why) => {
+            tracing::error!("secrets are off: {why}");
+            (None, why)
+        }
+    }
 }
 
 /// Finishes when we get Ctrl-C or (on unix) SIGTERM.

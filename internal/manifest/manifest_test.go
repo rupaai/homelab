@@ -182,3 +182,22 @@ func TestSecretsAs(t *testing.T) {
 		}
 	}
 }
+
+func TestSecretsAPI(t *testing.T) {
+	m, err := Parse([]byte(movies), Defaults{})
+	if err != nil || m.SecretsAPI != SecretsAPIRead {
+		t.Fatalf("default = %q, %v", m.SecretsAPI, err)
+	}
+	for _, mode := range []string{"read", "write", "none"} {
+		m, err := Parse([]byte(movies+"secrets_api: "+mode+"\n"), Defaults{})
+		if err != nil || m.SecretsAPI != mode {
+			t.Fatalf("%s: got %q, %v", mode, m.SecretsAPI, err)
+		}
+	}
+	for _, mode := range []string{"Write", "rw", "yes", "true", "readwrite", "nope"} {
+		_, err := Parse([]byte(movies+"secrets_api: "+mode+"\n"), Defaults{})
+		if err == nil || !strings.Contains(err.Error(), "secrets_api must be read, write or none") {
+			t.Errorf("secrets_api: %s gave %v", mode, err)
+		}
+	}
+}

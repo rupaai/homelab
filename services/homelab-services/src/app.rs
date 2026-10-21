@@ -15,6 +15,8 @@ use serde_json::json;
 
 use crate::caller::verify;
 use crate::files::{self, Files};
+use crate::secrets::Secrets;
+use crate::secrets_api;
 
 /// What the handlers share.
 #[derive(Clone)]
@@ -25,6 +27,11 @@ pub struct AppState {
     pub version: &'static str,
     /// The files service.
     pub files: Arc<Files>,
+    /// The secrets store, or None when it could not be opened (see `secrets_problem`).
+    /// The files service works without it.
+    pub secrets: Option<Arc<Secrets>>,
+    /// Why there is no secrets store, in a few words. Empty when there is one.
+    pub secrets_problem: String,
 }
 
 /// Builds the whole router. Used by `main` and by the tests.
@@ -34,6 +41,7 @@ pub fn app(state: AppState) -> Router {
         // (after the caller check), like any other unknown route.
         .route("/healthz", get(healthz).fallback(not_found))
         .merge(files::routes())
+        .merge(secrets_api::routes())
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -77,6 +85,11 @@ async fn require_caller(State(state): State<AppState>, mut req: Request, next: N
 
     match verify(req.headers(), &method, &target, unix_now(), &state.key) {
         Ok(caller) => {
+            // People and admin API keys never use secrets, and only homelabd uses the
+            // internal routes, whatever the path under them.
+            if let Some(refusal) = secrets_api::refuse_path(&caller, req.uri().path()) {
+                return refusal.into_response();
+            }
             req.extensions_mut().insert(caller);
             next.run(req).await
         }

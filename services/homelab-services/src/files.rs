@@ -198,6 +198,8 @@ pub fn allowed(caller: &Caller, write: bool, owner_app: &str, owner_env: &str) -
         Kind::Admin => has("files:write") || (!write && has("files:read")),
         // Apps get their own folders only. homelabd gives them no scopes.
         Kind::App => !caller.app.is_empty() && caller.app == owner_app && caller.env == owner_env,
+        // homelabd uses the system caller for secrets only.
+        Kind::System => false,
     }
 }
 
@@ -207,6 +209,7 @@ fn created_by(c: &Caller) -> String {
         Kind::Person => format!("person:{}", c.person),
         Kind::Admin => format!("key:{}", c.key),
         Kind::App => format!("app:{}/{}", c.app, c.env),
+        Kind::System => "system".to_string(),
     }
 }
 
