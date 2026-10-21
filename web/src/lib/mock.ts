@@ -129,9 +129,11 @@ const secretStore: SecretMap = {
 	'movie-night': {
 		dev: [
 			{ name: 'TMDB_API_KEY', declared: true, set: true, updatedAt: ago(60 * 24 * 3), updatedBy: 'rupaai' },
-			{ name: 'SESSION_SECRET', declared: true, set: true, updatedAt: ago(60 * 24 * 9), updatedBy: 'rupaai' }
+			{ name: 'SESSION_SECRET', declared: true, set: true, updatedAt: ago(60 * 24 * 9), updatedBy: 'rupaai' },
+			{ name: 'ADMIN_TOKEN', declared: true, set: true, generated: true, value: 'k7m3q-x9rt2-h4wpz-c8nfa', updatedAt: ago(60 * 24), updatedBy: 'homelab' }
 		],
 		prod: [
+			{ name: 'ADMIN_TOKEN', declared: true, set: false, generated: true },
 			{ name: 'TMDB_API_KEY', declared: true, set: false },
 			{ name: 'SESSION_SECRET', declared: true, set: true, updatedAt: ago(60 * 24 * 9), updatedBy: 'rupaai' },
 			{ name: 'OLD_ANALYTICS_KEY', declared: false, set: true, updatedAt: ago(60 * 24 * 40), updatedBy: 'rupaai' }
@@ -351,6 +353,11 @@ export const mockApi: Api = {
 		const a = find(id);
 		const list = secretStore[a.id]?.[e] ?? [];
 		secretStore[a.id][e] = list.filter((s) => s.name !== name);
+		await delay(null);
+	},
+	async regenerateSecret(id, e, name) {
+		const hit = secretStore[find(id).id]?.[e]?.find((s) => s.name === name && s.generated);
+		if (hit) hit.value = 'k7m3q-x9rt2-h4wpz-c8nfa';
 		await delay(null);
 	},
 	settings: () => delay(settingStore.map((s) => ({ ...s }))),

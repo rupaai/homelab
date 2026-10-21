@@ -425,7 +425,7 @@ func TestMemberAPIIsScoped(t *testing.T) {
 	if rec = do(h, "GET", "/api/projects", "", v); rec.Code != 403 {
 		t.Fatalf("member projects status=%d body=%s", rec.Code, rec.Body)
 	}
-	for _, path := range []string{"/api/people", "/api/settings/secrets", "/api/activity", "/api/apps/movies/envs/dev/secrets/TMDB_API_KEY"} {
+	for _, path := range []string{"/api/people", "/api/settings/secrets", "/api/activity", "/api/apps/movies/envs/dev/secrets/TMDB_API_KEY", "/api/apps/movies/secrets"} {
 		if rec = do(h, "GET", path, "", v); rec.Code != 403 {
 			t.Errorf("member %s status=%d body=%s", path, rec.Code, rec.Body)
 		}

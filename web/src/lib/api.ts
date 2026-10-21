@@ -109,6 +109,7 @@ const realApi: Api = {
 	},
 	setSecret: (id, env, name, value) => request('PUT', `/api/apps/${enc(id)}/envs/${env}/secrets/${enc(name)}`, { value }),
 	deleteSecret: (id, env, name) => request('DELETE', `/api/apps/${enc(id)}/envs/${env}/secrets/${enc(name)}`),
+	regenerateSecret: (id, env, name) => request('POST', `/api/apps/${enc(id)}/envs/${env}/secrets/${enc(name)}/regenerate`),
 	settings: async () => list(await request<SettingView[]>('GET', '/api/settings/secrets')),
 	setSetting: (name, value) => request('PUT', `/api/settings/secrets/${enc(name)}`, { value }),
 	deleteSetting: (name) => request('DELETE', `/api/settings/secrets/${enc(name)}`),
