@@ -135,6 +135,8 @@ There's no package yet: it's plain web calls, so any language works. Inside a Ho
 TypeScript (Node 18+):
 
 ```ts
+import fs from "node:fs";
+
 const api = process.env.HOMELAB_API_URL!;
 const auth = { Authorization: `Bearer ${process.env.HOMELAB_TOKEN}` };
 
