@@ -43,7 +43,7 @@ func TestParseConfigFull(t *testing.T) {
 }
 
 func TestParseConfigStrict(t *testing.T) {
-	for _, in := range []string{"adresses: local\n", "addresses: wifi\n", "listen: [1\n", "owners: nope: x\n", "folders: {media: storage}\n"} {
+	for _, in := range []string{"addresses: wifi\n", "listen: [1\n", "owners: nope: x\n", "folders: {media: storage}\n"} {
 		if _, err := parseConfig([]byte(in)); err == nil {
 			t.Errorf("%q should be refused", in)
 		}
@@ -237,6 +237,32 @@ func TestParseConfigStorage(t *testing.T) {
 		if _, err := parseConfig([]byte(bad)); err == nil {
 			t.Errorf("%q was accepted", bad)
 		}
+	}
+}
+
+// A newer Homelab can add a setting, and then an update can go back to an older version.
+// The older version must still start: unknown top-level keys are skipped, not errors.
+func TestParseConfigSkipsUnknownKeys(t *testing.T) {
+	c, err := parseConfig([]byte("addresses: ip\nsomething_new:\n  - {name: main, path: /mnt/storage}\nfolders: {media: /mnt/storage/media}\nlater: 1\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(c.Unknown, ",") != "something_new,later" {
+		t.Fatalf("unknown: %v", c.Unknown)
+	}
+	if c.Addresses != "ip" || c.Folders["media"] != "/mnt/storage/media" {
+		t.Fatalf("known keys lost: %+v", c)
+	}
+	if c, err := parseConfig([]byte("addresses: ip\n")); err != nil || c.Unknown != nil {
+		t.Fatalf("%v %v", c.Unknown, err)
+	}
+	// A misspelt top-level key is skipped with the same warning, not refused.
+	if c, err := parseConfig([]byte("adresses: ip\n")); err != nil || c.Addresses != "local" || len(c.Unknown) != 1 {
+		t.Fatalf("%+v %v", c, err)
+	}
+	// Inside a known key a typo is still an error.
+	if _, err := parseConfig([]byte("storage: [{name: a, pth: /x}]\n")); err == nil {
+		t.Fatal("a typo inside storage was accepted")
 	}
 }
 

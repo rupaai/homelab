@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 
@@ -36,6 +37,10 @@ type Config struct {
 	Storage []core.Disk `yaml:"storage"`
 	// MaxUploadMB is the largest file Homelab accepts, in MB. Default 10240 (10 GB).
 	MaxUploadMB int64 `yaml:"max_upload_mb"`
+	// Unknown are top-level keys this version doesn't know, e.g. a setting added by a newer
+	// Homelab after an update went back. They are skipped with a warning, not an error, so
+	// Homelab still starts.
+	Unknown []string `yaml:"-"`
 }
 
 const (
@@ -71,14 +76,27 @@ func resolveHome(home string) (string, error) {
 	return filepath.Abs(home)
 }
 
-// parseConfig reads config.yaml text strictly (unknown keys are errors) and fills defaults.
+// parseConfig reads config.yaml text and fills defaults. Unknown top-level keys are left
+// out and listed in Unknown; inside a known key, unknown fields are still errors.
 func parseConfig(b []byte) (Config, error) {
 	var c Config
+	var doc yaml.Node
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return c, fmt.Errorf("config.yaml: %w", err)
+	}
+	unknown := dropUnknownKeys(&doc)
+	if len(unknown) > 0 {
+		var err error
+		if b, err = yaml.Marshal(&doc); err != nil {
+			return c, fmt.Errorf("config.yaml: %w", err)
+		}
+	}
 	dec := yaml.NewDecoder(strings.NewReader(string(b)))
 	dec.KnownFields(true)
 	if err := dec.Decode(&c); err != nil && !errors.Is(err, io.EOF) {
 		return c, fmt.Errorf("config.yaml: %w", err)
 	}
+	c.Unknown = unknown
 	if c.Addresses == "" {
 		c.Addresses = "local"
 	}
@@ -128,6 +146,32 @@ func parseConfig(b []byte) (Config, error) {
 		return c, fmt.Errorf("config.yaml: max_upload_mb must be between 1 and 1048576, not %d", c.MaxUploadMB)
 	}
 	return c, nil
+}
+
+// dropUnknownKeys removes the top-level keys Config doesn't have from doc and returns them.
+func dropUnknownKeys(doc *yaml.Node) []string {
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil
+	}
+	known := map[string]bool{}
+	t := reflect.TypeOf(Config{})
+	for i := 0; i < t.NumField(); i++ {
+		if name, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ","); name != "" && name != "-" {
+			known[name] = true
+		}
+	}
+	m := doc.Content[0]
+	var unknown []string
+	kept := m.Content[:0]
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if !known[m.Content[i].Value] {
+			unknown = append(unknown, m.Content[i].Value)
+			continue
+		}
+		kept = append(kept, m.Content[i], m.Content[i+1])
+	}
+	m.Content = kept
+	return unknown
 }
 
 var diskName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
