@@ -515,3 +515,16 @@ func TestLogKeyUseThrottlesReads(t *testing.T) {
 		t.Fatalf("newest event=%+v", ev)
 	}
 }
+
+func TestAdminKeysMayHaveFileScopes(t *testing.T) {
+	r, admin := keyRig(t)
+	_, k, err := r.hub.CreateAdminKey(context.Background(), "photos", []string{"files:write", "files:read", "users:read"}, nil, admin)
+	if err != nil || !reflect.DeepEqual(k.Scopes, []string{"files:read", "files:write", "users:read"}) {
+		t.Fatalf("%+v %v", k.Scopes, err)
+	}
+	for _, bad := range []string{"files:photos:read", "files:delete", "files"} {
+		if _, _, err := r.hub.CreateAdminKey(context.Background(), "x", []string{bad}, nil, admin); !isUserErr(err) {
+			t.Errorf("%s: %v", bad, err)
+		}
+	}
+}

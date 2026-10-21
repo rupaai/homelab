@@ -318,3 +318,16 @@ type TestRun struct {
 	From string    `json:"from"` // the version to go back to
 	At   time.Time `json:"at"`
 }
+
+// Disk is a place on the device Homelab keeps files (config.yaml storage:), or a shared
+// folder apps use (config.yaml folders:).
+type Disk struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+// DiskSpace is how full a disk is.
+type DiskSpace struct {
+	Used  uint64 `json:"used"`
+	Total uint64 `json:"total"`
+}

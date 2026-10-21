@@ -181,7 +181,9 @@ func TestIntegration(t *testing.T) {
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
 	port := ln.Addr().(*net.TCPAddr).Port
 	ln.Close()
-	s, err := New(Options{Program: bin, DataDir: filepath.Join(t.TempDir(), "services"), Port: port})
+	disk := t.TempDir()
+	s, err := New(Options{Program: bin, DataDir: filepath.Join(t.TempDir(), "services"), Port: port,
+		Storage: []core.Disk{{Name: "main", Path: disk}}, MaxUpload: 1 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,5 +257,42 @@ func TestIntegration(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(s.o.DataDir)); err != nil {
 		t.Fatalf("data folder: %v", err)
+	}
+
+	// Files, end to end: a folder, an upload, a list, part of a download.
+	person := core.ServiceCaller{Kind: "person", Person: "p"}
+	call := func(c core.ServiceCaller, method, path, body string, hdr ...string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		for i := 0; i+1 < len(hdr); i += 2 {
+			req.Header.Set(hdr[i], hdr[i+1])
+		}
+		rec := httptest.NewRecorder()
+		s.Forward(rec, req, c)
+		return rec
+	}
+	if rec := call(person, "POST", "/api/files/folders", `{"name":"photos"}`, "Content-Type", "application/json"); rec.Code != http.StatusCreated {
+		t.Fatalf("new folder: %d %s", rec.Code, rec.Body)
+	}
+	rec = call(person, "POST", "/api/files/photos?name=../note.txt&tags=cats", "hello, files")
+	var up struct{ ID, Name string }
+	if rec.Code != http.StatusCreated || json.Unmarshal(rec.Body.Bytes(), &up) != nil || up.Name != "_note.txt" {
+		t.Fatalf("upload: %d %s", rec.Code, rec.Body)
+	}
+	if rec := call(person, "GET", "/api/files/photos?tag=cats", ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), up.ID) {
+		t.Fatalf("list: %d %s", rec.Code, rec.Body)
+	}
+	if rec := call(person, "GET", "/api/files/photos/"+up.ID, "", "Range", "bytes=7-"); rec.Code != http.StatusPartialContent || rec.Body.String() != "files" {
+		t.Fatalf("range: %d %q", rec.Code, rec.Body)
+	}
+	if rec := call(person, "POST", "/api/files/photos?name=big", strings.Repeat("x", 2<<20)); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over the limit: %d %s", rec.Code, rec.Body)
+	}
+	// Another app's key sees nothing there.
+	if rec := call(core.ServiceCaller{Kind: "app", App: "movies", Env: "dev"}, "GET", "/api/files/photos/"+up.ID, ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("other app: %d %s", rec.Code, rec.Body)
+	}
+	matches, _ := filepath.Glob(filepath.Join(disk, "homelab-files", "photos", "*", "*", up.ID+"-_note.txt"))
+	if len(matches) != 1 {
+		t.Fatalf("stored file not where expected: %v", matches)
 	}
 }

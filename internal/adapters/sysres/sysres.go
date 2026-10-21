@@ -103,6 +103,15 @@ func (r *Reporter) Device(ctx context.Context, dataDir string) (core.DeviceUsage
 	return u, nil
 }
 
+// Disk reports how full the disk holding path is.
+func (r *Reporter) Disk(ctx context.Context, path string) (core.DiskSpace, error) {
+	du, err := disk.UsageWithContext(ctx, path)
+	if err != nil {
+		return core.DiskSpace{}, fmt.Errorf("couldn't read how full the disk holding %s is", path)
+	}
+	return core.DiskSpace{Used: du.Used, Total: du.Total}, nil
+}
+
 // Apps reports each running app environment's CPU and memory, summed over its containers.
 // Containers that aren't Homelab apps (such as supporting services) are left out.
 func (r *Reporter) Apps(ctx context.Context) ([]core.AppUsage, error) {

@@ -14,6 +14,7 @@ use ed25519_dalek::VerifyingKey;
 use serde_json::json;
 
 use crate::caller::verify;
+use crate::files::{self, Files};
 
 /// What the handlers share.
 #[derive(Clone)]
@@ -22,6 +23,8 @@ pub struct AppState {
     pub key: Arc<VerifyingKey>,
     /// Shown by /healthz.
     pub version: &'static str,
+    /// The files service.
+    pub files: Arc<Files>,
 }
 
 /// Builds the whole router. Used by `main` and by the tests.
@@ -30,6 +33,7 @@ pub fn app(state: AppState) -> Router {
         // Other methods on /healthz are not special: they get the 404 below
         // (after the caller check), like any other unknown route.
         .route("/healthz", get(healthz).fallback(not_found))
+        .merge(files::routes())
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -45,12 +49,12 @@ async fn healthz(State(state): State<AppState>) -> Response {
 }
 
 /// Nothing matched the route (and the caller was valid).
-async fn not_found() -> Response {
+pub async fn not_found() -> Response {
     error_response(StatusCode::NOT_FOUND, "There's nothing at that address.")
 }
 
 /// Builds a JSON error body: `{"error": "..."}`.
-fn error_response(status: StatusCode, message: &str) -> Response {
+pub fn error_response(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
 }
 
@@ -84,17 +88,19 @@ async fn require_caller(State(state): State<AppState>, mut req: Request, next: N
     }
 }
 
-/// Makes every response JSON and uncacheable, including ones axum builds itself.
+/// Makes every response uncacheable, and JSON unless the handler chose a type.
 async fn json_no_store(req: Request, next: Next) -> Response {
     let mut response = next.run(req).await;
     let headers = response.headers_mut();
     headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    if !headers.contains_key(CONTENT_TYPE) {
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    }
     response
 }
 
 /// The current time in unix seconds.
-fn unix_now() -> i64 {
+pub fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -111,11 +117,9 @@ mod tests {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
-    fn test_app() -> Router {
-        app(AppState {
-            key: Arc::new(test_key().verifying_key()),
-            version: "test",
-        })
+    fn test_app() -> (Router, tempfile::TempDir) {
+        let env = test_env(1024);
+        (env.router, env.dir)
     }
 
     /// Sends one request and returns the status, headers and parsed JSON body.
@@ -128,7 +132,8 @@ mod tests {
         for (name, value) in headers.iter() {
             req = req.header(name, value);
         }
-        let response = test_app()
+        let (router, _dir) = test_app();
+        let response = router
             .oneshot(req.body(Body::empty()).unwrap())
             .await
             .unwrap();
@@ -176,7 +181,7 @@ mod tests {
 
     #[tokio::test]
     async fn signed_request_to_unknown_route_is_404() {
-        let target = "/api/files/x?y=1";
+        let target = "/api/other/x?y=1";
         let (status, headers, body) =
             send(Method::GET, target, signed("GET", target, unix_now())).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
@@ -213,7 +218,7 @@ mod tests {
 
     #[tokio::test]
     async fn old_and_future_timestamps_are_refused() {
-        for ts in [unix_now() - 31, unix_now() + 31] {
+        for ts in [unix_now() - 35, unix_now() + 35] {
             let (status, _, _) = send(Method::GET, "/x", signed("GET", "/x", ts)).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "ts {ts}");
         }

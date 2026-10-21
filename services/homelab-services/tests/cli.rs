@@ -7,7 +7,9 @@ fn bin() -> Command {
     // Start from a clean environment so the host's settings never leak in.
     cmd.env_remove("HOMELAB_SERVICES_LISTEN")
         .env_remove("HOMELAB_SERVICES_DATA")
-        .env_remove("HOMELAB_SERVICES_KEY");
+        .env_remove("HOMELAB_SERVICES_KEY")
+        .env_remove("HOMELAB_SERVICES_STORAGE")
+        .env_remove("HOMELAB_SERVICES_MAX_UPLOAD");
     cmd
 }
 
@@ -45,8 +47,36 @@ fn non_loopback_listen_is_refused() {
             std::env::temp_dir().join("hs-cli-unused"),
         )
         .env("HOMELAB_SERVICES_KEY", "AAAA")
+        .env(
+            "HOMELAB_SERVICES_STORAGE",
+            r#"[{"name":"main","path":"/mnt/storage"}]"#,
+        )
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("loopback"));
+}
+
+#[test]
+fn missing_or_bad_storage_is_refused() {
+    let base = || {
+        let mut cmd = bin();
+        cmd.env("HOMELAB_SERVICES_LISTEN", "127.0.0.1:0")
+            .env(
+                "HOMELAB_SERVICES_DATA",
+                std::env::temp_dir().join("hs-cli-unused"),
+            )
+            .env("HOMELAB_SERVICES_KEY", "AAAA");
+        cmd
+    };
+    let out = base().output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("HOMELAB_SERVICES_STORAGE"));
+
+    let out = base()
+        .env("HOMELAB_SERVICES_STORAGE", "[]")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("HOMELAB_SERVICES_STORAGE"));
 }

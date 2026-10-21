@@ -176,6 +176,7 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("GET /api/resources", s.resources)
 	mux.HandleFunc("GET /api/device", s.device)
 	mux.HandleFunc("POST /api/device/update", s.updateHomelab)
+	mux.HandleFunc("GET /api/storage", s.storage)
 	mux.HandleFunc("GET /api/keys", s.listKeys)
 	mux.HandleFunc("POST /api/keys", s.createKey)
 	mux.HandleFunc("DELETE /api/keys/{id}", s.revokeKey)
@@ -305,6 +306,10 @@ func (s *server) guard(w http.ResponseWriter, r *http.Request) bool {
 		if r.Header.Get(csrfHeader) != "1" {
 			writeErr(w, http.StatusForbidden, "That request didn't come from the Homelab companion.")
 			return false
+		}
+		// homelab-services takes file uploads and sets its own limits.
+		if isServicePath(r.URL.Path) {
+			return true
 		}
 		if r.ContentLength != 0 {
 			ct := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0])

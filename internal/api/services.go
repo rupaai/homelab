@@ -12,6 +12,21 @@ import (
 // Homelab decides who is calling, then forwards the call with that caller signed.
 var servicePaths = []string{"/api/files", "/api/db", "/api/data"}
 
+// isServicePath says whether a path belongs to homelab-services.
+func isServicePath(path string) bool {
+	for _, p := range servicePaths {
+		if path == p || strings.HasPrefix(path, p+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// storage lists the disks and how full they are, for the Files screen.
+func (s *server) storage(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.hub.Disks(r.Context()))
+}
+
 // personToServices forwards a companion call. The guard has already checked the person.
 func (s *server) personToServices(w http.ResponseWriter, r *http.Request) {
 	s.toServices(w, r, core.ServiceCaller{Kind: "person", Person: viewer(r).PersonID})

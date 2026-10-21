@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { endOfDay, keyProblem, scopeWords } from './keys';
 
 describe('scopeWords', () => {
-	it('puts scopes in plain words', () => expect(scopeWords(['users:read'])).toEqual(['Read people']));
+	it('puts scopes in plain words', () => expect(scopeWords(['users:read', 'files:write'])).toEqual(['Read people', 'Save and delete files']));
 	it('keeps unknown scopes as they are', () => expect(scopeWords(['odd'])).toEqual(['odd']));
 });
 
@@ -10,6 +10,7 @@ describe('keyProblem', () => {
 	it('asks for a name', () => {
 		expect(keyProblem(' ')).toMatch(/name/);
 		expect(keyProblem('x')).toBe('');
+		expect(keyProblem('x', [])).toMatch(/may do/);
 	});
 });
 
