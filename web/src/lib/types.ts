@@ -222,7 +222,25 @@ export interface Api {
 	keys(): Promise<KeysView>;
 	createKey(input: NewKeyInput): Promise<CreatedKey>;
 	revokeKey(id: string): Promise<void>;
+	storage(): Promise<StorageDisk[]>;
+	fileFolders(): Promise<FileFolder[]>;
+	createFileFolder(name: string, disk?: string): Promise<FileFolder>;
+	files(folder: string, q?: FileQuery): Promise<FilePage>;
+	uploadFile(folder: string, file: File, tags?: string[]): Promise<StoredFile>;
+	fileBlob(folder: string, id: string): Promise<Blob>;
+	deleteFile(folder: string, id: string): Promise<void>;
 }
+
+/** A disk Homelab can keep files on. Sizes are bytes. */
+export interface StorageDisk { name: string; path: string; kind: 'data' | 'storage' | 'folder'; used: number; total: number; problem?: string; shared?: boolean; }
+/** app and env are empty for folders the admins made. created_at is left as the server sends it. */
+export interface FileFolder { name: string; disk: string; app: string; env: string; files: number; bytes: number; created_at: string | number; }
+export interface StoredFile {
+	id: string; folder: string; name: string; content_type: string; size: number; sha256: string;
+	created_at: string; created_by: string; tags: string[]; info: Record<string, unknown>;
+}
+export interface FilePage { files: StoredFile[]; next: string | null; }
+export interface FileQuery { tag?: string; type?: string; after?: string; limit?: number; }
 
 export interface KeyView {
 	id: string; prefix: string; name: string; kind: 'app' | 'admin';

@@ -6,6 +6,9 @@
 pub mod app;
 pub mod caller;
 pub mod config;
+pub mod db;
+pub mod disk;
+pub mod files;
 
 #[cfg(test)]
 mod testutil;

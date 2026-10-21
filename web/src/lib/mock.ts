@@ -1,6 +1,6 @@
 // Fake data for developing the UI without the Go server (see api.ts for how it's switched on).
 import { ApiError } from './errors';
-import type { ActivityEvent, Api, AppView, EnvName, EnvView, PersonInput, KeyView, PersonView, ReleaseView, SecretView, SettingView } from './types';
+import type { ActivityEvent, Api, AppView, FileFolder, StorageDisk, StoredFile, EnvName, EnvView, PersonInput, KeyView, PersonView, ReleaseView, SecretView, SettingView } from './types';
 
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 const delay = <T>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
@@ -149,6 +149,32 @@ const appKeys: KeyView[] = [
 	{ id: 'a1', prefix: 'hlk_MvPr', name: 'movies prod', kind: 'app', app: 'movie-night', env: 'prod', scopes: ['users:read'], createdAt: ago(60 * 24 * 30), lastUsed: ago(3) },
 	{ id: 'a2', prefix: 'hlk_MvDv', name: 'movies dev', kind: 'app', app: 'movie-night', env: 'dev', scopes: ['users:read'], createdAt: ago(60 * 24 * 30) }
 ];
+const disks: StorageDisk[] = [
+	{ name: 'main', path: '/var/lib/homelab', kind: 'data', used: 210e9, total: 500e9 },
+	{ name: 'photos', path: '/mnt/photos', kind: 'storage', used: 880e9, total: 1e12 },
+	{ name: 'backup', path: '/mnt/backup', kind: 'storage', used: 1.9e12, total: 2e12, problem: 'This disk is almost full.' },
+	{ name: 'nas', path: '/mnt/nas', kind: 'storage', used: 3e12, total: 8e12, shared: true }
+];
+const folderStore: FileFolder[] = [
+	{ name: 'documents', disk: 'main', app: '', env: '', files: 3, bytes: 0, created_at: ago(60 * 24 * 30) },
+	{ name: 'movie-night-posters', disk: 'photos', app: 'movie-night', env: 'prod', files: 0, bytes: 0, created_at: ago(60 * 24 * 5) }
+];
+const fileStore: StoredFile[] = [
+	{ id: 'f003', folder: 'documents', name: 'holiday.svg', content_type: 'image/svg+xml', size: 1200, sha256: 'a'.repeat(64), created_at: ago(30), created_by: 'owner', tags: ['trip'], info: {} },
+	{ id: 'f002', folder: 'documents', name: 'insurance.pdf', content_type: 'application/pdf', size: 482_000, sha256: 'b'.repeat(64), created_at: ago(60 * 30), created_by: 'owner', tags: ['home', 'paperwork'], info: {} },
+	{ id: 'f001', folder: 'documents', name: 'notes.txt', content_type: 'text/plain', size: 2300, sha256: 'c'.repeat(64), created_at: ago(60 * 24 * 12), created_by: 'owner', tags: [], info: {} }
+];
+const syncFolders = () => folderStore.forEach((f) => {
+	const rows = fileStore.filter((x) => x.folder === f.name);
+	f.files = rows.length;
+	f.bytes = rows.reduce((n, x) => n + x.size, 0);
+});
+syncFolders();
+const folderOf = (name: string) => {
+	const f = folderStore.find((x) => x.name === name);
+	if (!f) throw new ApiError("Homelab couldn't find that folder.", 404);
+	return f;
+};
 const household: PersonView[] = [
 	{ id: 'owner', name: 'Rupa', email: 'rupa@example.test', status: 'signed_in', roles: ['owner', 'admin'], grants: {} },
 	{ id: 'sam', name: 'Sam', email: 'sam@example.test', status: 'signed_in', roles: ['member'], grants: { 'movie-night': 'use' }, lastSignIn: ago(15) },
@@ -383,5 +409,40 @@ export const mockApi: Api = {
 		let rows = events.filter((e) => !q.app || e.app === q.app);
 		if (q.before) rows = rows.filter((e) => e.id < q.before!);
 		return delay(rows.slice(0, q.limit ?? 50).map((e) => ({ ...e })));
+	},
+	storage: () => delay(disks.map((d) => ({ ...d }))),
+	fileFolders: () => delay(folderStore.map((f) => ({ ...f }))),
+	async createFileFolder(name, disk) {
+		if (folderStore.some((f) => f.name === name)) throw new ApiError('There is already a folder with that name.', 409);
+		const f: FileFolder = { name, disk: disk || 'main', app: '', env: '', files: 0, bytes: 0, created_at: new Date().toISOString() };
+		folderStore.push(f);
+		return delay({ ...f });
+	},
+	async files(folder, q = {}) {
+		folderOf(folder);
+		let rows = fileStore.filter((f) => f.folder === folder && (!q.tag || f.tags.includes(q.tag)) && (!q.type || f.content_type.startsWith(q.type)));
+		if (q.after) rows = rows.filter((f) => f.id < q.after!);
+		const limit = q.limit ?? 50;
+		const page = rows.slice(0, limit);
+		return delay({ files: page.map((f) => ({ ...f, tags: [...f.tags] })), next: rows.length > limit ? page[page.length - 1].id : null });
+	},
+	async uploadFile(folder, file, tags = []) {
+		folderOf(folder);
+		if (file.size > 50e6) throw new ApiError('That file is too big. The limit is 50 MB.', 413);
+		const f: StoredFile = { id: `f${String(Date.now()).slice(-9)}`, folder, name: file.name, content_type: file.type || 'application/octet-stream', size: file.size, sha256: '0'.repeat(64), created_at: new Date().toISOString(), created_by: 'owner', tags: [...tags], info: {} };
+		fileStore.unshift(f);
+		syncFolders();
+		return delay({ ...f });
+	},
+	async fileBlob() {
+		const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80"><rect width="120" height="80" fill="#8ab"/><circle cx="85" cy="25" r="10" fill="#fd8"/><path d="M0 80l40-40 30 30 20-15 30 25z" fill="#465"/></svg>';
+		return delay(new Blob([svg], { type: 'image/svg+xml' }));
+	},
+	async deleteFile(folder, id) {
+		const i = fileStore.findIndex((f) => f.folder === folder && f.id === id);
+		if (i < 0) throw new ApiError("Homelab couldn't find that file.", 404);
+		fileStore.splice(i, 1);
+		syncFolders();
+		await delay(null);
 	}
 };
