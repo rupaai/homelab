@@ -34,9 +34,10 @@ owner and register a passkey. Keep the recovery code it shows once. If you lose 
 `bin/homelabd recover` prints a one-time sign-in link that expires after 15 minutes.
 
 Secrets are set in the companion: platform credentials (the GitHub token) under
-**Settings**, and an app's secrets on its page under **Secrets**. They're kept encrypted in
-`~/.homelab/secrets/secrets.db` with the key in `~/.homelab/secrets/master.key`; keep a copy
-of that key somewhere safe. Plain `KEY=VALUE` files from milestone 1 are imported once at
+**Settings**, and an app's secrets on its page under **Secrets**. They're kept encrypted by
+homelab-services, with the key in `~/.homelab/secrets/master.key`; keep a copy
+of that key somewhere safe. Secrets from an older Homelab are copied over once at start, and
+the old `~/.homelab/secrets/secrets.db` is left where it is. Plain `KEY=VALUE` files from milestone 1 are imported once at
 start and renamed to `*.imported`.
 
 Only the owner, and people the owner allows ("Can see secrets" on the People screen), can

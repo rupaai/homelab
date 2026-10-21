@@ -323,7 +323,17 @@ type Secrets struct {
 	mu             sync.Mutex
 	Values         map[string]string
 	PlatformValues map[string]string
-	versions       map[string][]fakeVersion // by "app/env/NAME", oldest first
+	// Saved holds the secrets apps saved for themselves, per "app/env/NAME". A test fills
+	// it in the way an app would; a saved secret is never injected into a deploy.
+	Saved    map[string]SavedSecret
+	versions map[string][]fakeVersion // by "app/env/NAME", oldest first
+}
+
+// SavedSecret is one secret an app saved.
+type SavedSecret struct {
+	Value     string
+	Version   int
+	UpdatedAt time.Time
 }
 
 type fakeVersion struct {
@@ -332,7 +342,7 @@ type fakeVersion struct {
 }
 
 func NewSecrets() *Secrets {
-	return &Secrets{Values: map[string]string{}, PlatformValues: map[string]string{}, versions: map[string][]fakeVersion{}}
+	return &Secrets{Values: map[string]string{}, PlatformValues: map[string]string{}, Saved: map[string]SavedSecret{}, versions: map[string][]fakeVersion{}}
 }
 
 func (s *Secrets) Set(app, env, name, value, by string) error {
@@ -429,6 +439,40 @@ func (s *Secrets) DeleteApp(app string) error {
 			delete(s.versions, k)
 		}
 	}
+	for k := range s.Saved {
+		if strings.HasPrefix(k, app+"/") {
+			delete(s.Saved, k)
+		}
+	}
+	return nil
+}
+
+// ListSaved describes the secrets the app saved in app/env.
+func (s *Secrets) ListSaved(app, env string) ([]core.SecretInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []core.SecretInfo
+	prefix := app + "/" + env + "/"
+	for k, v := range s.Saved {
+		if strings.HasPrefix(k, prefix) {
+			out = append(out, core.SecretInfo{Name: strings.TrimPrefix(k, prefix), Version: v.Version, UpdatedAt: v.UpdatedAt, UpdatedBy: "app:" + app + "/" + env})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (s *Secrets) GetSaved(app, env, name string) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, ok := s.Saved[app+"/"+env+"/"+name]
+	return v.Value, ok, nil
+}
+
+func (s *Secrets) DeleteSaved(app, env, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.Saved, app+"/"+env+"/"+name)
 	return nil
 }
 

@@ -11,6 +11,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 )
@@ -122,7 +123,23 @@ type Secrets interface {
 	Versions(app, env, name string) ([]SecretVersion, error)
 	// Restore stores an old version's value again as a new version, and returns its number.
 	Restore(app, env, name string, version int, by string) (int, error)
+
+	// The methods above are about config secrets: the ones the owner sets and the app gets
+	// at deploy. These are about the secrets an app saves for itself while it runs. Homelab
+	// only lists them and, for people allowed to see secret values, shows or deletes them;
+	// an app's saved secrets are never given to a deploy.
+
+	// ListSaved describes the secrets the app saved in app/env, never the values.
+	ListSaved(app, env string) ([]SecretInfo, error)
+	// GetSaved returns the value of one saved secret; ok is false when it isn't there.
+	GetSaved(app, env, name string) (value string, ok bool, err error)
+	// DeleteSaved removes a saved secret. Removing one that isn't there is not an error.
+	DeleteSaved(app, env, name string) error
 }
+
+// ErrSecretsUnavailable is what secret operations fail with while Homelab's secrets service
+// (part of homelab-services) isn't running. Nothing falls back to plain text or skips secrets.
+var ErrSecretsUnavailable = errors.New("Homelab's secrets service isn't running yet; try again in a minute.")
 
 // SecretVersionsKept is how many values of each secret are kept.
 const SecretVersionsKept = 5
@@ -244,10 +261,15 @@ type Services interface {
 	Problem() string
 }
 
+// ServiceKindSystem is homelabd itself. It is used only by homelabd's own calls to the
+// secrets service (never for a request it forwards), and homelab-services lets only this
+// kind use its internal routes.
+const ServiceKindSystem = "system"
+
 // ServiceCaller is who a call to the services is for: a signed-in person, an admin-made
 // API key, or an app's own key.
 type ServiceCaller struct {
-	Kind   string   `json:"kind"` // "person", "admin" or "app"
+	Kind   string   `json:"kind"` // "person", "admin", "app" or "system"
 	Person string   `json:"person"`
 	Key    string   `json:"key"`
 	App    string   `json:"app"`

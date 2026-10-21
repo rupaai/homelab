@@ -90,6 +90,18 @@ func (s *Store) PutAPIKey(ctx context.Context, k APIKey) error {
 	return tx.Commit()
 }
 
+// SetAPIKeyScopes changes what a key that is not revoked may do. Its token stays the same.
+func (s *Store) SetAPIKeyScopes(ctx context.Context, id string, scopes []string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE api_keys SET scopes=? WHERE id=? AND revoked_at IS NULL`, strings.Join(scopes, " "), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return core.ErrNotFound
+	}
+	return nil
+}
+
 // APIKeyByHash finds a key by the SHA-256 of its value, revoked or not.
 func (s *Store) APIKeyByHash(ctx context.Context, hash []byte) (APIKey, error) {
 	k, err := scanAPIKey(s.db.QueryRowContext(ctx, `SELECT `+apiKeyCols+` FROM api_keys WHERE hash=?`, hash))

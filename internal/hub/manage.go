@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -89,10 +90,20 @@ type SecretView struct {
 	Generated bool `json:"generated,omitempty"`
 }
 
+// SavedView is a secret the app saved for itself while it runs, never with its value.
+type SavedView struct {
+	Name      string    `json:"name"`
+	Version   int       `json:"version"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
 // EnvSecrets is the secrets of one environment.
 type EnvSecrets struct {
 	Env     string       `json:"env"`
 	Secrets []SecretView `json:"secrets"`
+	// Saved are the secrets the app saved itself ("Saved by the app"). Their names show to
+	// every admin, like the others; values only to those who may see secret values.
+	Saved []SavedView `json:"saved"`
 }
 
 // AppSecrets lists, per environment, the secrets an app declares and any others stored.
@@ -117,7 +128,14 @@ func (h *Hub) AppSecrets(ctx context.Context, appID string) ([]EnvSecrets, error
 				byName[s.Name] = s
 			}
 		}
-		es := EnvSecrets{Env: env, Secrets: []SecretView{}}
+		saved, err := h.ad.Secrets.ListSaved(appID, env)
+		if err != nil {
+			return nil, err
+		}
+		es := EnvSecrets{Env: env, Secrets: []SecretView{}, Saved: []SavedView{}}
+		for _, sv := range saved {
+			es.Saved = append(es.Saved, SavedView{Name: sv.Name, Version: sv.Version, UpdatedAt: sv.UpdatedAt})
+		}
 		for _, n := range m.Secrets {
 			es.Secrets = append(es.Secrets, secretView(n, true, byName))
 			delete(byName, n)
@@ -185,7 +203,7 @@ func (h *Hub) RevealSecret(ctx context.Context, appID, env, name string, by core
 	}
 	vals, err := h.ad.Secrets.Inject(appID, env, []string{name})
 	if err != nil {
-		return "", &UserError{Msg: secretErr(err)}
+		return "", secretFail(err)
 	}
 	v, ok := vals[name]
 	if !ok {
@@ -212,7 +230,7 @@ func (h *Hub) SecretVersions(ctx context.Context, appID, env, name string, by co
 	}
 	list, err := h.ad.Secrets.Versions(appID, env, name)
 	if err != nil {
-		return nil, &UserError{Msg: secretErr(err)}
+		return nil, secretFail(err)
 	}
 	if list == nil {
 		list = []core.SecretVersion{}
@@ -236,7 +254,7 @@ func (h *Hub) RestoreSecret(ctx context.Context, appID, env, name string, versio
 	}
 	n, err := h.ad.Secrets.Restore(appID, env, name, version, by.Label())
 	if err != nil {
-		return &UserError{Msg: secretErr(err)}
+		return secretFail(err)
 	}
 	h.logEvent(ctx, state.Event{Actor: by.Label(), App: appID, Env: env, Action: "secret.restored",
 		Detail: fmt.Sprintf("Put back version %d of %s for %s, as version %d. It's used from the next deploy.", version, name, env, n)})
@@ -259,10 +277,58 @@ func (h *Hub) SetSecret(ctx context.Context, appID, env, name, value string, by 
 		return err
 	}
 	if err := h.ad.Secrets.Set(appID, env, name, value, by.Label()); err != nil {
-		return &UserError{Msg: secretErr(err)}
+		return secretFail(err)
 	}
 	h.logEvent(ctx, state.Event{Actor: by.Label(), App: appID, Env: env, Action: "secret.set",
 		Detail: fmt.Sprintf("Set %s for %s. It's used from the next deploy.", name, env)})
+	return nil
+}
+
+// RevealSavedSecret returns the value of a secret the app saved, and records in Activity
+// that it was looked at (never the value). Like config secrets, only the owner and people
+// who may see secret values, signed in for real.
+func (h *Hub) RevealSavedSecret(ctx context.Context, appID, env, name string, by core.Viewer) (string, error) {
+	if err := h.requireSecretValues(ctx, by); err != nil {
+		return "", err
+	}
+	if err := h.checkAppEnv(ctx, appID, env); err != nil {
+		return "", err
+	}
+	v, ok, err := h.ad.Secrets.GetSaved(appID, env, name)
+	if err != nil {
+		return "", secretFail(err)
+	}
+	if !ok {
+		return "", userErr("The app hasn't saved %s for %s.", name, env)
+	}
+	h.logEvent(ctx, state.Event{Actor: by.Label(), App: appID, Env: env, Action: "secret.viewed",
+		Detail: fmt.Sprintf("Viewed %s, saved by the app, for %s", name, env)})
+	return v, nil
+}
+
+// DeleteSavedSecret removes a secret the app saved. The app can save it again.
+func (h *Hub) DeleteSavedSecret(ctx context.Context, appID, env, name string, by core.Viewer) error {
+	if err := h.requireSecretValues(ctx, by); err != nil {
+		return err
+	}
+	if err := h.checkAppEnv(ctx, appID, env); err != nil {
+		return err
+	}
+	if err := h.ad.Secrets.DeleteSaved(appID, env, name); err != nil {
+		return secretFail(err)
+	}
+	h.logEvent(ctx, state.Event{Actor: by.Label(), App: appID, Env: env, Action: "secret.deleted",
+		Detail: fmt.Sprintf("Deleted %s, saved by the app, from %s", name, env)})
+	return nil
+}
+
+func (h *Hub) checkAppEnv(ctx context.Context, appID, env string) error {
+	if _, err := h.store.App(ctx, appID); err != nil {
+		return userErr("There's no app %q.", appID)
+	}
+	if env != core.Dev && env != core.Prod {
+		return userErr("There's no environment %q.", env)
+	}
 	return nil
 }
 
@@ -288,7 +354,7 @@ func (h *Hub) RegenerateSecret(ctx context.Context, appID, env, name string, by 
 		return err
 	}
 	if err := h.ad.Secrets.Set(appID, env, name, v, by.Label()); err != nil {
-		return &UserError{Msg: secretErr(err)}
+		return secretFail(err)
 	}
 	h.logEvent(ctx, state.Event{Actor: by.Label(), App: appID, Env: env, Action: "secret.set",
 		Detail: fmt.Sprintf("Made a new %s for %s", name, env)})
@@ -310,7 +376,7 @@ func (h *Hub) DeleteSecret(ctx context.Context, appID, env, name string, by core
 		return userErr("Names starting with HOMELAB_ are Homelab's own and can't be deleted.")
 	}
 	if err := h.ad.Secrets.Delete(appID, env, name); err != nil {
-		return &UserError{Msg: secretErr(err)}
+		return secretFail(err)
 	}
 	h.logEvent(ctx, state.Event{Actor: by.Label(), App: appID, Env: env, Action: "secret.deleted", Detail: fmt.Sprintf("Deleted %s from %s", name, env)})
 	return nil
@@ -336,11 +402,21 @@ func checkSecret(name, value string) error {
 // secretErr turns a store error into a message for people; the store's validation
 // messages are already written for them.
 func secretErr(err error) string {
-	m := err.Error()
+	m := strings.TrimSuffix(err.Error(), ".")
 	if m == "" {
 		return "That secret couldn't be saved."
 	}
 	return strings.ToUpper(m[:1]) + m[1:] + "."
+}
+
+// secretFail turns an error from the secret store into the error a caller gets. A secrets
+// service that isn't running stays as it is, so the API can answer 503 with its plain
+// message; anything else is a message for people.
+func secretFail(err error) error {
+	if errors.Is(err, core.ErrSecretsUnavailable) {
+		return err
+	}
+	return &UserError{Msg: secretErr(err)}
 }
 
 // Setting is one platform credential the companion can set (S8).
@@ -377,7 +453,7 @@ func (h *Hub) RevealPlatformSetting(ctx context.Context, name string, by core.Vi
 	}
 	v, err := h.ad.Secrets.LoadPlatform(name)
 	if err != nil {
-		return "", &UserError{Msg: secretErr(err)}
+		return "", secretFail(err)
 	}
 	if v == "" {
 		return "", userErr("%s isn't set.", name)
@@ -396,7 +472,7 @@ func (h *Hub) PlatformSettingVersions(ctx context.Context, name string, by core.
 	}
 	list, err := h.ad.Secrets.Versions("", "", name)
 	if err != nil {
-		return nil, &UserError{Msg: secretErr(err)}
+		return nil, secretFail(err)
 	}
 	if list == nil {
 		list = []core.SecretVersion{}
@@ -414,7 +490,7 @@ func (h *Hub) RestorePlatformSetting(ctx context.Context, name string, version i
 	}
 	n, err := h.ad.Secrets.Restore("", "", name, version, by.Label())
 	if err != nil {
-		return &UserError{Msg: secretErr(err)}
+		return secretFail(err)
 	}
 	h.logEvent(ctx, state.Event{Actor: by.Label(), Action: "setting.restored",
 		Detail: fmt.Sprintf("Put back version %d of %s, as version %d", version, name, n)})
@@ -467,7 +543,7 @@ func (h *Hub) SetPlatformSetting(ctx context.Context, name, value string, by cor
 		return err
 	}
 	if err := h.ad.Secrets.Set("", "", name, value, by.Label()); err != nil {
-		return &UserError{Msg: secretErr(err)}
+		return secretFail(err)
 	}
 	h.logEvent(ctx, state.Event{Actor: by.Label(), Action: "setting.set", Detail: "Set " + name})
 	if name == "GITHUB_TOKEN" {

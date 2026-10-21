@@ -69,6 +69,8 @@ var secretValueCalls = []struct{ method, path, body string }{
 	{"POST", "/api/settings/secrets/GITHUB_TOKEN/reveal", ""},
 	{"PUT", "/api/settings/secrets/GITHUB_TOKEN", `{"value":"changed-value"}`},
 	{"DELETE", "/api/settings/secrets/GITHUB_TOKEN", ""},
+	{"POST", "/api/apps/movies/envs/prod/saved/google_token:u1/reveal", ""},
+	{"DELETE", "/api/apps/movies/envs/prod/saved/google_token:u1", ""},
 	{"GET", "/api/settings/secrets/GITHUB_TOKEN/versions", ""},
 	{"POST", "/api/settings/secrets/GITHUB_TOKEN/versions/1/restore", ""},
 }

@@ -29,6 +29,14 @@ const (
 	SecretsAsFiles = "files"
 )
 
+// What the app may do with the secrets API (secrets_api). The app's own key always works
+// for its own app and environment only.
+const (
+	SecretsAPIRead  = "read"  // the default: list and read its secrets
+	SecretsAPIWrite = "write" // also save and delete secrets of its own
+	SecretsAPINone  = "none"  // the app gets no access to the secrets API
+)
+
 // Manifest is a parsed homelab.yaml.
 type Manifest struct {
 	ID           string                       `yaml:"id"`
@@ -51,7 +59,10 @@ type Manifest struct {
 	// SecretsAs is how the app gets its secrets: "env" (the default) gives them as files in
 	// /run/secrets and as environment variables; "files" gives only the files.
 	SecretsAs string `yaml:"secrets_as"`
-	Memory    string `yaml:"memory"`
+	// SecretsAPI is what the app's own key may do with the secrets API: "read" (the
+	// default), "write" (also save and delete the app's own secrets) or "none".
+	SecretsAPI string `yaml:"secrets_api"`
+	Memory     string `yaml:"memory"`
 
 	// Folders are the device's shared folders the app sees, e.g. its media library. The
 	// device names them in config.yaml (folders:), so an app can't reach anything else.
@@ -195,6 +206,9 @@ func Parse(b []byte, d Defaults) (*Manifest, error) {
 	if m.SecretsAs == "" {
 		m.SecretsAs = SecretsAsEnv
 	}
+	if m.SecretsAPI == "" {
+		m.SecretsAPI = SecretsAPIRead
+	}
 	if len(m.Environments) == 0 {
 		m.Environments = []string{core.Dev, core.Prod}
 	}
@@ -235,6 +249,11 @@ func (m *Manifest) validate() error {
 	}
 	if m.SecretsAs != SecretsAsEnv && m.SecretsAs != SecretsAsFiles {
 		add("secrets_as must be env or files")
+	}
+	switch m.SecretsAPI {
+	case SecretsAPIRead, SecretsAPIWrite, SecretsAPINone:
+	default:
+		add("secrets_api must be read, write or none")
 	}
 	switch m.Promotion {
 	case core.PromotionManual, core.PromotionAutoDev, core.PromotionAuto:

@@ -132,8 +132,8 @@ const realApi: Api = {
 	setPromotion: async (id, mode) => fixApp(await request<AppView>('PUT', `/api/apps/${enc(id)}/promotion`, { mode })),
 	removeApp: (id) => request('DELETE', `/api/apps/${enc(id)}`),
 	appSecrets: async (id): Promise<AppSecretsView> => {
-		const r = await request<{ envs: EnvSecrets[] | null; canSeeValues?: boolean }>('GET', `/api/apps/${enc(id)}/secrets`);
-		return { envs: list(r.envs).map((e) => ({ ...e, secrets: list(e.secrets) })), canSeeValues: r.canSeeValues === true };
+		const r = await request<{ envs: (Omit<EnvSecrets, 'saved'> & { saved?: EnvSecrets['saved'] | null })[] | null; canSeeValues?: boolean }>('GET', `/api/apps/${enc(id)}/secrets`);
+		return { envs: list(r.envs).map((e) => ({ ...e, secrets: list(e.secrets), saved: list(e.saved) })), canSeeValues: r.canSeeValues === true };
 	},
 	revealSecret: async (id, env, name) => (await request<{ value: string }>('POST', `/api/apps/${enc(id)}/envs/${env}/secrets/${enc(name)}/reveal`)).value,
 	secretVersions: async (id, env, name) => list((await request<{ versions: SecretVersion[] | null }>('GET', `/api/apps/${enc(id)}/envs/${env}/secrets/${enc(name)}/versions`)).versions),
@@ -141,6 +141,8 @@ const realApi: Api = {
 	setSecret: (id, env, name, value) => request('PUT', `/api/apps/${enc(id)}/envs/${env}/secrets/${enc(name)}`, { value }),
 	deleteSecret: (id, env, name) => request('DELETE', `/api/apps/${enc(id)}/envs/${env}/secrets/${enc(name)}`),
 	regenerateSecret: (id, env, name) => request('POST', `/api/apps/${enc(id)}/envs/${env}/secrets/${enc(name)}/regenerate`),
+	revealSavedSecret: async (id, env, name) => (await request<{ value: string }>('POST', `/api/apps/${enc(id)}/envs/${env}/saved/${enc(name)}/reveal`)).value,
+	deleteSavedSecret: (id, env, name) => request('DELETE', `/api/apps/${enc(id)}/envs/${env}/saved/${enc(name)}`),
 	settings: async () => list(await request<SettingView[]>('GET', '/api/settings/secrets')),
 	setSetting: (name, value) => request('PUT', `/api/settings/secrets/${enc(name)}`, { value }),
 	revealSetting: async (name) => (await request<{ value: string }>('POST', `/api/settings/secrets/${enc(name)}/reveal`)).value,

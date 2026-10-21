@@ -68,10 +68,14 @@ for `promote_after`.
 
 ## Secrets
 
-`~/.homelab/secrets/secrets.db` (SQLite) holds every value encrypted with AES-256-GCM. The
+homelab-services (Rust) holds every value in its own SQLite file, encrypted with AES-256-GCM
+(see [platform-services.md](platform-services.md#secrets) and [secrets.openapi.yaml](secrets.openapi.yaml)).
+homelabd talks to it as the `system` caller, which only homelabd can sign. The first time it
+starts, it copies the values and kept versions from the old `~/.homelab/secrets/secrets.db`
+in one step (nothing is copied if any value can't be read) and never deletes that file. The
 key is `~/.homelab/secrets/master.key` (32 random bytes, base64, mode 0600), made on first
-start. Each value is sealed with its own random nonce, and its app, env and name as
-additional data, so a value can't be moved to another secret. If the database has values
+start. Each value is sealed with its own random nonce, and its app, env, name, kind and
+version as additional data, so a value can't be moved to another secret. If the database has values
 and the key file is missing, homelabd stops and says so rather than making a new key.
 
 If a secret exists but can't be read or decrypted, homelabd stops and says so. It only makes

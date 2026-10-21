@@ -60,7 +60,7 @@ describe('secrets API', () => {
 
 	it('lists secrets without values and says whether this person may ask for them', async () => {
 		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json('{"envs":[{"env":"prod","secrets":null}]}')));
-		await expect(api.appSecrets('movies')).resolves.toEqual({ envs: [{ env: 'prod', secrets: [] }], canSeeValues: false });
+		await expect(api.appSecrets('movies')).resolves.toEqual({ envs: [{ env: 'prod', secrets: [], saved: [] }], canSeeValues: false });
 		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json('{"envs":null,"canSeeValues":true}')));
 		await expect(api.appSecrets('movies')).resolves.toEqual({ envs: [], canSeeValues: true });
 	});
@@ -73,6 +73,19 @@ describe('secrets API', () => {
 		expect(fetch.mock.calls[0][1].method).toBe('POST');
 		await expect(api.revealSetting('GITHUB_TOKEN')).resolves.toBe('abc');
 		expect(fetch.mock.calls[1][0]).toBe('/api/settings/secrets/GITHUB_TOKEN/reveal');
+	});
+
+	it('lists what the app saved and shows or deletes one', async () => {
+		const fetch = vi.fn().mockImplementation(async (_u: string, init: RequestInit) => (init.method === 'DELETE' ? new Response(null, { status: 204 }) : json('{"value":"tok"}')));
+		vi.stubGlobal('fetch', fetch);
+		await expect(api.revealSavedSecret('movies', 'prod', 'google:u 1')).resolves.toBe('tok');
+		expect(fetch.mock.calls[0][0]).toBe('/api/apps/movies/envs/prod/saved/google%3Au%201/reveal');
+		expect(fetch.mock.calls[0][1].method).toBe('POST');
+		await api.deleteSavedSecret('movies', 'prod', 'x');
+		expect(fetch.mock.calls[1][0]).toBe('/api/apps/movies/envs/prod/saved/x');
+		expect(fetch.mock.calls[1][1].method).toBe('DELETE');
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json('{"envs":[{"env":"prod","secrets":[],"saved":[{"name":"a","version":2,"updatedAt":"2026-01-01T00:00:00Z"}]}]}')));
+		await expect(api.appSecrets('movies')).resolves.toMatchObject({ envs: [{ saved: [{ name: 'a', version: 2 }] }] });
 	});
 
 	it('lists versions and restores one', async () => {

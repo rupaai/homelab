@@ -99,12 +99,49 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	// Stopping (for an update) ends run normally; systemd then starts the new version.
 	ctx, restart := context.WithCancel(ctx)
 	defer restart()
-	secretsDir := filepath.Join(home, "secrets")
-	secrets, err := secretstore.Open(filepath.Join(secretsDir, "secrets.db"), filepath.Join(secretsDir, "master.key"))
+	exe, err := os.Executable()
 	if err != nil {
+		return err
+	}
+	// Secrets live in homelab-services (encrypted there). homelabd makes the master key,
+	// starts homelab-services with the key's PATH (never the key), and waits for it: nothing
+	// below can start without its secrets, and nothing falls back to plain text.
+	secretsDir := filepath.Join(home, "secrets")
+	keyPath, oldStore := filepath.Join(secretsDir, "master.key"), filepath.Join(secretsDir, "secrets.db")
+	servicesDir := filepath.Join(home, "services")
+	if err := os.MkdirAll(secretsDir, 0o700); err != nil {
 		return fmt.Errorf("secrets: %w", err)
 	}
-	defer secrets.Close()
+	if err := secretstore.EnsureMasterKey(keyPath, oldStore, filepath.Join(servicesDir, "secrets.db")); err != nil {
+		return fmt.Errorf("secrets: %w", err)
+	}
+	storage := storageOrDefault(cfg, home)
+	svc, err := services.New(services.Options{Program: services.Program(exe), DataDir: servicesDir, Port: cfg.ServicesPort,
+		Storage: storage, MaxUpload: cfg.MaxUploadMB << 20, SecretsKey: keyPath, SecretsImport: oldStore, Logger: log})
+	if err != nil {
+		return err
+	}
+	secrets := svc.Secrets()
+	// The GitHub token is a secret too: until the secrets service is up there is none.
+	token := func() string { t, _ := secrets.Platform("GITHUB_TOKEN"); return t }
+	updater := selfupdate.New(selfupdate.Options{Home: home, Version: version, Token: token, Logger: log, Restart: restart})
+	svcCtx, stopServices := context.WithCancel(ctx)
+	defer stopServices()
+	svcDone := make(chan struct{})
+	go func() {
+		defer close(svcDone)
+		// A version installed by an older Homelab came without homelab-services.
+		if _, err := os.Stat(services.Program(exe)); err != nil && selfupdate.Managed(home) {
+			if err := updater.FetchServices(svcCtx); err != nil {
+				log.Warn("couldn't fetch homelab-services", "err", err)
+			}
+		}
+		svc.Run(svcCtx)
+	}()
+	defer func() { stopServices(); <-svcDone }()
+	if err := waitForSecrets(ctx, secrets, svc, secretsWait, log); err != nil {
+		return fmt.Errorf("secrets: %w", err)
+	}
 	apiKey, err := ensurePlatformSecret(secrets, pocketIDAPIKeyName)
 	if err != nil {
 		return fmt.Errorf("Pocket ID API key: %w", err)
@@ -147,7 +184,6 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	token := func() string { t, _ := secrets.Platform("GITHUB_TOKEN"); return t }
 	if token() == "" {
 		log.Warn("GITHUB_TOKEN is not set: private repos and ghcr.io images won't work. Set it in the companion under Settings")
 	}
@@ -167,18 +203,6 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 		notifier = nil
 	}
 	resources := sysres.New(sysres.Options{Logger: log})
-	updater := selfupdate.New(selfupdate.Options{Home: home, Version: version, Token: token, Logger: log, Restart: restart})
-
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	storage := storageOrDefault(cfg, home)
-	svc, err := services.New(services.Options{Program: services.Program(exe), DataDir: filepath.Join(home, "services"), Port: cfg.ServicesPort,
-		Storage: storage, MaxUpload: cfg.MaxUploadMB << 20, Logger: log})
-	if err != nil {
-		return err
-	}
 	appAPIURL := "http://host.docker.internal:" + strconv.Itoa(cfg.AppAPIPort)
 	h := hub.New(hub.Config{DataDir: home, Logger: log, Identity: signer, PushPublicKey: pushPublic,
 		AppAPIURL: appAPIURL, OpenApps: cfg.Addresses == "ip", Folders: cfg.Folders, Storage: storage}, store, hub.Adapters{
@@ -210,19 +234,6 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
 	go openAppDoor(ctx, doorSrv, deployer, cfg.AppAPIPort, log)
-	svcCtx, stopServices := context.WithCancel(ctx)
-	defer stopServices()
-	svcDone := make(chan struct{})
-	go func() {
-		defer close(svcDone)
-		// A version installed by an older Homelab came without homelab-services.
-		if _, err := os.Stat(services.Program(exe)); err != nil && selfupdate.Managed(home) {
-			if err := updater.FetchServices(svcCtx); err != nil {
-				log.Warn("couldn't fetch homelab-services", "err", err)
-			}
-		}
-		svc.Run(svcCtx)
-	}()
 	_, listenPort, _ := net.SplitHostPort(ln.Addr().String())
 	fmt.Printf("Companion: http://localhost:%s\n", listenPort)
 	if cfg.Addresses == "ip" {
@@ -262,6 +273,41 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 
 // actionWait is how long a shutdown waits for running actions before it gives up.
 const actionWait = 2 * time.Minute
+
+// secretsWait is how long a start waits for the secrets service. A first start after an
+// update may have to fetch homelab-services first.
+const secretsWait = 3 * time.Minute
+
+// waitForSecrets waits until secrets work. A service that is up but can't use secrets (no
+// key, the wrong key) is a problem waiting won't fix, so that stops the start with the reason.
+func waitForSecrets(ctx context.Context, secrets *services.Secrets, svc *services.Services, wait time.Duration, log *slog.Logger) error {
+	deadline := time.Now().Add(wait)
+	warned := false
+	for {
+		err := secrets.Check()
+		if err == nil {
+			return nil
+		}
+		if services.IsPermanent(err) || !errors.Is(err, core.ErrSecretsUnavailable) {
+			return err
+		}
+		if time.Now().After(deadline) {
+			if p := svc.Problem(); p != "" {
+				return fmt.Errorf("%w (%s)", core.ErrSecretsUnavailable, p)
+			}
+			return err
+		}
+		if !warned {
+			log.Info("waiting for Homelab's secrets service to start")
+			warned = true
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
 
 // confirmUpdate marks a just-installed version as good once it has kept running a while.
 func confirmUpdate(ctx context.Context, home string, h *hub.Hub, log *slog.Logger) {
