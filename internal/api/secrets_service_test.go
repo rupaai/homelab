@@ -186,7 +186,7 @@ func TestSecretScreensAnswer503WithAPlainMessageWhenTheServiceIsDown(t *testing.
 	owner := r.signIn(t, "owner")
 	downHub := hub.New(hub.Config{DataDir: t.TempDir()}, r.store, hub.Adapters{
 		Source: r.src, Builder: fake.NewBuilder(), Registry: fake.NewRegistry(), Deployer: fake.NewDeployer(),
-		Addresses: fake.NewAddresses(), Health: fake.NewHealth(), Secrets: downSecretsAPI{r.sec}, Identity: r.idp, Email: fake.Email{},
+		Addresses: fake.NewAddresses(), Health: fake.NewHealth(), Secrets: downSecretsAPI{r.sec}, Identity: r.idp, Email: &fake.Email{},
 		Notifier: fake.NewNotifier(), Resources: &fake.Resources{}, System: &fake.System{}, Updater: &fake.Updater{},
 	})
 	h := New(downHub, Options{Version: "test", Static: testSite(), Store: r.store})

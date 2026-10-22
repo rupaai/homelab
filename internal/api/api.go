@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -142,6 +143,8 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("DELETE /api/people/{id}", s.removePerson)
 	mux.HandleFunc("POST /api/people/{id}/invite", s.resendInvite)
 	mux.HandleFunc("POST /api/invites/{token}/redeem", s.redeemInvite)
+	mux.HandleFunc("POST /api/invites/{token}/password", s.invitePassword)
+	mux.HandleFunc("POST /api/email/test", s.testEmail)
 	mux.HandleFunc("GET /recover/{token}", s.recoverLink)
 	mux.HandleFunc("GET /api/apps", s.listApps)
 	mux.HandleFunc("GET /api/projects", s.listProjects)
@@ -218,7 +221,7 @@ func (s *server) handler() http.Handler {
 		}
 		if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
 			hd.Set("Cache-Control", "no-store")
-			if r.URL.Path == "/api/bootstrap" || (r.URL.Path == "/api/setup" && r.Method == http.MethodPost) || (r.URL.Path == "/api/setup/passkey-link" && r.Method == http.MethodPost) || (r.URL.Path == "/api/recover" && r.Method == http.MethodPost) || (r.URL.Path == "/api/password-sign-in" && r.Method == http.MethodPost) || (r.URL.Path == "/api/logout" && r.Method == http.MethodPost) || (strings.HasPrefix(r.URL.Path, "/api/invites/") && strings.HasSuffix(r.URL.Path, "/redeem") && r.Method == http.MethodPost) {
+			if r.URL.Path == "/api/bootstrap" || (r.URL.Path == "/api/setup" && r.Method == http.MethodPost) || (r.URL.Path == "/api/setup/passkey-link" && r.Method == http.MethodPost) || (r.URL.Path == "/api/recover" && r.Method == http.MethodPost) || (r.URL.Path == "/api/password-sign-in" && r.Method == http.MethodPost) || (r.URL.Path == "/api/logout" && r.Method == http.MethodPost) || (strings.HasPrefix(r.URL.Path, "/api/invites/") && (strings.HasSuffix(r.URL.Path, "/redeem") || strings.HasSuffix(r.URL.Path, "/password")) && r.Method == http.MethodPost) {
 				mux.ServeHTTP(w, r)
 				return
 			}
@@ -535,7 +538,12 @@ func (s *server) invitePerson(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in, true) {
 		return
 	}
-	inv, err := s.hub.InvitePerson(actionCtx(r), in.person(""))
+	base, ok := baseURL(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "Homelab couldn't tell what address you're using.")
+		return
+	}
+	inv, err := s.hub.InvitePerson(actionCtx(r), in.person(""), base)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -563,12 +571,87 @@ func (s *server) removePerson(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, steps)
 }
 func (s *server) resendInvite(w http.ResponseWriter, r *http.Request) {
-	link, err := s.hub.ResendInvite(actionCtx(r), r.PathValue("id"))
+	base, ok := baseURL(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "Homelab couldn't tell what address you're using.")
+		return
+	}
+	inv, err := s.hub.ResendInvite(actionCtx(r), r.PathValue("id"), base)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"url": link})
+	writeJSON(w, http.StatusOK, inv)
+}
+
+// baseURL is the address the person making this request used to reach Homelab, for links
+// they will send to someone else. Only the owner or an admin gets here, and the Host header
+// must be a plain host or host:port.
+func baseURL(r *http.Request) (string, bool) {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	u, err := url.Parse(scheme + "://" + r.Host)
+	if err != nil || r.Host == "" || u.Host != r.Host || u.User != nil || u.Hostname() == "" {
+		return "", false
+	}
+	return scheme + "://" + r.Host, true
+}
+
+// invitePassword lets an invited person choose a password when they open their invite on
+// another device (addresses: ip), where a passkey can't be made.
+func (s *server) invitePassword(w http.ResponseWriter, r *http.Request) {
+	if v, _ := core.ViewerFrom(r.Context()); !v.Network {
+		writeErr(w, http.StatusForbidden, "Choosing a password is only for other devices. On the Homelab computer, set up a passkey.")
+		return
+	}
+	if !publicPost(w, r) {
+		return
+	}
+	var in struct {
+		Password string `json:"password"`
+	}
+	if !decode(w, r, &in, true) {
+		return
+	}
+	// Same per-device limit as password sign-in.
+	if !s.allowRecoveryAttempt("password:" + clientIP(r)) {
+		writeErr(w, http.StatusTooManyRequests, "Too many tries. Wait five minutes and try again.")
+		return
+	}
+	p, err := s.hub.SetInvitePassword(r.Context(), r.PathValue("token"), in.Password)
+	if err != nil {
+		var ue *hub.UserError
+		if errors.As(err, &ue) {
+			status := http.StatusBadRequest
+			if strings.HasPrefix(ue.Msg, "This invite") {
+				status = http.StatusGone
+			}
+			writeErr(w, status, ue.Msg)
+			return
+		}
+		s.fail(w, r, err)
+		return
+	}
+	token, err := s.issueSession(r.Context(), p.ID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	_ = s.store.Log(r.Context(), state.Event{Actor: p.Email, Action: "password.sign-in", Detail: "Joined with a password from " + clientIP(r)})
+	writeJSON(w, http.StatusOK, map[string]string{"token": token})
+}
+
+func (s *server) testEmail(w http.ResponseWriter, r *http.Request) {
+	if !decode(w, r, &struct{}{}, false) {
+		return
+	}
+	if err := s.hub.SendTestEmail(actionCtx(r), viewer(r)); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	noContent(w)
 }
 func (s *server) redeemInvite(w http.ResponseWriter, r *http.Request) {
 	if !onThisComputer(r) {

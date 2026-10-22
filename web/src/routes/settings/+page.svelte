@@ -55,6 +55,36 @@
 	}
 	onMount(load);
 
+	// The Gmail address and app password have their own card.
+	const isEmail = (name: string) => name === 'EMAIL_ADDRESS' || name === 'EMAIL_APP_PASSWORD';
+	const credentials = $derived(items.filter((s) => !isEmail(s.name)));
+	const emailItems = $derived(items.filter((s) => isEmail(s.name)));
+	const emailReady = $derived(emailItems.length === 2 && emailItems.every((s) => s.set));
+	let emailAddress = $state('');
+	let emailPassword = $state('');
+	let emailBusy = $state(false);
+	let emailNote = $state('');
+	let emailError = $state('');
+
+	async function saveEmail(e: SubmitEvent) {
+		e.preventDefault();
+		emailBusy = true; emailNote = ''; emailError = '';
+		try {
+			if (emailAddress.trim()) await api.setSetting('EMAIL_ADDRESS', emailAddress.trim());
+			if (emailPassword.trim()) await api.setSetting('EMAIL_APP_PASSWORD', emailPassword.trim());
+			emailAddress = emailPassword = '';
+			emailNote = 'Saved.';
+			await load();
+		} catch (err) { emailError = messageOf(err); }
+		finally { emailBusy = false; }
+	}
+	async function sendTest() {
+		emailBusy = true; emailNote = ''; emailError = '';
+		try { await api.testEmail(); emailNote = 'Sent. Check your inbox.'; }
+		catch (err) { emailError = messageOf(err); }
+		finally { emailBusy = false; }
+	}
+
 	async function save(value: string) {
 		await api.setSetting(editing!.name, value);
 		delete revealed[editing!.name];
@@ -81,9 +111,31 @@
 	{#if !loaded}
 		<p class="muted loading"><Spinner /> Loading…</p>
 	{:else}
+		<section class="card email" aria-labelledby="email-title">
+			<h2 id="email-title">Email <span class="chip" class:missing={!emailReady}>{emailReady ? 'Set up' : 'Not set up'}</span></h2>
+			<p class="muted small">Homelab uses it to email invites. It sends from your Gmail account. Turn on 2-step verification, then make an app password at <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">myaccount.google.com/apppasswords</a>. It is not your Gmail password.</p>
+			{#if canSeeValues}
+				<form onsubmit={saveEmail}>
+					<label for="email-address">Gmail address</label>
+					<input id="email-address" type="email" bind:value={emailAddress} autocomplete="off" placeholder={emailReady ? 'Saved. Type to replace.' : 'you@gmail.com'} />
+					<label for="email-password">App password</label>
+					<input id="email-password" type="password" bind:value={emailPassword} autocomplete="new-password" placeholder={emailReady ? 'Saved. Type to replace.' : '16 letters'} />
+					<div class="email-actions">
+						<button class="btn small primary" type="submit" disabled={emailBusy || (!emailAddress.trim() && !emailPassword.trim())}>Save</button>
+						<button class="btn small" type="button" disabled={emailBusy || !emailReady} onclick={sendTest}>Send test email</button>
+					</div>
+				</form>
+			{:else}
+				<p class="muted small">Only the owner, or people the owner allows, can change these.</p>
+				<div class="email-actions"><button class="btn small" type="button" disabled={emailBusy || !emailReady} onclick={sendTest}>Send test email</button></div>
+			{/if}
+			{#if emailNote}<p class="small" role="status">{emailNote}</p>{/if}
+			{#if emailError}<p class="notice bad" role="alert">{emailError}</p>{/if}
+		</section>
+
 		<section class="card" aria-label="Homelab credentials">
 			<ul>
-				{#each items as s (s.name)}
+				{#each credentials as s (s.name)}
 					<SecretRow name={s.name} set={s.set} updatedAt={s.updatedAt} updatedBy={s.updatedBy} note={s.description} extra={s.appliesAfterRestart ? 'Applies after Homelab restarts' : undefined}>
 						{#snippet actions()}
 							{#if canSeeValues}
@@ -145,6 +197,23 @@
 		display: flex;
 		gap: 0.5rem;
 		align-items: center;
+	}
+	.email h2 {
+		margin: 0 0 0.4rem;
+		font-size: 1.05rem;
+	}
+	.email form {
+		display: grid;
+		gap: 0.45rem;
+	}
+	.email p {
+		margin: 0.3rem 0;
+	}
+	.email-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+		margin-top: 0.3rem;
 	}
 	ul {
 		list-style: none;

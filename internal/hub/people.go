@@ -106,20 +106,25 @@ func (h *Hub) InitialOwnerPasskeyLink(ctx context.Context) (string, error) {
 
 // Invitation is what an admin hands to a new person.
 type Invitation struct {
-	ID  string `json:"id"`
-	URL string `json:"url"` // Homelab's one-time link, for this computer
+	ID         string `json:"id,omitempty"`
+	URL        string `json:"url"`                  // Homelab's one-time link
+	Emailed    bool   `json:"emailed"`              // Homelab emailed the link
+	EmailError string `json:"emailError,omitempty"` // why it didn't, in plain words
 }
 
-// InvitePerson creates a person and returns their invitation links.
-func (h *Hub) InvitePerson(ctx context.Context, p core.Person) (Invitation, error) {
-	link, err := h.invitePerson(ctx, &p)
+// InvitePerson creates a person and returns their invitation. baseURL is the address the
+// link should start with, such as http://192.168.1.183:7080.
+func (h *Hub) InvitePerson(ctx context.Context, p core.Person, baseURL string) (Invitation, error) {
+	link, err := h.invitePerson(ctx, &p, baseURL)
 	if err != nil {
 		return Invitation{}, err
 	}
-	return Invitation{ID: p.ID, URL: link}, nil
+	inv := Invitation{ID: p.ID, URL: link}
+	h.emailInvite(ctx, &inv, p)
+	return inv, nil
 }
 
-func (h *Hub) invitePerson(ctx context.Context, pp *core.Person) (string, error) {
+func (h *Hub) invitePerson(ctx context.Context, pp *core.Person, baseURL string) (string, error) {
 	p := *pp
 	defer func() { *pp = p }()
 	if h.ad.Identity == nil {
@@ -175,7 +180,16 @@ func (h *Hub) invitePerson(ctx context.Context, pp *core.Person) (string, error)
 		return "", err
 	}
 	h.logEvent(ctx, state.Event{Actor: "owner", Action: "person.invited", Detail: "Invited " + p.Name})
-	return "http://localhost:7080/invite/" + value, nil
+	return inviteLink(baseURL, value), nil
+}
+
+func inviteDigest(token string) []byte {
+	sum := sha256.Sum256([]byte(token))
+	return sum[:]
+}
+
+func inviteLink(baseURL, token string) string {
+	return strings.TrimRight(baseURL, "/") + "/invite/" + token
 }
 
 func personGroups(p core.Person) []string {
@@ -192,8 +206,7 @@ func personGroups(p core.Person) []string {
 
 // RedeemInvite issues a fresh identity-provider link for an unexpired invite.
 func (h *Hub) RedeemInvite(ctx context.Context, token string) (string, error) {
-	sum := sha256.Sum256([]byte(token))
-	id, err := h.store.ConsumeInvite(ctx, sum[:])
+	id, err := h.store.ConsumeInvite(ctx, inviteDigest(token))
 	if err != nil {
 		return "", userErr("This invite has expired or was already used. Ask the owner to send a new one.")
 	}
@@ -205,28 +218,33 @@ func (h *Hub) RedeemInvite(ctx context.Context, token string) (string, error) {
 }
 
 // ResendInvite revokes the previous link and creates another one for an invited person.
-func (h *Hub) ResendInvite(ctx context.Context, id string) (string, error) {
+func (h *Hub) ResendInvite(ctx context.Context, id, baseURL string) (Invitation, error) {
 	p, err := h.store.Person(ctx, id)
 	if err != nil {
-		return "", userErr("That person is no longer in Homelab.")
+		return Invitation{}, userErr("That person is no longer in Homelab.")
 	}
 	if p.Status != "invited" {
-		return "", userErr("That person has already signed in. They can use their passkey to return.")
+		return Invitation{}, userErr("That person has already signed in. They can use their passkey to return.")
 	}
 	if err := h.store.RevokeInvites(ctx, id); err != nil {
-		return "", err
+		return Invitation{}, err
+	}
+	if err := h.store.DeletePassword(ctx, id); err != nil {
+		return Invitation{}, err
 	}
 	var token [32]byte
 	if _, err := rand.Read(token[:]); err != nil {
-		return "", err
+		return Invitation{}, err
 	}
 	value := base64.RawURLEncoding.EncodeToString(token[:])
 	sum := sha256.Sum256([]byte(value))
 	if err := h.store.StoreInvite(ctx, sum[:], id, h.cfg.Now().Add(7*24*time.Hour)); err != nil {
-		return "", err
+		return Invitation{}, err
 	}
 	h.logEvent(ctx, state.Event{Actor: "admin", Action: "person.invite_resent", Detail: "Resent an invite for " + p.Name})
-	return "http://localhost:7080/invite/" + value, nil
+	inv := Invitation{ID: id, URL: inviteLink(baseURL, value)}
+	h.emailInvite(ctx, &inv, p)
+	return inv, nil
 }
 
 // UpdatePerson replaces a person's name, roles and grants.
@@ -345,7 +363,10 @@ func (h *Hub) RemovePerson(ctx context.Context, id string) ([]RemovalStep, error
 		err = h.store.DeleteAppSessions(ctx, id)
 	}
 	steps = append(steps, RemovalStep{Name: "End Homelab and app sessions", Done: err == nil, Detail: errorText(err)})
-	err = h.store.DeletePerson(ctx, id)
+	err = h.store.DeletePassword(ctx, id)
+	if err == nil {
+		err = h.store.DeletePerson(ctx, id)
+	}
 	steps = append(steps, RemovalStep{Name: "Remove app access and invitation links", Done: err == nil, Detail: errorText(err)})
 	h.logEvent(ctx, state.Event{Actor: "admin", Action: "person.removed", Detail: "Removed " + p.Name})
 	return steps, nil

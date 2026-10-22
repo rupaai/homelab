@@ -44,6 +44,7 @@ func (s *server) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
+		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
 	if !decode(w, r, &in, true) {
@@ -52,6 +53,10 @@ func (s *server) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 	// Per device only: a shared limit would let other devices lock the owner out.
 	if !s.allowRecoveryAttempt("password:" + clientIP(r)) {
 		writeErr(w, http.StatusTooManyRequests, "Too many tries. Wait five minutes and try again.")
+		return
+	}
+	if strings.TrimSpace(in.Email) != "" {
+		s.emailSignIn(w, r, in.Email, in.Password)
 		return
 	}
 	hash, err := s.passwordHash()
@@ -81,6 +86,28 @@ func (s *server) passwordSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.store.Log(r.Context(), state.Event{Actor: owner.Email, Action: "password.sign-in", Detail: "Signed in with the password from " + clientIP(r)})
+	writeJSON(w, http.StatusOK, map[string]string{"token": token})
+}
+
+// emailSignIn signs in a person by their email and own password. The owner may also use the
+// password from `homelabd password`. Every failure reads the same.
+func (s *server) emailSignIn(w http.ResponseWriter, r *http.Request, email, password string) {
+	fallback, err := s.passwordHash()
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		s.fail(w, r, err)
+		return
+	}
+	p, ok := s.hub.CheckPersonPassword(r.Context(), email, password, fallback)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "That email or password isn't right.")
+		return
+	}
+	token, err := s.issueSession(r.Context(), p.ID)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	_ = s.store.Log(r.Context(), state.Event{Actor: p.Email, Action: "password.sign-in", Detail: "Signed in with a password from " + clientIP(r)})
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
 }
 

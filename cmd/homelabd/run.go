@@ -25,11 +25,11 @@ import (
 	"github.com/rupaai/homelab/internal/adapters/gitmirror"
 	"github.com/rupaai/homelab/internal/adapters/httphealth"
 	"github.com/rupaai/homelab/internal/adapters/local"
-	"github.com/rupaai/homelab/internal/adapters/noop"
 	"github.com/rupaai/homelab/internal/adapters/pocketid"
 	"github.com/rupaai/homelab/internal/adapters/secretstore"
 	"github.com/rupaai/homelab/internal/adapters/selfupdate"
 	"github.com/rupaai/homelab/internal/adapters/services"
+	"github.com/rupaai/homelab/internal/adapters/smtp"
 	"github.com/rupaai/homelab/internal/adapters/sysinfo"
 	"github.com/rupaai/homelab/internal/adapters/sysres"
 	"github.com/rupaai/homelab/internal/adapters/webpush"
@@ -197,6 +197,13 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 		return fmt.Errorf("mirrors: %w", err)
 	}
 
+	// Email reads its address and app password from Settings for each message.
+	mailer := smtp.New(smtp.Options{Logger: log, Credentials: func() (string, string) {
+		a, _ := secrets.Platform(hub.EmailAddressSetting)
+		p, _ := secrets.Platform(hub.EmailPasswordSetting)
+		return a, p
+	}})
+
 	var notifier core.Notifier
 	pushPrivate, pushPublic, err := pushKeys(secrets)
 	if err == nil {
@@ -212,7 +219,7 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 		AppAPIURL: appAPIURL, OpenApps: cfg.Addresses == "ip", Folders: cfg.Folders, Storage: storage}, store, hub.Adapters{
 		Source: gh, Builder: gh, Registry: gh, Deployer: deployer,
 		Addresses: addrs, Health: httphealth.New(nil), Secrets: secrets,
-		Smoke: deployer, Mirror: mirror, Identity: idp, Email: noop.Email{},
+		Smoke: deployer, Mirror: mirror, Identity: idp, Email: mailer,
 		Notifier: notifier, Resources: resources, System: sysinfo.New(sysinfo.Options{}), Updater: updater,
 		Services: svc,
 	})

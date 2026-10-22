@@ -10,8 +10,8 @@ Loopback now identifies a local request for Host checks; it no longer grants own
 | Package | Job |
 |---|---|
 | `internal/adapters/pocketid` | Pocket ID implementation of `core.Identity`: users, groups, OIDC client and one-time access links |
-| `internal/adapters/noop` | Optional email adapter; links remain the invite path. Resend and SMTP are TODOs. |
-| `internal/adapters/fake` | In-memory identity and no-op email fakes for hub tests |
+| `internal/adapters/smtp` | `core.Email` over SMTP with STARTTLS (Gmail by default). Reads its address and app password from platform secrets for each message; does nothing until they are set. Links remain the invite path. |
+| `internal/adapters/fake` | In-memory identity and recording email fakes for hub tests |
 | `internal/hub/access.go` | Shared role and app-grant permission table |
 
 `core.Identity` provides `Ensure`, `Disable`, `LoginLink` and `Observe`. `core.Email` provides
@@ -29,6 +29,7 @@ Both are appended to the migration list. Earlier migrations are unchanged.
 | `people` | Name, optional email, provider id, status and last sign-in time |
 | `person_roles` | Extensible role set; a unique index enforces one owner |
 | `person_grants` | One `use` or `build` grant per person and app |
+| `person_passwords` | Bcrypt hash of a person's own password, for sign-in from other devices (`addresses: ip`) |
 | `invites` | Hashed invitation values with seven-day expiry; can issue fresh Pocket ID links until the first successful Homelab sign-in |
 | `sessions` | Hashed companion session ids, seven-day idle and 30-day absolute expiry |
 | `recovery` | Bcrypt recovery-code hash and used time |
@@ -76,12 +77,14 @@ routes require owner or admin; app routes are checked against the requested app 
 | `POST /api/recover` | `{code}` | `{token}`: a one-time owner session | Local computer; rate-limited |
 | `GET /recover/{token}` | — | Redirects to `/#session=<token>`: a one-time owner session from a 15-minute link | Local computer |
 | `GET /api/people` | — | People, roles, grants and status | Owner or admin |
-| `POST /api/people` | Name, optional email, roles and grants | Invite URL (201) | Owner or admin |
+| `POST /api/people` | Name, optional email, roles and grants | `{url, emailed, emailError?}` (201). The link starts with the address of the request; Homelab emails it when email is set up | Owner or admin |
 | `PUT /api/people/{id}` | Updated name, roles and grants | Updated person | Owner or admin |
-| `POST /api/people/{id}/invite` | — | Replacement invite URL; revokes the old link | Owner or admin |
+| `POST /api/people/{id}/invite` | — | `{url, emailed, emailError?}`; revokes the old link and any password they chose | Owner or admin |
 | `DELETE /api/people/{id}` | — | Removal checklist | Owner or admin; owner cannot be removed |
-| `GET /invite/{token}` | — | Homelab passkey-registration screen | Invite holder, local computer |
+| `GET /invite/{token}` | — | Homelab passkey-registration screen, or a choose-a-password screen on another device (`addresses: ip`) | Invite holder |
 | `POST /api/invites/{token}/redeem` | `{}` | Returns a fresh Pocket ID one-time link while the invite is valid | Invite holder, local computer |
+| `POST /api/invites/{token}/password` | `{password}` (10 to 72 characters) | `{token}`: a session. Uses the invite and signs the person in | Invite holder on another device (`addresses: ip`); rate-limited |
+| `POST /api/email/test` | — | 204; sends a test email to the signed-in person | Owner or admin |
 | `GET /auth/app` | `app`, `env`, absolute `return` | Sends the person through passkey sign-in; the callback then redirects to the app callback with a 60-second code | Person with the app grant |
 | `GET /api/apps` | — | Role-filtered app list | Signed-in person |
 | `GET /api/projects` | — | Apps with build access | Owner/admin or builder |

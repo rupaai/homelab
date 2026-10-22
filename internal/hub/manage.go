@@ -426,11 +426,20 @@ type Setting struct {
 	AppliesAfterRestart bool   `json:"appliesAfterRestart"`
 }
 
+// The platform settings for sending email.
+const (
+	EmailAddressSetting  = "EMAIL_ADDRESS"
+	EmailPasswordSetting = "EMAIL_APP_PASSWORD"
+)
+
 // Settings lists the platform credentials people can set. Others (such as the identity
 // signing key) are Homelab's own and never listed.
 var Settings = []Setting{
 	{Name: "GITHUB_TOKEN", Description: "Lets Homelab read your repos, builds and images. A classic GitHub token " +
 		"(Settings > Developer settings > Tokens (classic)) with the read:packages scope, plus repo for private repos."},
+	{Name: EmailAddressSetting, Description: "The Gmail address Homelab sends email from, such as invites."},
+	{Name: EmailPasswordSetting, Description: "A Gmail app password for that address. Make one at https://myaccount.google.com/apppasswords " +
+		"(2-step verification must be on). It is not your Gmail password."},
 }
 
 // SettingView is a platform credential as the companion shows it.
