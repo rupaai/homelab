@@ -83,7 +83,27 @@ func (i *Identity) Observe(context.Context) ([]core.IdentityUser, error) {
 	return out, nil
 }
 
-// Email discards messages for tests and offline households.
-type Email struct{}
+// Email keeps the messages it was asked to send, for tests. Err makes Send fail; Off makes it
+// report that email isn't set up.
+type Email struct {
+	mu   sync.Mutex
+	Sent []Mail
+	Err  error
+	Off  bool
+}
 
-func (Email) Send(context.Context, string, string, string) error { return nil }
+// Mail is one message an Email was asked to send.
+type Mail struct{ To, Subject, Body string }
+
+func (e *Email) Send(_ context.Context, to, subject, body string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.Off {
+		return core.ErrEmailNotConfigured
+	}
+	if e.Err != nil {
+		return e.Err
+	}
+	e.Sent = append(e.Sent, Mail{to, subject, body})
+	return nil
+}

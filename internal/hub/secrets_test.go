@@ -314,7 +314,7 @@ func TestOnlyOwnerGivesTheSecretsRole(t *testing.T) {
 	if err := r.hub.UpdatePerson(asAdmin, self); !isUserErr(err) {
 		t.Fatalf("admin gave themselves the role: %v", err)
 	}
-	if _, err := r.hub.InvitePerson(asAdmin, core.Person{Name: "New", Email: "new@example.test", Roles: []string{"member", RoleSecrets}}); !isUserErr(err) {
+	if _, err := r.hub.InvitePerson(asAdmin, core.Person{Name: "New", Email: "new@example.test", Roles: []string{"member", RoleSecrets}}, testBase); !isUserErr(err) {
 		t.Fatalf("admin invited someone with the role: %v", err)
 	}
 	if p, _ := r.store.Person(ctx, "member"); contains(p.Roles, RoleSecrets) {
@@ -348,7 +348,7 @@ func TestOnlyOwnerGivesTheSecretsRole(t *testing.T) {
 	if r.hub.CanSeeSecretValues(ctx, "member") {
 		t.Fatal("still allowed after the role was taken away")
 	}
-	if _, err := r.hub.InvitePerson(asOwner, core.Person{Name: "New", Email: "new@example.test", Roles: []string{"admin", RoleSecrets}}); err != nil {
+	if _, err := r.hub.InvitePerson(asOwner, core.Person{Name: "New", Email: "new@example.test", Roles: []string{"admin", RoleSecrets}}, testBase); err != nil {
 		t.Fatalf("owner couldn't invite with the role: %v", err)
 	}
 	// Unknown roles are still refused.

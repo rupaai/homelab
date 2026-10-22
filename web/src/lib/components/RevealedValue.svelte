@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
+	import { copyText } from '#lib/clipboard.ts';
 
 	// A secret's value, shown after someone asked for it. It lives only in this component, so it
 	// is gone when the person hides it or leaves the page.
@@ -11,12 +12,11 @@
 
 	async function copy() {
 		failed = false;
-		try {
-			await navigator.clipboard.writeText(value);
+		if (await copyText(value)) {
 			copied = true;
 			clearTimeout(timer);
 			timer = setTimeout(() => (copied = false), 2000);
-		} catch {
+		} else {
 			failed = true;
 		}
 	}

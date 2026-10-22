@@ -147,3 +147,43 @@ describe('deleting a folder', () => {
 		await expect(api.deleteFileFolder('d')).rejects.toMatchObject({ message: 'The folder still has files. Delete them first.', status: 409 });
 	});
 });
+
+describe('invite and password API', () => {
+	afterEach(() => vi.unstubAllGlobals());
+	const json = (body: string, status = 200) => new Response(body, { status, headers: { 'Content-Type': 'application/json' } });
+	const store = new Map<string, string>();
+	const stubStorage = () => vi.stubGlobal('localStorage', { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k) });
+
+	it('sends the new password to the invite and keeps the session it gets back', async () => {
+		stubStorage();
+		const fetch = vi.fn().mockResolvedValue(json('{"token":"hls_new"}'));
+		vi.stubGlobal('fetch', fetch);
+		await api.setInvitePassword('invite-token', 'a long password');
+		expect(fetch.mock.calls[0][0]).toBe('/api/invites/invite-token/password');
+		expect(fetch.mock.calls[0][1].body).toBe('{"password":"a long password"}');
+		expect(store.get('homelab_session')).toBe('hls_new');
+	});
+
+	it('sends the email only when there is one', async () => {
+		stubStorage();
+		const fetch = vi.fn().mockImplementation(async () => json('{"token":"hls_x"}'));
+		vi.stubGlobal('fetch', fetch);
+		await api.passwordSignIn('pw');
+		await api.passwordSignIn('pw', 'sam@example.test');
+		expect(fetch.mock.calls[0][1].body).toBe('{"password":"pw"}');
+		expect(fetch.mock.calls[1][1].body).toBe('{"email":"sam@example.test","password":"pw"}');
+	});
+
+	it('reads whether the invite was emailed', async () => {
+		const fetch = vi.fn().mockResolvedValue(json('{"id":"p1","url":"http://192.168.1.183:7080/invite/t","emailed":false,"emailError":"Email isn\'t set up, so send the link yourself."}', 201));
+		vi.stubGlobal('fetch', fetch);
+		await expect(api.invitePerson({ name: 'Sam', email: 'sam@example.test', roles: ['member'], grants: {} })).resolves.toMatchObject({ emailed: false, emailError: expect.stringContaining('send the link yourself') });
+	});
+
+	it('asks for a test email', async () => {
+		const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+		vi.stubGlobal('fetch', fetch);
+		await api.testEmail();
+		expect(fetch.mock.calls[0][0]).toBe('/api/email/test');
+	});
+});

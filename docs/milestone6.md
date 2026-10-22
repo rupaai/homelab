@@ -125,6 +125,25 @@ are not copied: only Homelab's own databases go back.
   Only a bcrypt hash is kept, in `secrets/companion-password`. It signs in as the owner.
   Tries are limited to 5 per device and 20 in all every 5 minutes. On the computer itself
   (`localhost`) passkeys and the recovery code work as before.
+- Invited people get their own password. Invite links start with the address the owner used
+  (`http://<IP>:7080/invite/...`). Opened on another device, the invite asks the person to choose
+  a password (at least 10 characters) instead of making a passkey, and signs them in.
+  `POST /api/invites/{token}/password` takes `{password}`, uses the invite once and answers
+  `{token}`, with the same per-device limit as password sign-in. Only a bcrypt hash is kept
+  (table `person_passwords`). Removing the person, or resending their invite, deletes it. Opened
+  on the computer (`localhost`), the invite still makes a passkey.
+- Sign-in on another device takes an email and password. `POST /api/password-sign-in` with
+  `{email, password}` checks that person's own password. Without `email` it checks the owner's
+  password from `homelabd password`, as before. The owner can also add their email to use that
+  password. An unknown email and a wrong password give the same answer.
+- Homelab can email the invite. In Settings > Email add a Gmail address and an app password:
+  turn on 2-step verification on the Google account, make an app password at
+  https://myaccount.google.com/apppasswords, and paste it in. They are stored as the encrypted
+  platform secrets `EMAIL_ADDRESS` and `EMAIL_APP_PASSWORD` and read for each message, so no
+  restart is needed. Mail goes through `smtp.gmail.com:587` with STARTTLS, as plain text.
+  Creating or resending an invite then emails the link and answers
+  `{url, emailed, emailError?}`. If the email fails the invite still works and the link is shown.
+  "Send test email" (`POST /api/email/test`) writes to the signed-in person's own address.
 - Each app environment gets a port from 7100 up on `0.0.0.0`, open to anyone who reaches it,
   without sign-in. Apps get identity headers that name nobody, and Homelab's own cookies are
   dropped before they reach the app. The companion's sign-in is not a cookie, so other ports never receive it. The companion shows app links with the IP it was opened on.
@@ -144,7 +163,7 @@ use) is read directly.
 
 ## Signing in on the device
 
-People open `http://<the device's IP>:7080` and sign in with the password. The passkey sign-in and `homelabd recover` still work on
+People open `http://<the device's IP>:7080` and sign in with their email and password (the owner can leave the email empty). The passkey sign-in and `homelabd recover` still work on
 `localhost`, which on the device is reached with an SSH tunnel from another computer:
 
 ```sh

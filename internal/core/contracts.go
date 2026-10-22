@@ -205,10 +205,14 @@ type Identity interface {
 	Observe(ctx context.Context) ([]IdentityUser, error)
 }
 
-// Email sends optional household messages. The default implementation is a no-op.
+// Email sends plain-text household messages. Send returns ErrEmailNotConfigured when no
+// sender is set up, so callers can say so.
 type Email interface {
 	Send(ctx context.Context, to, subject, body string) error
 }
+
+// ErrEmailNotConfigured is what Email.Send returns until the owner sets up email.
+var ErrEmailNotConfigured = errors.New("Email isn't set up.")
 
 // Notifier delivers push notifications to people's devices (milestone 5, O4).
 type Notifier interface {

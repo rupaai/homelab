@@ -171,6 +171,8 @@ function mockRestore(key: string, version: number, by: string): void {
 }
 const settingStore: SettingView[] = [
 	{ name: 'GITHUB_TOKEN', description: 'Lets Homelab read your repos and builds on GitHub. Make one at github.com/settings/tokens.', set: true, updatedAt: ago(60 * 24 * 12), updatedBy: 'rupaai', appliesAfterRestart: false },
+	{ name: 'EMAIL_ADDRESS', description: 'The Gmail address Homelab sends email from.', set: false, appliesAfterRestart: false },
+	{ name: 'EMAIL_APP_PASSWORD', description: 'A Gmail app password. Make one at https://myaccount.google.com/apppasswords.', set: false, appliesAfterRestart: false },
 ];
 const keyStore: KeyView[] = [
 	{ id: 'k1', prefix: 'hlk_Photo', name: 'Photo service', kind: 'admin', scopes: ['users:read'], createdBy: 'owner', createdByName: 'Rupa', createdAt: ago(60 * 24 * 20), lastUsed: ago(12) },
@@ -258,12 +260,14 @@ export const mockApi: Api = {
 		const id = `person-${household.length + 1}`;
 		const entry: PersonView = { id, ...JSON.parse(JSON.stringify(person)) as PersonInput, status: 'invited' };
 		household.push(entry);
-		return delay({ id, url: 'http://localhost:7080/mock-invite' });
+		return delay({ id, url: 'http://localhost:7080/mock-invite', emailed: !!person.email });
 	},
 	redeemInvite: async () => delay({ url: 'http://localhost:7081/mock-passkey-link' }),
+	setInvitePassword: async () => delay(undefined),
+	testEmail: async () => delay(undefined),
 	async resendInvite(id: string) {
 		if (!household.some((p) => p.id === id && p.status === 'invited')) throw new ApiError('That invite is no longer available.', 400);
-		return delay({ url: 'http://localhost:7080/mock-invite' });
+		return delay({ url: 'http://localhost:7080/mock-invite', emailed: false, emailError: "Email isn't set up, so send the link yourself." });
 	},
 	async updatePerson(id: string, person: PersonInput) {
 		const entry = household.find((p) => p.id === id);

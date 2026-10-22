@@ -465,7 +465,7 @@ func TestSecretsViewAndLogMasking(t *testing.T) {
 		t.Fatalf("logs = %q %v", out, err)
 	}
 	set, _ := r.hub.PlatformSettings(ctx)
-	if len(set) != 1 || set[0].Name != "GITHUB_TOKEN" || !set[0].Set {
+	if len(set) != len(Settings) || set[0].Name != "GITHUB_TOKEN" || !set[0].Set {
 		t.Fatalf("settings = %+v", set)
 	}
 }

@@ -4,6 +4,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { api } from '#lib/api.ts';
+	import { copyText } from '#lib/clipboard.ts';
 	import { takeFragmentToken } from '#lib/token.ts';
 	import { appsStore } from '#lib/apps.svelte.ts';
 	import { ApiError, messageOf } from '#lib/errors.ts';
@@ -12,13 +13,16 @@
 	import '../app.css';
 
 	let { children } = $props();
-	let authState = $state<'loading'|'setup'|'setupDone'|'recoveryDone'|'inviteDone'|'inviteError'|'signedOut'|'password'|'ready'|'error'>('loading');
+	let authState = $state<'loading'|'setup'|'setupDone'|'recoveryDone'|'inviteDone'|'invitePassword'|'inviteError'|'signedOut'|'password'|'ready'|'error'>('loading');
 	let me = $state<MeView | null>(null);
 	let setupName = $state('');
 	let setupEmail = $state('');
 	let setupResult = $state<SetupResult | null>(null);
 	let recoveryCode = $state('');
 	let password = $state('');
+	let email = $state('');
+	let newPassword = $state('');
+	let repeatPassword = $state('');
 	let passwordReady = $state(true);
 	let passwordMode = false;
 	let authError = $state('');
@@ -59,6 +63,9 @@
 		const invite = page.url.pathname.match(/^\/invite\/([^/]+)\/?$/);
 		if (invite) {
 			inviteToken = invite[1];
+			// On another device (addresses: ip) a passkey can't be made, so they choose a password.
+			const onNetwork = await api.bootstrap().then((s) => !!s.password, () => false);
+			if (onNetwork) { authState = 'invitePassword'; return; }
 			try {
 				invitePasskeyUrl = (await api.redeemInvite(inviteToken)).url;
 				authState = 'inviteDone';
@@ -100,7 +107,16 @@
 	}
 	async function passwordSignIn(e: SubmitEvent) {
 		e.preventDefault(); busy = true; authError = '';
-		try { await api.passwordSignIn(password); password = ''; location.reload(); }
+		try { await api.passwordSignIn(password, email.trim() || undefined); password = ''; location.reload(); }
+		catch (e) { authError = messageOf(e); }
+		finally { busy = false; }
+	}
+	async function chooseInvitePassword(e: SubmitEvent) {
+		e.preventDefault(); authError = '';
+		if (newPassword.length < 10) { authError = 'Use at least 10 characters.'; return; }
+		if (newPassword !== repeatPassword) { authError = "The two passwords don't match."; return; }
+		busy = true;
+		try { await api.setInvitePassword(inviteToken, newPassword); newPassword = repeatPassword = ''; location.assign('/'); }
 		catch (e) { authError = messageOf(e); }
 		finally { busy = false; }
 	}
@@ -132,7 +148,8 @@
 	}
 	async function copyRecovery() {
 		if (!setupResult) return;
-		try { await navigator.clipboard.writeText(setupResult.recoveryCode); copied = true; } catch { authError = 'Your browser could not copy the code. Select and copy it instead.'; }
+		copied = await copyText(setupResult.recoveryCode);
+		if (!copied) authError = 'Your browser could not copy the code. Select and copy it instead.';
 	}
 	function downloadRecovery() {
 		if (!setupResult) return;
@@ -167,10 +184,12 @@
 			<div class="auth-card"><h1>Recovery complete</h1><p>{me?.name}, you’re signed in. Set up a passkey so you can sign in without your recovery code next time.</p>{#if recoveryPasskeyUrl}<PasskeyRegistration url={recoveryPasskeyUrl} continueLabel="Continue to Homelab" onContinue={() => location.assign('/')} />{:else}<button class="btn primary" type="button" onclick={refreshRecoveryPasskeyLink} disabled={busy}>{busy ? 'Preparing…' : 'Set up a passkey'}</button>{/if}{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}</div>
 		{:else if authState === 'inviteDone'}
 			<div class="auth-card"><h1>Set up your passkey</h1><p>Your invite is ready. Register a passkey with Pocket ID to finish setting up your Homelab account.</p><PasskeyRegistration url={invitePasskeyUrl} continueLabel="Continue to sign in" onContinue={continueFromInvite} onRefresh={refreshInvitePasskeyLink} refreshDisabled={busy} />{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}</div>
+		{:else if authState === 'invitePassword'}
+			<div class="auth-card"><h1>Choose a password</h1><p>You’ll use it with your email address to sign in to Homelab.</p><form onsubmit={chooseInvitePassword}><label for="new-password">Password</label><input id="new-password" type="password" bind:value={newPassword} autocomplete="new-password" minlength="10" required /><label for="repeat-password">Repeat password</label><input id="repeat-password" type="password" bind:value={repeatPassword} autocomplete="new-password" minlength="10" required /><p class="muted">At least 10 characters.</p>{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}<button class="btn primary" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save password'}</button></form></div>
 		{:else if authState === 'inviteError'}
-			<div class="auth-card"><h1>This invite can’t be used</h1><p class="notice bad" role="alert">{authError}</p><p>Ask the Homelab owner to send a new invite, then open it on the Homelab computer.</p></div>
+			<div class="auth-card"><h1>This invite can’t be used</h1><p class="notice bad" role="alert">{authError}</p><p>Ask the Homelab owner to send a new invite.</p></div>
 		{:else if authState === 'password'}
-			<div class="auth-card"><h1>Sign in to Homelab</h1>{#if passwordReady}<form onsubmit={passwordSignIn}><label for="password">Password</label><input id="password" type="password" bind:value={password} autocomplete="current-password" required />{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}<button class="btn primary" type="submit" disabled={busy}>{busy ? 'Checking…' : 'Sign in'}</button></form>{:else}<p>No password is set yet. On the device, run:</p><p><code>sudo -u homelab /var/lib/homelab/bin/homelabd password --home /var/lib/homelab</code></p><button class="btn" type="button" onclick={() => location.reload()}>Try again</button>{/if}</div>
+			<div class="auth-card"><h1>Sign in to Homelab</h1>{#if passwordReady}<form onsubmit={passwordSignIn}><label for="email">Email <span class="muted">(leave empty if you’re the owner)</span></label><input id="email" type="email" bind:value={email} autocomplete="username" /><label for="password">Password</label><input id="password" type="password" bind:value={password} autocomplete="current-password" required />{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}<button class="btn primary" type="submit" disabled={busy}>{busy ? 'Checking…' : 'Sign in'}</button></form>{:else}<p>No password is set yet. On the device, run:</p><p><code>sudo -u homelab /var/lib/homelab/bin/homelabd password --home /var/lib/homelab</code></p><button class="btn" type="button" onclick={() => location.reload()}>Try again</button>{/if}</div>
 		{:else if authState === 'signedOut'}
 			<div class="auth-card"><h1>Sign in to Homelab</h1><p>Use the passkey you set up with Pocket ID.</p>{#if ownerNeedsPasskey}<p>Passkey setup for the owner hasn’t completed. You can request a fresh Pocket ID setup link here.</p>{#if initialOwnerPasskeyUrl}<PasskeyRegistration url={initialOwnerPasskeyUrl} continueLabel="Continue to sign in" onContinue={() => location.assign('/auth/start')} />{:else}<button class="btn primary" type="button" onclick={prepareInitialOwnerPasskeyLink} disabled={busy}>{busy ? 'Preparing…' : 'Set up passkey'}</button>{/if}{/if}{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}<a class="btn" href="/auth/start" data-sveltekit-reload>Sign in with passkey</a><details><summary>Use your recovery code</summary><form onsubmit={recover}><label for="recovery-code">Recovery code</label><input id="recovery-code" bind:value={recoveryCode} autocomplete="off" required />{#if authError}<p class="notice bad" role="alert">{authError}</p>{/if}<button class="btn" type="submit" disabled={busy}>{busy ? 'Checking…' : 'Sign in once'}</button></form></details></div>
 		{:else}

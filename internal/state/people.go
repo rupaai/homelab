@@ -376,3 +376,50 @@ func (s *Store) AppSessionPerson(ctx context.Context, hash []byte, app, env stri
 	}
 	return s.Person(ctx, id)
 }
+
+// ActivateWithPassword signs an invited person in for the first time with their own password.
+// It fails with ErrNotFound unless they are still invited, and ends their invites, all in one step.
+func (s *Store) ActivateWithPassword(ctx context.Context, id, identityID, hash string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	r, err := tx.ExecContext(ctx, `UPDATE people SET identity_id=?,status='signed_in',last_sign_in=? WHERE id=? AND status='invited'`, identityID, s.now().UnixMilli(), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := r.RowsAffected(); n == 0 {
+		return core.ErrNotFound
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO person_passwords(person_id,hash) VALUES(?,?) ON CONFLICT(person_id) DO UPDATE SET hash=excluded.hash`, id, hash); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM invites WHERE person_id=?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// PasswordHash returns a person's own password hash, or ErrNotFound when they have none.
+func (s *Store) PasswordHash(ctx context.Context, personID string) (string, error) {
+	var hash string
+	err := s.db.QueryRowContext(ctx, `SELECT hash FROM person_passwords WHERE person_id=?`, personID).Scan(&hash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", core.ErrNotFound
+	}
+	return hash, err
+}
+
+// DeletePassword forgets a person's own password. Having none is not an error.
+func (s *Store) DeletePassword(ctx context.Context, personID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM person_passwords WHERE person_id=?`, personID)
+	return err
+}
+
+// AnyPassword says whether any person has chosen their own password.
+func (s *Store) AnyPassword(ctx context.Context) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM person_passwords`).Scan(&n)
+	return n > 0, err
+}

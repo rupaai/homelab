@@ -193,7 +193,14 @@ export interface PersonInput {
 	roles: HouseholdRole[];
 	grants: Record<string, 'use' | 'build'>;
 }
-export interface Invitation { id: string; url: string; }
+export interface Invitation {
+	id?: string;
+	url: string;
+	/** Homelab emailed the link */
+	emailed: boolean;
+	/** why it didn't, in plain words */
+	emailError?: string;
+}
 export interface MeView { personId: string; login: string; name: string; local: boolean; roles: HouseholdRole[]; /** may see and change secret values */ canSeeSecrets?: boolean; }
 export interface BootstrapView { needsSetup: boolean; signInReady: boolean; ownerNeedsPasskey?: boolean; /** addresses: ip, from another device: sign in with the password */ password?: boolean; }
 export interface SetupResult { loginUrl: string; recoveryCode: string; }
@@ -208,12 +215,15 @@ export interface Api {
 	passkeyLink(): Promise<PasskeyLink>;
 	setupOwner(name: string, email: string): Promise<SetupResult>;
 	recover(code: string): Promise<void>;
-	passwordSignIn(password: string): Promise<void>;
+	passwordSignIn(password: string, email?: string): Promise<void>;
 	signOut(): Promise<void>;
 	people(): Promise<PersonView[]>;
 	invitePerson(person: PersonInput): Promise<Invitation>;
 	redeemInvite(token: string): Promise<PasskeyLink>;
-	resendInvite(id: string): Promise<{ url: string }>;
+	/** On another device (addresses: ip): choose a password, which signs the person in. */
+	setInvitePassword(token: string, password: string): Promise<void>;
+	resendInvite(id: string): Promise<Invitation>;
+	testEmail(): Promise<void>;
 	updatePerson(id: string, person: PersonInput): Promise<PersonView>;
 	removePerson(id: string): Promise<RemovalStep[]>;
 	pushKey(): Promise<string>;

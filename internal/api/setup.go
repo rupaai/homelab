@@ -17,7 +17,11 @@ import (
 func (s *server) bootstrapStatus(w http.ResponseWriter, r *http.Request) {
 	if v, ok := core.ViewerFrom(r.Context()); ok && v.Network {
 		// addresses: ip: other devices sign in with the owner's password.
-		writeJSON(w, http.StatusOK, map[string]any{"needsSetup": false, "signInReady": s.passwordSet(), "password": true})
+		ready := s.passwordSet()
+		if !ready {
+			ready, _ = s.store.AnyPassword(r.Context())
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"needsSetup": false, "signInReady": ready, "password": true})
 		return
 	}
 	if !loopbackHost(r.Host) {

@@ -151,6 +151,8 @@ var migrations = []string{
 		created_at INTEGER NOT NULL, last_used_at INTEGER, expires_at INTEGER, revoked_at INTEGER,
 		CHECK((kind='app' AND app IS NOT NULL AND created_by IS NULL) OR (kind='admin' AND app IS NULL AND created_by IS NOT NULL)));
 	CREATE UNIQUE INDEX api_keys_one_per_app_env ON api_keys(app, env) WHERE kind='app' AND revoked_at IS NULL;`,
+	// Each person's own password for other devices (addresses: ip). Only a bcrypt hash is kept.
+	`CREATE TABLE person_passwords (person_id TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE, hash TEXT NOT NULL);`,
 }
 
 func (s *Store) migrate() error {

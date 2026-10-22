@@ -45,6 +45,7 @@ type rig struct {
 	store *state.Store
 	idp   *fake.Identity
 	sec   *fake.Secrets
+	mail  *fake.Email
 }
 
 // flakySource fails every read while fail is set.
@@ -75,16 +76,19 @@ func newRig(t *testing.T) *rig {
 	fail := &atomic.Bool{}
 	idp := fake.NewIdentity()
 	sec := fake.NewSecrets()
+	mail := &fake.Email{}
 	h := hub.New(hub.Config{DataDir: dir}, st, hub.Adapters{
 		Source: flakySource{src, fail}, Builder: fake.NewBuilder(), Registry: fake.NewRegistry(), Deployer: fake.NewDeployer(),
-		Addresses: fake.NewAddresses(), Health: fake.NewHealth(), Secrets: sec, Identity: idp, Email: fake.Email{},
+		Addresses: fake.NewAddresses(), Health: fake.NewHealth(), Secrets: sec, Identity: idp, Email: mail,
 		Notifier: fake.NewNotifier(), Resources: &fake.Resources{Usage: core.DeviceUsage{DiskUsed: 1, DiskTotal: 2}},
 		System: &fake.System{Report: core.SystemInfo{OS: "Ubuntu 24.04.4 LTS", UpdatesPending: -1, SecurityPending: -1}},
 		Updater: &fake.Updater{State: core.UpdateStatus{Managed: true, Current: "build-1", Latest: "build-2", Available: true},
 			TestList: []core.TestVersion{{Version: "pr-7-abc1234", PR: 7, Title: "Better sign-in"}}},
 	})
-	return &rig{h: h, src: src, fail: fail, store: st, idp: idp, sec: sec}
+	return &rig{h: h, src: src, fail: fail, store: st, idp: idp, sec: sec, mail: mail}
 }
+
+const testBase = "http://localhost:7080"
 
 func TestBootstrapCreatesOwnerAndOneTimeRecoveryCode(t *testing.T) {
 	r := newRig(t)
@@ -648,7 +652,7 @@ func TestStatic(t *testing.T) {
 func TestInviteRedemptionReturnsPasskeyRegistrationLink(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
-	invite, err := r.h.InvitePerson(ctx, core.Person{Name: "New person", Email: "new@example.test", Roles: []string{"member"}})
+	invite, err := r.h.InvitePerson(ctx, core.Person{Name: "New person", Email: "new@example.test", Roles: []string{"member"}}, testBase)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -812,7 +816,7 @@ func TestPasskeyLinksAreReissuedAfterAnEarlierLinkIsUsed(t *testing.T) {
 	t.Run("invite", func(t *testing.T) {
 		r := newRig(t)
 		ctx := context.Background()
-		invite, err := r.h.InvitePerson(ctx, core.Person{Name: "New person", Email: "new@example.test", Roles: []string{"member"}})
+		invite, err := r.h.InvitePerson(ctx, core.Person{Name: "New person", Email: "new@example.test", Roles: []string{"member"}}, testBase)
 		if err != nil {
 			t.Fatal(err)
 		}

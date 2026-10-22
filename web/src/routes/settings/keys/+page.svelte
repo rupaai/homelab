@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api } from '#lib/api.ts';
+	import { copyText } from '#lib/clipboard.ts';
 	import { messageOf } from '#lib/errors.ts';
 	import { KEY_SCOPES, endOfDay, keyOwner, keyProblem, scopeWords } from '#lib/keys.ts';
 	import type { KeyView } from '#lib/types.ts';
@@ -58,13 +59,8 @@
 	}
 
 	async function copy() {
-		try {
-			await navigator.clipboard.writeText(created ?? '');
-			copied = true;
-		} catch {
-			copied = false;
-			formError = 'Copying did not work. Select the key and copy it by hand.';
-		}
+		copied = await copyText(created ?? '');
+		if (!copied) formError = 'Copying did not work. Select the key and copy it by hand.';
 	}
 	function done() {
 		created = null;

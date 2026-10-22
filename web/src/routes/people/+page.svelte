@@ -3,7 +3,8 @@
 	import QRCode from 'qrcode';
 	import { api } from '#lib/api.ts';
 	import { messageOf } from '#lib/errors.ts';
-	import type { AppView, HouseholdRole, MeView, PersonInput, PersonView, RemovalStep } from '#lib/types.ts';
+	import type { AppView, HouseholdRole, Invitation, MeView, PersonInput, PersonView, RemovalStep } from '#lib/types.ts';
+	import { canShare, copyText, shareLink } from '#lib/clipboard.ts';
 	import Sheet from '#lib/components/Sheet.svelte';
 	import Spinner from '#lib/components/Spinner.svelte';
 
@@ -21,7 +22,9 @@
 	let email = $state('');
 	let roles = $state<HouseholdRole[]>([]);
 	let grants = $state<Record<string, 'use'|'build'|''>>({});
-	let inviteURL = $state('');
+	let invite = $state<Invitation | null>(null);
+	let copied = $state(false);
+	let invitedEmail = $state('');
 	let invitationFor = $state('');
 	let qrCanvas = $state<HTMLCanvasElement>();
 	let steps = $state<RemovalStep[]>([]);
@@ -52,14 +55,14 @@
 		e.preventDefault(); saving = true; error = '';
 		try {
 			if (editing) await api.updatePerson(editing.id, personInput());
-			else { const result = await api.invitePerson(personInput()); inviteURL = result.url; invitationFor = name.trim(); }
+			else { const result = await api.invitePerson(personInput()); showInvite(result, name.trim(), email.trim()); }
 			editor = false; await load();
 		} catch (e) { error = messageOf(e); }
 		finally { saving = false; }
 	}
 	async function resend(person: PersonView) {
 		saving = true; error = '';
-		try { const result = await api.resendInvite(person.id); inviteURL = result.url; invitationFor = person.name; await load(); }
+		try { const result = await api.resendInvite(person.id); showInvite(result, person.name, person.email ?? ''); await load(); }
 		catch (e) { error = messageOf(e); }
 		finally { saving = false; }
 	}
@@ -69,13 +72,18 @@
 		catch (e) { error = messageOf(e); }
 		finally { saving = false; }
 	}
-	function closeInvite() { inviteURL = ''; }
+	function showInvite(result: Invitation, who: string, to: string) { invite = result; invitationFor = who; invitedEmail = to; copied = false; }
+	function closeInvite() { invite = null; }
 	async function copy(text: string) {
-		try { await navigator.clipboard.writeText(text); }
-		catch { error = 'Your browser could not copy the link. Select and copy it instead.'; }
+		copied = await copyText(text);
+		if (!copied) error = 'Your browser could not copy the link. Select and copy it instead.';
+	}
+	async function share(url: string) {
+		try { await shareLink('Join Homelab', url); }
+		catch { error = 'Your browser could not share the link. Copy it instead.'; }
 	}
 	$effect(() => {
-		const url = inviteURL; const canvas = qrCanvas;
+		const url = invite?.url; const canvas = qrCanvas;
 		if (url && canvas) void QRCode.toCanvas(canvas, url, { width: 200, margin: 1, errorCorrectionLevel: 'M' }).catch(() => { error = 'Homelab could not make the QR code. Copy the invite link instead.'; });
 	});
 	function labelStatus(status: string) { return status === 'signed_in' ? 'Signed in' : status === 'invited' ? 'Invited' : status; }
@@ -115,20 +123,25 @@
 	</Sheet>
 {/if}
 
-{#if inviteURL}
+{#if invite}
 	<Sheet title="Invite {invitationFor}" onclose={closeInvite}>
 		{#snippet children()}
-			{@render localInvite()}
+			{@render inviteResult(invite!)}
 		{/snippet}
 		{#snippet footer()}<button class="btn primary" type="button" onclick={closeInvite}>Done</button>{/snippet}
 	</Sheet>
 {/if}
 
-{#snippet localInvite()}
-	<p>This one-time link works only on this computer, at localhost. It expires in seven days. They’ll use it to add a passkey.</p>
+{#snippet inviteResult(inv: Invitation)}
+	{#if inv.emailed}
+		<p class="notice">We emailed the invite to {invitedEmail}.</p>
+	{:else}
+		<p class="notice bad" role="status">{inv.emailError || "Email isn't set up, so send the link yourself."}</p>
+	{/if}
+	<p>The link works for seven days. It can be used once.</p>
 	<canvas bind:this={qrCanvas} aria-label="QR code for this invite">QR code for the invite link.</canvas>
-	<label for="invite-link">Invite link</label><input id="invite-link" readonly value={inviteURL} onclick={(e) => e.currentTarget.select()} />
-	<button class="btn small" type="button" onclick={() => copy(inviteURL)}>Copy invite link</button>
+	<label for="invite-link">Invite link</label><input id="invite-link" readonly value={inv.url} onclick={(e) => e.currentTarget.select()} />
+	<div class="link-actions"><button class="btn small" type="button" onclick={() => copy(inv.url)}>{copied ? 'Copied' : 'Copy invite link'}</button>{#if canShare()}<button class="btn small" type="button" onclick={() => share(inv.url)}>Share</button>{/if}</div>
 {/snippet}
 
 {#if removing || pendingRemoval}
@@ -145,5 +158,5 @@
 <style>
 	.page-head{display:flex;align-items:center;justify-content:space-between;gap:1rem}.page-head p{margin:.35rem 0 0}
 	.loading{display:flex;align-items:center;gap:.5rem}.person-card{display:grid;gap:.8rem}.person-main{display:flex;gap:.75rem;align-items:flex-start}.avatar{width:2.5rem;height:2.5rem;border-radius:50%;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);font-weight:700;flex:none}.person-copy{min-width:0}.person-copy h2,.person-copy p{margin:0 0 .2rem}.person-copy h2{font-size:1.05rem}.person-actions{display:flex;flex-wrap:wrap;gap:.4rem}.small{font-size:.88rem}.result h2{margin:.1rem 0 .6rem}.result p{margin:.4rem 0}
-	form{display:grid;gap:.45rem}fieldset{border:1px solid var(--border);border-radius:10px;padding:.6rem .75rem;margin:.5rem 0}legend{font-weight:700;padding:0 .2rem}.check{display:flex;align-items:center;gap:.5rem;margin:.35rem 0}.check input{width:auto}select{width:100%;margin:0 0 .6rem}canvas{display:block;margin:.5rem auto 1rem;background:white;padding:.5rem;border-radius:8px;max-width:100%}
+	form{display:grid;gap:.45rem}fieldset{border:1px solid var(--border);border-radius:10px;padding:.6rem .75rem;margin:.5rem 0}legend{font-weight:700;padding:0 .2rem}.check{display:flex;align-items:center;gap:.5rem;margin:.35rem 0}.check input{width:auto}select{width:100%;margin:0 0 .6rem}	.link-actions{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.5rem}canvas{display:block;margin:.5rem auto 1rem;background:white;padding:.5rem;border-radius:8px;max-width:100%}
 </style>

@@ -12,6 +12,9 @@ import (
 	"github.com/rupaai/homelab/internal/state"
 )
 
+// testBase is the address invite links start with in tests.
+const testBase = "http://localhost:7080"
+
 func TestSetupOwnerStoresCanonicalIdentityID(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
@@ -55,7 +58,7 @@ func TestInviteCanIssueFreshLinksUntilSignInAndIsHashed(t *testing.T) {
 	if _, err := r.store.AddApp(ctx, structApp()); err != nil {
 		t.Fatal(err)
 	}
-	link, err := r.hub.InvitePerson(ctx, core.Person{Name: "Sam", Email: "sam@example.test", Roles: []string{"member"}, Grants: map[string]string{"movies": "use"}})
+	link, err := r.hub.InvitePerson(ctx, core.Person{Name: "Sam", Email: "sam@example.test", Roles: []string{"member"}, Grants: map[string]string{"movies": "use"}}, testBase)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,19 +100,19 @@ func TestResendInviteRevokesOldLink(t *testing.T) {
 	if _, err := r.store.AddApp(ctx, structApp()); err != nil {
 		t.Fatal(err)
 	}
-	first, err := r.hub.InvitePerson(ctx, core.Person{Name: "Sam", Roles: []string{"member"}, Grants: map[string]string{"movies": "use"}})
+	first, err := r.hub.InvitePerson(ctx, core.Person{Name: "Sam", Roles: []string{"member"}, Grants: map[string]string{"movies": "use"}}, testBase)
 	if err != nil {
 		t.Fatal(err)
 	}
 	resend, err := r.hub.ResendInvite(ctx, func() string {
 		people, _ := r.hub.People(ctx)
 		return people[0].ID
-	}())
+	}(), testBase)
 	if err != nil {
 		t.Fatal(err)
 	}
 	oldToken := strings.TrimPrefix(mustURLPath(t, first.URL), "/invite/")
-	newToken := strings.TrimPrefix(mustURLPath(t, resend), "/invite/")
+	newToken := strings.TrimPrefix(mustURLPath(t, resend.URL), "/invite/")
 	if oldToken == newToken {
 		t.Fatal("resend kept the same invite token")
 	}
