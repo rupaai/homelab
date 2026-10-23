@@ -128,13 +128,9 @@ func waitBody(t *testing.T, port int, want string) {
 	t.Fatalf("port %d never answered %q (last: %q)", port, want, last)
 }
 
-func TestIntegrationFullCycle(t *testing.T) {
-	if os.Getenv("HOMELAB_DOCKER_TESTS") != "1" {
-		t.Skip("set HOMELAB_DOCKER_TESTS=1 to run against real Docker")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
+// startRegistry runs the throwaway registry and removes it when the test ends.
+func startRegistry(t *testing.T) {
+	t.Helper()
 	exec.Command("docker", "rm", "-f", "homelab-itest-registry").Run()
 	sh(t, "", "run", "-d", "--name", "homelab-itest-registry", "-p", testRegistry+":5000", "mirror.gcr.io/library/registry:2")
 	t.Cleanup(func() {
@@ -146,6 +142,16 @@ func TestIntegrationFullCycle(t *testing.T) {
 			break
 		}
 	}
+}
+
+func TestIntegrationFullCycle(t *testing.T) {
+	if os.Getenv("HOMELAB_DOCKER_TESTS") != "1" {
+		t.Skip("set HOMELAB_DOCKER_TESTS=1 to run against real Docker")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	startRegistry(t)
 	d1, d2 := buildAndPush(t, "v1"), buildAndPush(t, "v2")
 	side := buildSide(t)
 	t.Cleanup(func() {
@@ -324,5 +330,134 @@ func TestIntegrationFullCycle(t *testing.T) {
 	}
 	if err := dep.Stop(ctx, app, env); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// psql runs SQL in the environment's database container and returns what it prints.
+func psql(t *testing.T, dep *Deployer, app, env, sql string) string {
+	t.Helper()
+	var out strings.Builder
+	err := dep.dbExec(context.Background(), app, env, strings.NewReader(sql), &out, "psql", "-U", "app", "-d", "app", "-v", "ON_ERROR_STOP=1", "-tA")
+	if err != nil {
+		t.Fatalf("psql: %v", err)
+	}
+	return strings.TrimSpace(out.String())
+}
+
+// A real postgres next to the app: it starts before the app, listens on 127.0.0.1 only, and
+// a dump taken while it runs can be put back after the data changed.
+func TestIntegrationPostgres(t *testing.T) {
+	if os.Getenv("HOMELAB_DOCKER_TESTS") != "1" {
+		t.Skip("set HOMELAB_DOCKER_TESTS=1 to run against real Docker")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	startRegistry(t)
+	digest := buildAndPush(t, "v1")
+	t.Cleanup(func() { exec.Command("docker", "rmi", "-f", testImage+"@"+digest).Run() })
+
+	dep, err := New(Options{Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const app, env = "itest", "pg"
+	t.Cleanup(func() {
+		exec.Command("docker", "compose", "-p", project(app, env), "down", "-v", "--remove-orphans").Run()
+	})
+	// Postgres makes the files in its folder its own, so the helper removes them again.
+	dataDir, err := os.MkdirTemp("", "homelab-itest-pg-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { dep.Remove(context.Background(), dataDir) })
+
+	port, dbPort := freePort(t), freePort(t)
+	spec := core.EnvSpec{
+		App: app, Env: env,
+		Release:  core.Release{Commit: "commit-v1", Image: testImage, Tag: "v1", Digest: digest},
+		Port:     8080,
+		HostPort: port,
+		Memory:   "64m",
+		Secrets: map[string]string{
+			core.DatabasePassword: "itest-password-1",
+			core.DatabaseURL:      "postgres://app:itest-password-1@db:5432/app",
+		},
+		Postgres:  &core.Postgres{Port: dbPort, DataDir: dataDir},
+		OpenPorts: true, // the database stays on 127.0.0.1 anyway
+	}
+	// Prepare downloads the database image too.
+	if err := dep.Prepare(ctx, spec); err != nil {
+		t.Fatal("prepare:", err)
+	}
+	if have, err := dep.api.hasImage(ctx, core.DatabaseImage); err != nil || !have {
+		t.Fatalf("the database image should be here after Prepare: %v %v", have, err)
+	}
+	if err := dep.Deploy(ctx, spec); err != nil {
+		t.Fatal("deploy:", err)
+	}
+	waitBody(t, port, "v1")
+
+	// Both containers belong to the environment, and the app waited for the database.
+	runs, err := dep.Observe(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runs = itestRuns(runs); len(runs) != 1 || runs[0].State != core.StateRunning || runs[0].Incomplete {
+		t.Fatalf("observe: %+v", runs)
+	}
+	id := sh(t, "", "ps", "-q", "--filter", "label=com.docker.compose.project="+project(app, env), "--filter", "label=homelab.service=db")
+	if id == "" {
+		t.Fatal("no database container")
+	}
+	if bound := sh(t, "", "port", id, "5432/tcp"); !strings.Contains(bound, fmt.Sprintf("127.0.0.1:%d", dbPort)) || strings.Contains(bound, "0.0.0.0") {
+		t.Errorf("the database is published as %q, want 127.0.0.1 only", bound)
+	}
+	if got := sh(t, "", "inspect", "-f", "{{.HostConfig.Memory}}", id); got != "268435456" {
+		t.Errorf("database memory = %s", got)
+	}
+
+	psql(t, dep, app, env, "create table notes (id int); insert into notes values (1), (2);")
+	file := filepath.Join(t.TempDir(), "homelab-db.dump")
+	if err := dep.DumpDatabase(ctx, app, env, file); err != nil {
+		t.Fatal("dump:", err)
+	}
+	if b, err := os.ReadFile(file); err != nil || !strings.HasPrefix(string(b), "PGDMP") {
+		t.Fatalf("the dump isn't a custom-format dump: %v", err)
+	}
+	if err := dep.DumpDatabase(ctx, app, env, file); err == nil {
+		t.Error("dumping onto an existing file should fail")
+	}
+	if left, _ := filepath.Glob(file + ".tmp"); len(left) != 0 {
+		t.Errorf("left over: %v", left)
+	}
+
+	// Change the data, then put the dump back: only what the dump holds is left.
+	psql(t, dep, app, env, "insert into notes values (3); create table later (x int); create schema extra; create table extra.t (y int);")
+	if err := dep.StopApp(ctx, app, env); err != nil {
+		t.Fatal("stop app:", err)
+	}
+	if err := dep.RestoreDatabase(ctx, app, env, file); err != nil {
+		t.Fatal("restore:", err)
+	}
+	if got := psql(t, dep, app, env, "select count(*) from notes"); got != "2" {
+		t.Errorf("notes has %s rows after the restore, want 2", got)
+	}
+	if got := psql(t, dep, app, env, "select coalesce(to_regclass('later')::text, '') || coalesce(to_regclass('extra.t')::text, '')"); got != "" {
+		t.Errorf("what the dump doesn't hold is still there: %q", got)
+	}
+	if err := dep.StartApp(ctx, app, env); err != nil {
+		t.Fatal("start app:", err)
+	}
+	waitBody(t, port, "v1")
+	if runs, _ = dep.Observe(ctx); itestRuns(runs)[0].State != core.StateRunning {
+		t.Errorf("after StartApp: %+v", runs)
+	}
+
+	// With the environment stopped there is no database to dump.
+	if err := dep.Stop(ctx, app, env); err != nil {
+		t.Fatal(err)
+	}
+	if err := dep.DumpDatabase(ctx, app, env, file+"2"); err == nil || !strings.Contains(err.Error(), "no running database") {
+		t.Errorf("dump of a stopped database: %v", err)
 	}
 }

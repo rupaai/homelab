@@ -63,6 +63,9 @@ type Manifest struct {
 	// default), "write" (also save and delete the app's own secrets) or "none".
 	SecretsAPI string `yaml:"secrets_api"`
 	Memory     string `yaml:"memory"`
+	// Database is "postgres" or "sqlite" (or empty for none). Each environment gets its own
+	// database and a DATABASE_URL (see core.Database*).
+	Database string `yaml:"database"`
 
 	// Folders are the device's shared folders the app sees, e.g. its media library. The
 	// device names them in config.yaml (folders:), so an app can't reach anything else.
@@ -260,6 +263,7 @@ func (m *Manifest) validate() error {
 	default:
 		add("promotion must be manual, auto-dev or auto")
 	}
+	m.checkDatabase(add)
 	hasDev, hasProd := false, false
 	for _, e := range m.Environments {
 		switch e {
@@ -352,6 +356,42 @@ func (m *Manifest) validate() error {
 		return fmt.Errorf("%s", strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+// checkDatabase checks database: and the names Homelab sets for the database.
+func (m *Manifest) checkDatabase(add func(string, ...any)) {
+	switch m.Database {
+	case "":
+		return
+	case core.DatabasePostgres:
+		for _, s := range m.Services {
+			if s.Name == core.DatabaseService {
+				add("services.%s: the name %s is used by the database", s.Name, s.Name)
+			}
+		}
+	case core.DatabaseSQLite:
+		for _, d := range m.Data {
+			if d.Name == core.DatabaseFolder || d.Path == core.DatabaseSQLiteDir {
+				add("data %q: the name %s and the path %s are used by the database", d.Name, core.DatabaseFolder, core.DatabaseSQLiteDir)
+			}
+		}
+	default:
+		add("database must be postgres or sqlite")
+		return
+	}
+	for _, name := range core.DatabaseNames(m.Database) {
+		if slices.Contains(m.Secrets, name) || slices.Contains(m.GenerateSecrets, name) {
+			add("%s is set by Homelab for the database; remove it from secrets and generate_secrets", name)
+		}
+		if _, ok := m.Env[name]; ok {
+			add("%s is set by Homelab for the database; remove it from env", name)
+		}
+		for env, vars := range m.EnvFor {
+			if _, ok := vars[name]; ok {
+				add("%s is set by Homelab for the database; remove it from env_for.%s", name, env)
+			}
+		}
+	}
 }
 
 // checkMounts checks one container's data and folder lists.

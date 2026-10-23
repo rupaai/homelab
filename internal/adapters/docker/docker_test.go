@@ -346,3 +346,84 @@ func TestWriteSecretFiles(t *testing.T) {
 		t.Fatalf("files left: %v", entries)
 	}
 }
+
+func TestComposeYAMLPostgres(t *testing.T) {
+	s := testSpec()
+	s.Secrets = map[string]string{core.DatabasePassword: "pw-value-123", core.DatabaseURL: "postgres://app:pw-value-123@db:5432/app"}
+	s.Postgres = &core.Postgres{Port: 18085, DataDir: "/data/movies/homelab-db"}
+	render := func() composeFile {
+		t.Helper()
+		b, err := composeYAML(s, "/srv/homelab/movies/dev")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "pw-value-123") {
+			t.Fatalf("the password is in the compose file:\n%s", b)
+		}
+		var f composeFile
+		if err := json.Unmarshal(b, &f); err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	f := render()
+	db, app := f.Services["db"], f.Services["app"]
+	if db.Image != "postgres:17-alpine" || db.MemLimit != "256m" || db.Restart != "unless-stopped" || db.PullPolicy != "never" {
+		t.Errorf("db = %+v", db)
+	}
+	if len(db.Ports) != 1 || db.Ports[0] != "127.0.0.1:18085:5432" {
+		t.Errorf("db ports = %v", db.Ports)
+	}
+	if db.Labels[labelApp] != "movies" || db.Labels[labelEnv] != "dev" || db.Labels[labelService] != "db" {
+		t.Errorf("db labels = %v", db.Labels)
+	}
+	if db.Environment["POSTGRES_USER"] != "app" || db.Environment["POSTGRES_DB"] != "app" ||
+		db.Environment["POSTGRES_PASSWORD_FILE"] != "/run/secrets/DATABASE_PASSWORD" || len(db.Environment) != 3 {
+		t.Errorf("db environment = %v", db.Environment)
+	}
+	var data, secrets bool
+	for _, v := range db.Volumes {
+		data = data || (v.Source == "/data/movies/homelab-db" && v.Target == "/var/lib/postgresql/data" && !v.ReadOnly)
+		secrets = secrets || (v.Source == "/srv/homelab/movies/dev/secrets" && v.Target == "/run/secrets" && v.ReadOnly)
+	}
+	if !data || !secrets {
+		t.Errorf("db volumes = %+v", db.Volumes)
+	}
+	if hc := db.Healthcheck; hc == nil || hc.Interval != "2s" || hc.Retries != 30 || !strings.Contains(strings.Join(hc.Test, " "), "pg_isready") || !strings.Contains(strings.Join(hc.Test, " "), "-U app -d app") {
+		t.Errorf("db healthcheck = %+v", hc)
+	}
+	if app.DependsOn["db"].Condition != "service_healthy" || len(app.DependsOn) != 1 {
+		t.Errorf("app depends_on = %+v", app.DependsOn)
+	}
+	if got := f.Services["app"].Ports; len(got) != 1 || got[0] != "127.0.0.1:18080:8080" {
+		t.Errorf("app ports = %v", got)
+	}
+
+	// The database port stays on this computer even when the app's ports are open.
+	s.OpenPorts = true
+	if db := render().Services["db"]; db.Ports[0] != "127.0.0.1:18085:5432" {
+		t.Errorf("open ports: db ports = %v", db.Ports)
+	}
+
+	// Without a database nothing is added or waited for.
+	b, _ := composeYAML(testSpec(), "/srv/homelab/movies/dev")
+	if strings.Contains(string(b), "depends_on") || strings.Contains(string(b), "postgres") {
+		t.Errorf("a database appeared:\n%s", b)
+	}
+
+	// What it can't render without.
+	s.Postgres.Port = 0
+	if _, err := composeYAML(s, "/x"); err == nil {
+		t.Error("a database without a port should be refused")
+	}
+	s.Postgres.Port = 18085
+	delete(s.Secrets, core.DatabasePassword)
+	if _, err := composeYAML(s, "/x"); err == nil {
+		t.Error("a database without a password should be refused")
+	}
+	s.Secrets[core.DatabasePassword] = "pw-value-123"
+	s.Services = []core.Service{{Name: "db", Image: "mariadb:11"}}
+	if _, err := composeYAML(s, "/x"); err == nil {
+		t.Error("a service named db next to the database should be refused")
+	}
+}

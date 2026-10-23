@@ -55,19 +55,33 @@ type composeFile struct {
 }
 
 type composeService struct {
-	Image       string            `json:"image"`
-	PullPolicy  string            `json:"pull_policy"`
-	Restart     string            `json:"restart"`
-	EnvFile     []string          `json:"env_file,omitempty"`
-	Environment map[string]string `json:"environment,omitempty"`
-	Ports       []string          `json:"ports"`
-	Volumes     []composeMount    `json:"volumes,omitempty"`
-	Devices     []string          `json:"devices,omitempty"`
-	GroupAdd    []string          `json:"group_add,omitempty"`
-	MemLimit    string            `json:"mem_limit,omitempty"`
-	ExtraHosts  []string          `json:"extra_hosts,omitempty"`
-	Logging     composeLogging    `json:"logging"`
-	Labels      map[string]string `json:"labels"`
+	Image       string                    `json:"image"`
+	PullPolicy  string                    `json:"pull_policy"`
+	Restart     string                    `json:"restart"`
+	EnvFile     []string                  `json:"env_file,omitempty"`
+	Environment map[string]string         `json:"environment,omitempty"`
+	Ports       []string                  `json:"ports"`
+	Volumes     []composeMount            `json:"volumes,omitempty"`
+	Devices     []string                  `json:"devices,omitempty"`
+	GroupAdd    []string                  `json:"group_add,omitempty"`
+	MemLimit    string                    `json:"mem_limit,omitempty"`
+	ExtraHosts  []string                  `json:"extra_hosts,omitempty"`
+	Logging     composeLogging            `json:"logging"`
+	Labels      map[string]string         `json:"labels"`
+	DependsOn   map[string]composeDepends `json:"depends_on,omitempty"`
+	Healthcheck *composeHealthcheck       `json:"healthcheck,omitempty"`
+}
+
+// composeDepends makes a service wait until another one is healthy.
+type composeDepends struct {
+	Condition string `json:"condition"`
+}
+
+type composeHealthcheck struct {
+	Test     []string `json:"test"`
+	Interval string   `json:"interval"`
+	Timeout  string   `json:"timeout"`
+	Retries  int      `json:"retries"`
 }
 
 // addHostGateway gives the app container the name host.docker.internal for Docker's bridge
@@ -211,6 +225,18 @@ func composeYAML(spec core.EnvSpec, envDir string) ([]byte, error) {
 		}
 		file.Services[s.Name] = x
 	}
+	if spec.Postgres != nil {
+		db, err := postgresService(spec, envDir, svc.Logging)
+		if err != nil {
+			return nil, err
+		}
+		if _, dup := file.Services[core.DatabaseService]; dup {
+			return nil, fmt.Errorf("there are two services named %q", core.DatabaseService)
+		}
+		file.Services[core.DatabaseService] = db
+		svc.DependsOn = map[string]composeDepends{core.DatabaseService: {Condition: "service_healthy"}}
+		file.Services[serviceName] = svc
+	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
@@ -219,6 +245,44 @@ func composeYAML(spec core.EnvSpec, envDir string) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// postgresService is the database container: its password comes from the secrets folder
+// (POSTGRES_PASSWORD_FILE), and its port is only ever published on 127.0.0.1, for the
+// connection from the Mac and for homelab-services, whatever OpenPorts says.
+func postgresService(spec core.EnvSpec, envDir string, logging composeLogging) (composeService, error) {
+	pg := spec.Postgres
+	if pg.Port <= 0 {
+		return composeService{}, fmt.Errorf("%s/%s needs a port for its database", spec.App, spec.Env)
+	}
+	if spec.Secrets[core.DatabasePassword] == "" {
+		return composeService{}, fmt.Errorf("%s/%s has no database password", spec.App, spec.Env)
+	}
+	data, err := mounts([]core.Mount{{HostPath: pg.DataDir, ContainerPath: core.DatabasePostgresDir}})
+	if err != nil {
+		return composeService{}, err
+	}
+	return composeService{
+		Image:      core.DatabaseImage,
+		PullPolicy: "never",
+		Restart:    "unless-stopped",
+		Ports:      []string{"127.0.0.1:" + strconv.Itoa(pg.Port) + ":5432"},
+		MemLimit:   core.DatabaseMemory,
+		Logging:    logging,
+		Labels:     map[string]string{labelApp: dollars(spec.App), labelEnv: dollars(spec.Env), labelService: core.DatabaseService},
+		Environment: map[string]string{
+			"POSTGRES_USER":          core.DatabaseUser,
+			"POSTGRES_DB":            core.DatabaseName,
+			"POSTGRES_PASSWORD_FILE": secretsMount + "/" + core.DatabasePassword,
+		},
+		Volumes: append(data, composeMount{Type: "bind", Source: dollars(filepath.Join(envDir, secretsDir)), Target: secretsMount, ReadOnly: true}),
+		Healthcheck: &composeHealthcheck{
+			// Over TCP, so it only passes once the real server runs: the one that sets up a new
+			// database listens on its socket alone.
+			Test:     []string{"CMD", "pg_isready", "-h", "127.0.0.1", "-U", core.DatabaseUser, "-d", core.DatabaseName},
+			Interval: "2s", Timeout: "3s", Retries: 30,
+		},
+	}, nil
 }
 
 // envFile renders vars in Compose's env_file format, sorted by name. Values are quoted so

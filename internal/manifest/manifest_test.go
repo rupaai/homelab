@@ -201,3 +201,40 @@ func TestSecretsAPI(t *testing.T) {
 		}
 	}
 }
+
+func TestDatabase(t *testing.T) {
+	for _, engine := range []string{"postgres", "sqlite"} {
+		m, err := Parse([]byte(movies+"database: "+engine+"\n"), Defaults{})
+		if err != nil || m.Database != engine {
+			t.Fatalf("%s: %+v %v", engine, m, err)
+		}
+	}
+	if m, err := Parse([]byte(movies), Defaults{}); err != nil || m.Database != "" {
+		t.Fatalf("none: %+v %v", m, err)
+	}
+	svc := "services:\n  - {name: db, image: \"mariadb:11\"}\n"
+	cases := map[string]struct{ doc, want string }{
+		"unknown engine":      {movies + "database: mysql\n", "database must be postgres or sqlite"},
+		"postgres db service": {movies + "database: postgres\n" + svc, "the name db is used by the database"},
+		"password secret":     {movies + "database: postgres\ngenerate_secrets: [DATABASE_PASSWORD]\n", "DATABASE_PASSWORD"},
+		"url secret":          {strings.Replace(movies, "[TMDB_API_KEY]", "[TMDB_API_KEY, DATABASE_URL]", 1) + "database: postgres\n", "DATABASE_URL"},
+		"url setting":         {strings.Replace(movies, "dev: {LOG_LEVEL: debug}", "prod: {DATABASE_URL: x}", 1) + "database: postgres\n", "DATABASE_URL"},
+		"sqlite url setting":  {strings.Replace(movies, "env: {", "env: {DATABASE_URL: x, ", 1) + "database: sqlite\n", "DATABASE_URL"},
+		"sqlite path setting": {strings.Replace(movies, "env: {", "env: {DATABASE_PATH: x, ", 1) + "database: sqlite\n", "DATABASE_PATH"},
+		"sqlite folder name":  {strings.Replace(movies, "name: data,", "name: homelab-db,", 1) + "database: sqlite\n", "homelab-db"},
+		"sqlite folder path":  {strings.Replace(movies, "path: /data", "path: /homelab/db", 1) + "database: sqlite\n", "/homelab/db"},
+	}
+	for name, c := range cases {
+		_, err := Parse([]byte(c.doc), Defaults{})
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: got %v, want an error with %q", name, err, c.want)
+		}
+	}
+	if _, err := Parse([]byte(movies+"database: sqlite\n"+svc), Defaults{}); err != nil {
+		t.Errorf("sqlite with a service named db: %v", err)
+	}
+	// Without a database the names are free, as they always were.
+	if _, err := Parse([]byte(movies+"generate_secrets: [DATABASE_URL]\n"+svc), Defaults{}); err != nil {
+		t.Errorf("no database: %v", err)
+	}
+}

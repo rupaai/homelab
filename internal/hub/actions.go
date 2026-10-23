@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -431,7 +433,22 @@ func (h *Hub) promote(ctx context.Context, a state.App, rel core.Release, actor 
 	if err := h.ad.Deployer.StopApp(ctx, a.ID, core.Prod); err != nil {
 		return fmt.Errorf("Couldn't stop prod to copy its data: %w", err)
 	}
-	backup, err := h.backupData(ctx, a.ID, core.Prod, rel.Short(), dataNames(m.Data))
+	// A postgres database is dumped (prod's services keep running, the database too), and a
+	// sqlite file is copied with the app's other data. Both are looked for in the version
+	// prod runs now, because that is the database there is.
+	names, dump := dataNames(m.Data), false
+	if m.Database == core.DatabaseSQLite {
+		names = append(names, core.DatabaseFolder)
+	}
+	if before.Want != nil {
+		if pm, err := h.parse(before.Want.Manifest, a.Repo); err == nil {
+			dump = pm.Database == core.DatabasePostgres
+			if pm.Database == core.DatabaseSQLite && m.Database != core.DatabaseSQLite {
+				names = append(names, core.DatabaseFolder)
+			}
+		}
+	}
+	backup, err := h.backupData(ctx, a.ID, core.Prod, rel.Short(), names, dump)
 	if err != nil {
 		return fmt.Errorf("Prod's data couldn't be copied, so the old version is starting again: %w", err)
 	}
@@ -471,8 +488,20 @@ func (h *Hub) undoPromote(ctx context.Context, a state.App, prev *core.Release, 
 		if err != nil {
 			return fmt.Errorf("Couldn't put back prod's data from %s: %w", backup, err)
 		}
-		h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: a.ID, Env: core.Prod, Action: "data.restored",
-			Detail: "Put back prod's data from " + backup + "; the failed version's data is kept at " + kept})
+		if kept != "" {
+			h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: a.ID, Env: core.Prod, Action: "data.restored",
+				Detail: "Put back prod's data from " + backup + "; the failed version's data is kept at " + kept})
+		}
+		// The failed version's database container is still running (it stayed up), so the
+		// dump goes back into it. If that version had no database, nothing is running to
+		// restore into, and the database's own folder was never changed.
+		if _, err := os.Stat(filepath.Join(backup, dbDumpFile)); err == nil && h.hasPostgres(failed, a) {
+			if err := h.ad.Deployer.RestoreDatabase(ctx, a.ID, core.Prod, filepath.Join(backup, dbDumpFile)); err != nil {
+				return fmt.Errorf("Couldn't put back prod's database from %s: %w", backup, err)
+			}
+			h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: a.ID, Env: core.Prod, Action: "data.restored",
+				Detail: "Put back prod's database from " + backup})
+		}
 	}
 	if _, err := h.store.SetWant(ctx, state.Deployment{App: a.ID, Env: core.Prod, Release: *prev, By: core.ActorHomelab, Kind: "rollback"}); err != nil {
 		return err

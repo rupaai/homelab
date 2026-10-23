@@ -108,6 +108,16 @@ type EnvSpec struct {
 	// OpenPorts publishes Ports on every network (addresses: ip); otherwise on 127.0.0.1 only.
 	OpenPorts bool
 	Services  []Service // more containers that run next to the app, e.g. a media server
+	// Postgres is the environment's database container (database: postgres); nil for none.
+	Postgres *Postgres
+}
+
+// Postgres is the database container of one app environment. The deploy adapter runs it
+// as the service "db", and the app waits until it is healthy. Its password is the secret
+// DatabasePassword, which the adapter mounts at /run/secrets like the app's.
+type Postgres struct {
+	Port    int    // published on 127.0.0.1 only, whatever the app's ports are
+	DataDir string // the host folder Postgres keeps its files in
 }
 
 // Service is one more container of an app environment. The app reaches it by its name,

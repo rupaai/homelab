@@ -56,6 +56,15 @@ type Deployer interface {
 	Stop(ctx context.Context, app, env string) error
 	// StopApp stops only the app's own container; the environment's services keep running.
 	StopApp(ctx context.Context, app, env string) error
+	// StartApp starts the app's own container again after StopApp. The environment's
+	// services (the database too) are left as they are.
+	StartApp(ctx context.Context, app, env string) error
+	// DumpDatabase writes a dump of the environment's postgres database to file, which must
+	// not exist. The database keeps running and the dump is consistent.
+	DumpDatabase(ctx context.Context, app, env, file string) error
+	// RestoreDatabase makes the environment's postgres database hold exactly what a dump
+	// made by DumpDatabase holds. Stop the app first.
+	RestoreDatabase(ctx context.Context, app, env, file string) error
 	// Observe reports every environment Homelab runs, including stopped ones.
 	Observe(ctx context.Context) ([]Running, error)
 	// Logs returns the last lines of an environment's logs, oldest first.
@@ -263,6 +272,18 @@ type Services interface {
 	Forward(w http.ResponseWriter, r *http.Request, c ServiceCaller)
 	// Problem says what's wrong with the services, or "" when they run.
 	Problem() string
+}
+
+// Databases is how homelabd tells homelab-services about the databases it runs (database:
+// in homelab.yaml). homelab-services does everything that talks to a database.
+type Databases interface {
+	// Register says where an environment's database is. Calling it again replaces it.
+	Register(app, env string, db DatabaseRegistration) error
+	// Forget removes every environment of an app.
+	Forget(app string) error
+	// Snapshot writes a consistent copy of an environment's sqlite file to the file `to`,
+	// which must not exist, while the app uses the database.
+	Snapshot(app, env, to string) error
 }
 
 // ServiceKindSystem is homelabd itself. It is used only by homelabd's own calls to the

@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -71,6 +72,7 @@ type Adapters struct {
 	System    core.System    // may be nil: no device card (milestone 6)
 	Updater   core.Updater   // may be nil: Homelab doesn't update itself (milestone 6)
 	Services  core.Services  // may be nil: no files, databases or data (platform services)
+	Databases core.Databases // may be nil: homelab-services isn't told about databases
 }
 
 // Hub is the core. Create it with New and run it with Run.
@@ -264,6 +266,9 @@ func (h *Hub) hostPort(slot int, env string) int {
 	}
 	return h.cfg.HostPortBase + slot*10 + n
 }
+
+// dbPort is where an environment's postgres is published on 127.0.0.1.
+func (h *Hub) dbPort(slot int, env string) int { return h.hostPort(slot, env) + 5 }
 
 func (h *Hub) dataDir(app, env string) string {
 	return filepath.Join(h.cfg.DataDir, "apps", app, env, "data")
@@ -498,9 +503,21 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 	if err := h.ensureGenerated(m, a.ID, env); err != nil {
 		return core.EnvSpec{}, noSecrets(err)
 	}
-	secrets, err := h.ad.Secrets.Inject(a.ID, env, m.SecretNames())
+	secrets, err := h.ad.Secrets.Inject(a.ID, env, slices.Concat(m.Secrets, generatedNames(m)))
 	if err != nil {
 		return core.EnvSpec{}, noSecrets(fmt.Errorf("read secrets: %w", err))
+	}
+	// The database's settings. Postgres's URL is a secret (it holds the password), so it
+	// follows secrets_as; sqlite's are plain settings.
+	switch m.Database {
+	case core.DatabasePostgres:
+		if secrets[core.DatabasePassword] == "" {
+			return core.EnvSpec{}, errors.New("the database password is missing")
+		}
+		secrets[core.DatabaseURL] = fmt.Sprintf("postgres://%s:%s@%s:5432/%s", core.DatabaseUser, secrets[core.DatabasePassword], core.DatabaseService, core.DatabaseName)
+	case core.DatabaseSQLite:
+		file := core.DatabaseSQLiteDir + "/" + core.DatabaseSQLiteFile
+		vars[core.DatabaseURL], vars[core.DatabasePath] = "sqlite:///"+file, file
 	}
 	if m.SecretsAs != manifest.SecretsAsFiles {
 		for k, v := range secrets {
@@ -520,7 +537,11 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 	if h.cfg.Identity != nil {
 		vars[identity.EnvPublicKey] = h.cfg.Identity.PublicKey()
 	}
-	mounts, err := h.mounts(a.ID, env, m.Data, m.Folders)
+	data := m.Data
+	if m.Database == core.DatabaseSQLite {
+		data = append(slices.Clone(data), manifest.Data{Name: core.DatabaseFolder, Path: core.DatabaseSQLiteDir})
+	}
+	mounts, err := h.mounts(a.ID, env, data, m.Folders)
 	if err != nil {
 		return core.EnvSpec{}, err
 	}
@@ -532,6 +553,14 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 		App: a.ID, Env: env, Release: rel, Port: m.Port, HostPort: h.hostPort(a.Slot, env),
 		Memory: m.Memory, Mounts: mounts, Vars: vars, Auth: auth, OpenPorts: h.cfg.OpenApps,
 		Secrets: secrets, SecretsAsFiles: m.SecretsAs == manifest.SecretsAsFiles,
+	}
+	if m.Database == core.DatabasePostgres {
+		// Postgres changes the owner of its folder itself, so Homelab only makes it.
+		dir := filepath.Join(h.dataDir(a.ID, env), core.DatabaseFolder)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return core.EnvSpec{}, err
+		}
+		spec.Postgres = &core.Postgres{Port: h.dbPort(a.Slot, env), DataDir: dir}
 	}
 	// Ports are fixed numbers on the device, so only one environment can have them: prod.
 	if env == core.Prod {
@@ -594,7 +623,23 @@ func (h *Hub) deploy(ctx context.Context, a state.App, env string, rel core.Rele
 	if err := h.ad.Deployer.Prepare(ctx, spec); err != nil {
 		return err
 	}
-	return h.ad.Deployer.Deploy(ctx, spec)
+	if err := h.ad.Deployer.Deploy(ctx, spec); err != nil {
+		return err
+	}
+	h.registerDatabase(a, env, rel)
+	return nil
+}
+
+// registerDatabase tells homelab-services where the environment's database is. It runs at
+// every deploy; a failure is only logged, because the app runs without it.
+func (h *Hub) registerDatabase(a state.App, env string, rel core.Release) {
+	m, err := h.parse(rel.Manifest, a.Repo)
+	if err != nil || m.Database == "" {
+		return
+	}
+	if err := h.register(a, env, m); err != nil {
+		h.log.Warn("database: tell the services", "app", a.ID, "env", env, "err", err)
+	}
 }
 
 // ---- Addresses ----
@@ -970,31 +1015,30 @@ func firstNonEmpty(s ...string) string {
 
 // ---- Data copies before promote ----
 
-// backupData copies the app's own data folders (names) of an environment while its app is
-// stopped, so the copy is consistent (SQLite files included), and keeps the newest
-// KeepBackups copies. Service data (Jellyfin's config, say) isn't copied. The copies are made
-// by a helper container, so files that belong to other users are kept as they are.
-func (h *Hub) backupData(ctx context.Context, app, env, label string, names []string) (string, error) {
-	var have []string
-	for _, n := range names {
-		if _, err := os.Stat(filepath.Join(h.dataDir(app, env), n)); err == nil {
-			have = append(have, n)
+// dbDumpFile is where a copy keeps a postgres dump. It is a file, not a data folder.
+const dbDumpFile = core.DatabaseFolder + ".dump"
+
+// newCopyDir makes the folder for a new data copy of an environment, named after the time
+// and label, and returns it with the folder all the environment's copies are in.
+func (h *Hub) newCopyDir(app, env, label string) (dst, root string, err error) {
+	root = filepath.Join(h.cfg.DataDir, "backups", app, env)
+	dst = filepath.Join(root, h.cfg.Now().UTC().Format("20060102-150405")+"-"+label)
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", "", err
+	}
+	// Mkdir, not MkdirAll: a copy made in the same second must never be written over.
+	if err := os.Mkdir(dst, 0o700); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return "", "", userErr("A copy was just made. Try again in a second.")
 		}
+		return "", "", err
 	}
-	if len(have) == 0 {
-		return "", nil // nothing to copy yet
-	}
-	root := filepath.Join(h.cfg.DataDir, "backups", app, env)
-	dst := filepath.Join(root, h.cfg.Now().UTC().Format("20060102-150405")+"-"+label)
-	if err := os.MkdirAll(dst, 0o700); err != nil {
-		return "", err
-	}
-	for _, n := range have {
-		if err := h.ad.Deployer.Copy(ctx, filepath.Join(h.dataDir(app, env), n), filepath.Join(dst, n)); err != nil {
-			h.ad.Deployer.Remove(ctx, dst)
-			return "", err
-		}
-	}
+	return dst, root, nil
+}
+
+// pruneCopies keeps the newest KeepBackups copies in root. The copy named spare is never
+// removed, because the caller is about to use it.
+func (h *Hub) pruneCopies(ctx context.Context, root, spare string) {
 	entries, _ := os.ReadDir(root)
 	var dirs []string
 	for _, e := range entries {
@@ -1004,15 +1048,52 @@ func (h *Hub) backupData(ctx context.Context, app, env, label string, names []st
 	}
 	sort.Strings(dirs)
 	for len(dirs) > h.cfg.KeepBackups {
-		h.ad.Deployer.Remove(ctx, filepath.Join(root, dirs[0]))
+		if dirs[0] != spare {
+			h.ad.Deployer.Remove(ctx, filepath.Join(root, dirs[0]))
+		}
 		dirs = dirs[1:]
 	}
+}
+
+// backupData copies the app's own data folders (names) of an environment while its app is
+// stopped, so the copy is consistent (SQLite files included), and keeps the newest
+// KeepBackups copies. With dump it also saves a dump of the environment's postgres database
+// next to them. Service data (Jellyfin's config, say) isn't copied. The copies are made
+// by a helper container, so files that belong to other users are kept as they are.
+func (h *Hub) backupData(ctx context.Context, app, env, label string, names []string, dump bool) (string, error) {
+	var have []string
+	for _, n := range names {
+		if _, err := os.Stat(filepath.Join(h.dataDir(app, env), n)); err == nil {
+			have = append(have, n)
+		}
+	}
+	if len(have) == 0 && !dump {
+		return "", nil // nothing to copy yet
+	}
+	dst, root, err := h.newCopyDir(app, env, label)
+	if err != nil {
+		return "", err
+	}
+	for _, n := range have {
+		if err := h.ad.Deployer.Copy(ctx, filepath.Join(h.dataDir(app, env), n), filepath.Join(dst, n)); err != nil {
+			h.ad.Deployer.Remove(ctx, dst)
+			return "", err
+		}
+	}
+	if dump {
+		if err := h.ad.Deployer.DumpDatabase(ctx, app, env, filepath.Join(dst, dbDumpFile)); err != nil {
+			h.ad.Deployer.Remove(ctx, dst)
+			return "", fmt.Errorf("the database couldn't be dumped: %w", err)
+		}
+	}
+	h.pruneCopies(ctx, root, "")
 	return dst, nil
 }
 
 // restoreData replaces the data folders found in a copy made by backupData. The folders it
 // replaces are moved next to the copies (named after label) rather than deleted. The app
-// must be stopped.
+// must be stopped. A postgres dump in the copy is not a data folder: restoreDatabase puts
+// it back.
 func (h *Hub) restoreData(ctx context.Context, app, env, from, label string) (kept string, err error) {
 	entries, err := os.ReadDir(from)
 	if err != nil {
@@ -1023,6 +1104,9 @@ func (h *Hub) restoreData(ctx context.Context, app, env, from, label string) (ke
 		return "", err
 	}
 	for _, e := range entries {
+		if e.Name() == dbDumpFile {
+			continue
+		}
 		dir := filepath.Join(h.dataDir(app, env), e.Name())
 		if err := h.ad.Deployer.Move(ctx, dir, filepath.Join(kept, e.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return kept, err
@@ -1030,6 +1114,9 @@ func (h *Hub) restoreData(ctx context.Context, app, env, from, label string) (ke
 		if err := h.ad.Deployer.Copy(ctx, filepath.Join(from, e.Name()), dir); err != nil {
 			return kept, err
 		}
+	}
+	if os.Remove(kept) == nil {
+		kept = "" // a copy of only a database dump moves nothing
 	}
 	return kept, nil
 }

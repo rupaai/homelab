@@ -59,6 +59,7 @@ const (
 	ScopeUsersRead  = "users:read"
 	ScopeFilesRead  = "files:read"  // read every folder's files
 	ScopeFilesWrite = "files:write" // also make folders, save, change and delete files
+	ScopeDBRead     = "db:read"     // look inside every database (read only)
 
 	// Secrets scopes belong to an app's own key and never to an admin key: no admin key can
 	// be made with them, and homelab-services refuses admin keys on every secrets route.
@@ -67,7 +68,7 @@ const (
 )
 
 // scopes are the scopes an admin key may have.
-var scopes = []string{ScopeUsersRead, ScopeFilesRead, ScopeFilesWrite}
+var scopes = []string{ScopeUsersRead, ScopeFilesRead, ScopeFilesWrite, ScopeDBRead}
 
 // Caller is who is calling with an API key.
 type Caller struct {

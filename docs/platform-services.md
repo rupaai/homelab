@@ -24,6 +24,7 @@ An admin can revoke an app key under **Settings → API keys**, for example if i
 - `users:read`: read people.
 - `files:read`: read every folder's files.
 - `files:write`: also make folders, and save, change and delete files.
+- `db:read`: look inside every database (read only).
 
 App keys need no files scope: an app always has its own folders, and only those. Databases and data add their own scopes when they arrive.
 
