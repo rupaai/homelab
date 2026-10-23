@@ -24,7 +24,7 @@ project's design docs (milestone_2_plan.md); this file is what the code follows.
 | `smoke_test` | none | A command, as a list, run inside the app's image before an auto promote, e.g. `[python, -m, app.smoke]` |
 
 More containers next to the app (a media server, an indexer), shared device folders and
-extra ports: see [services.md](services.md).
+extra ports: see [services.md](../services.md).
 
 So a manifest can be as small as `port`, `health`, `tag` and `data`. (A starter template
 repo that uses this is parked for later.)
@@ -69,7 +69,7 @@ for `promote_after`.
 ## Secrets
 
 homelab-services (Rust) holds every value in its own SQLite file, encrypted with AES-256-GCM
-(see [platform-services.md](platform-services.md#secrets) and [secrets.openapi.yaml](secrets.openapi.yaml)).
+(see [platform-services.md](../platform-services.md#secrets) and [secrets.openapi.yaml](../secrets.openapi.yaml)).
 homelabd talks to it as the `system` caller, which only homelabd can sign. The first time it
 starts, it copies the values and kept versions from the old `~/.homelab/secrets/secrets.db`
 in one step (nothing is copied if any value can't be read) and never deletes that file. The
@@ -132,7 +132,7 @@ files 0444, so the app's user can read them whoever it is; the environment's own
 Services (such as Jellyfin) are unchanged.
 
 `database: postgres` (or `sqlite`) in homelab.yaml gives each environment its own database and a
-`DATABASE_URL`. See [platform-services.md](platform-services.md#databases).
+`DATABASE_URL`. See [platform-services.md](../platform-services.md#databases).
 
 ### Logs
 

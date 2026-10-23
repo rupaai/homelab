@@ -92,7 +92,7 @@ APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 `
 
-const deviceConfig = `# Homelab settings. See docs/milestone6.md.
+const deviceConfig = `# Homelab settings. See docs/history/milestone6.md.
 
 # Other devices reach apps and the companion at the device's IP address, and sign in with
 # the password (set it with: sudo -u homelab homelabd password --home /var/lib/homelab).
