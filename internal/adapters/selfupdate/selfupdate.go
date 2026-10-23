@@ -98,6 +98,7 @@ type release struct {
 	Name       string  `json:"name"`
 	Prerelease bool    `json:"prerelease"`
 	Draft      bool    `json:"draft"`
+	Body       string  `json:"body"`
 	Assets     []asset `json:"assets"`
 }
 
@@ -148,6 +149,9 @@ func (u *Updater) Status(ctx context.Context) (core.UpdateStatus, error) {
 		s.CheckedAt = &t
 		s.Latest = u.latest.Tag
 		s.Available = Newer(u.latest.Tag, u.o.Version)
+		if s.Available {
+			s.Changes = ParseNotes(u.latest.Body)
+		}
 	}
 	return s, nil
 }

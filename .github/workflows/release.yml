@@ -1,8 +1,10 @@
 name: Release
 
-# Every change merged to main becomes a numbered release (build-<n>) with the program for
-# the device, the Mac and arm64 Linux. Homelab on the device updates itself from these.
-# The release is only published when the checks pass.
+# Every change merged to main that needs one becomes a release with a version (vX.Y.Z, picked
+# from the pull request titles by `homelab-services release`) and the program for the device,
+# the Mac and arm64 Linux. Homelab on the device updates itself from these. A merge of only
+# docs, chore, test, ci, style, refactor or build changes makes no release. The release is only
+# published when the checks pass, and in one step with its programs.
 on:
   push:
     branches: [main]
@@ -17,8 +19,6 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
-    env:
-      VERSION: build-${{ github.run_number }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -29,20 +29,44 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: Build the release tool
+        working-directory: services
+        run: cargo build --release --locked
+      - name: Pick the version
+        id: version
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if ! VERSION=$(services/target/release/homelab-services release prod --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --first v0.20.0 --dry-run 2>raw-notes.txt); then
+            cat raw-notes.txt >&2
+            exit 1
+          fi
+          cat raw-notes.txt
+          if [ -z "$VERSION" ]; then
+            echo "No release for this change."
+            exit 0
+          fi
+          # Keep only the notes: drop the tool's own messages.
+          grep -v -e '^Dry run: ' -e ' is already made for this commit\.$' raw-notes.txt > notes.md || true
+          printf '\nBuilt from %s. On the device, update from the companion (Resources). For a first install see docs/history/milestone6.md.\n' "${GITHUB_SHA::7}" >> notes.md
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
       - name: Rust targets for homelab-services
+        if: steps.version.outputs.version != ''
         run: |
           rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
           pip install ziglang==0.17.0 cargo-zigbuild
       - name: Build the companion
+        if: steps.version.outputs.version != ''
         working-directory: web
         run: npm ci && npm run check && npm test && npm run build
       - name: Check the Go code
+        if: steps.version.outputs.version != ''
         run: make check
-      - name: Build homelabd
-        run: scripts/build-release.sh "$VERSION"
-      - name: Publish the release
+      - name: Build and publish the release
+        if: steps.version.outputs.version != ''
         env:
+          VERSION: ${{ steps.version.outputs.version }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$VERSION" dist/* --target "$GITHUB_SHA" --title "$VERSION" \
-            --notes "Built from ${GITHUB_SHA::7}. On the device, update from the companion (Resources). For a first install see docs/history/milestone6.md."
+          scripts/build-release.sh "$VERSION"
+          gh release create "$VERSION" dist/* --target "$GITHUB_SHA" --title "$VERSION" --notes-file notes.md

@@ -153,7 +153,7 @@ func fakeGitHubWithServices(t *testing.T, tag string, prog []byte, sum string, s
 			if svc != nil {
 				extra = fmt.Sprintf(`,{"name":%q,"url":"%s/asset/svc"}`, svcName, srv.URL)
 			}
-			fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":%q,"url":"%s/asset/prog"},{"name":"checksums.txt","url":"%s/asset/sums"}%s]}`, tag, name, srv.URL, srv.URL, extra)
+			fmt.Fprintf(w, `{"tag_name":%q,"body":"## New\n\n- add y (#2)\n- add w\n\n## Fixes\n\n- mend x (#3)\n","assets":[{"name":%q,"url":"%s/asset/prog"},{"name":"checksums.txt","url":"%s/asset/sums"}%s]}`, tag, name, srv.URL, srv.URL, extra)
 		case "/asset/prog":
 			w.Write(prog)
 		case "/asset/svc":
@@ -186,6 +186,9 @@ func TestApply(t *testing.T) {
 	s, err := u.Status(context.Background())
 	if err != nil || !s.Managed || !s.Available || s.Latest != "build-2" {
 		t.Fatalf("status = %+v, %v", s, err)
+	}
+	if c := s.Changes; c == nil || c.New != 2 || c.Fixes != 1 || c.Breaking != 0 || !strings.Contains(c.Notes, "- add w") {
+		t.Fatalf("changes = %+v", c)
 	}
 	v, err := u.Apply(context.Background())
 	if err != nil || v != "build-2" {
