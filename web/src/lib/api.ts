@@ -1,7 +1,7 @@
 import { ApiError, NETWORK_MESSAGE, errorMessage } from './errors';
 import { SIGN_IN_MESSAGE, sessionLost } from './session';
 import { clearToken, getToken, setToken } from './token';
-import type { Api, AppView, FileFolder, FilePage, FileQuery, StorageDisk, StoredFile, UploadResult, FileMeta, BootstrapView, CreatedKey, KeysView, DeviceView, EnvSecrets, Invitation, KeyView, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult, TestVersion, AppSecretsView, SecretVersion } from './types';
+import type { Api, AppDatabase, AppView, DbInfo, DbResult, DbRows, DbTable, FileFolder, FilePage, FileQuery, StorageDisk, StoredFile, UploadResult, FileMeta, BootstrapView, CreatedKey, KeysView, DeviceView, EnvSecrets, Invitation, KeyView, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult, TestVersion, AppSecretsView, SecretVersion } from './types';
 
 /** Mock mode: `?mock` in the URL or VITE_MOCK=1 gives fake data, no server needed. Dev builds only, so the mock data is dropped from the real companion. */
 export const useMock: boolean =
@@ -183,7 +183,26 @@ const realApi: Api = {
 		return upload(`/api/files/${enc(folder)}?${p}`, file);
 	},
 	fileBlob: (folder, id) => download(`/api/files/${enc(folder)}/${enc(id)}`),
-	deleteFile: (folder, id) => request('DELETE', `/api/files/${enc(folder)}/${enc(id)}`)
+	deleteFile: (folder, id) => request('DELETE', `/api/files/${enc(folder)}/${enc(id)}`),
+	databases: async () => list((await request<{ databases: DbInfo[] | null }>('GET', '/api/db')).databases),
+	database: (app, env) => request<DbInfo>('GET', `/api/db/${enc(app)}/${enc(env)}`),
+	dbTables: async (app, env) => list((await request<{ tables: DbTable[] | null }>('GET', `/api/db/${enc(app)}/${enc(env)}/tables`)).tables),
+	dbRows: async (app, env, table, offset, limit = 50) => {
+		const p = new URLSearchParams({ schema: table.schema, limit: String(limit), offset: String(offset) });
+		const r = await request<DbRows>('GET', `/api/db/${enc(app)}/${enc(env)}/tables/${enc(table.name)}/rows?${p}`);
+		return { columns: list(r.columns), rows: list(r.rows), truncated: r.truncated === true };
+	},
+	dbQuery: async (app, env, sql, write) => {
+		const r = await request<DbResult>('POST', `/api/db/${enc(app)}/${enc(env)}/query`, { sql, write });
+		return { ...r, columns: list(r.columns), rows: list(r.rows) };
+	},
+	appDatabase: async (id) => {
+		const r = await request<AppDatabase>('GET', `/api/apps/${enc(id)}/db`);
+		return { engine: r.engine ?? '', envs: list(r.envs).map((e) => ({ ...e, copies: list(e.copies) })) };
+	},
+	makeDbCopy: async (id, env) => { await request('POST', `/api/apps/${enc(id)}/envs/${enc(env)}/db/copies`); },
+	restoreDbCopy: (id, env, name) => request('POST', `/api/apps/${enc(id)}/envs/${enc(env)}/db/copies/${enc(name)}/restore`),
+	copyProdToDev: (id) => request('POST', `/api/apps/${enc(id)}/db/copy-prod-to-dev`)
 };
 
 // The import sits inside the DEV check, so production builds leave mock.ts out.

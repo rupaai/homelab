@@ -1,6 +1,6 @@
 // Fake data for developing the UI without the Go server (see api.ts for how it's switched on).
 import { ApiError } from './errors';
-import type { ActivityEvent, Api, AppView, SavedSecretView, FileFolder, StorageDisk, StoredFile, UploadResult, EnvName, EnvView, PersonInput, KeyView, PersonView, ReleaseView, SecretView, SettingView, SecretVersion } from './types';
+import type { ActivityEvent, Api, DbCopy, DbInfo, DbTable, AppView, SavedSecretView, FileFolder, StorageDisk, StoredFile, UploadResult, EnvName, EnvView, PersonInput, KeyView, PersonView, ReleaseView, SecretView, SettingView, SecretVersion } from './types';
 
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 const delay = <T>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
@@ -192,6 +192,18 @@ const folderStore: FileFolder[] = [
 	{ name: 'documents', disk: 'main', app: '', env: '', files: 3, bytes: 0, created_at: ago(60 * 24 * 30) },
 	{ name: 'movie-night-posters', disk: 'photos', app: 'movie-night', env: 'prod', files: 0, bytes: 0, created_at: ago(60 * 24 * 5) }
 ];
+const dbList: DbInfo[] = [
+	{ app: 'movie-night', env: 'dev', engine: 'postgres', status: 'ok', size_bytes: 8_400_000, connections: 2, tables: 2 },
+	{ app: 'movie-night', env: 'prod', engine: 'postgres', status: 'ok', size_bytes: 52_000_000, connections: 4, tables: 2 }
+];
+const dbTableList: DbTable[] = [
+	{ schema: 'public', name: 'movies', rows: 120 },
+	{ schema: 'public', name: 'votes', rows: 3 }
+];
+const dbCopies: Record<string, DbCopy[]> = {
+	dev: [{ name: '20261023-120000-manual', made: ago(90), size_bytes: 2_100_000, kind: 'manual' }],
+	prod: [{ name: '20261022-090000-promote', made: ago(60 * 27), size_bytes: 9_800_000, kind: 'promote' }]
+};
 const fileStore: StoredFile[] = [
 	{ id: 'f005', folder: 'documents', name: 'harbour.jpg', content_type: 'image/jpeg', size: 3_400_000, sha256: 'd'.repeat(64), created_at: ago(10), created_by: 'owner', tags: ['trip'], info: {}, meta: { width: 4032, height: 3024, taken_at: '2026-10-03T14:21:07Z', camera_make: 'Apple', camera_model: 'iPhone 15 Pro', lens: 'iPhone 15 Pro back triple camera 6.86mm f/1.78', orientation: 1, gps: { lat: 55.67594, lon: 12.56553, alt: 12 } } },
 	{ id: 'f004', folder: 'documents', name: 'birthday.mp4', content_type: 'video/mp4', size: 24_800_000, sha256: 'e'.repeat(64), created_at: ago(20), created_by: 'owner', tags: [], info: {}, meta: { width: 1920, height: 1080, taken_at: '2026-08-14T18:02:00Z', camera_make: 'Canon', camera_model: 'Canon EOS R6', duration_s: 151, video_codec: 'h264' } },
@@ -538,5 +550,28 @@ export const mockApi: Api = {
 		fileStore.splice(i, 1);
 		syncFolders();
 		await delay(null);
-	}
+	},
+	databases: () => delay(dbList.map((d) => ({ ...d }))),
+	async database(app, env) {
+		const d = dbList.find((x) => x.app === app && x.env === env);
+		if (!d) throw new ApiError("There's no database there.", 404);
+		return delay({ ...d });
+	},
+	dbTables: () => delay(dbTableList.map((t) => ({ ...t }))),
+	async dbRows(_app, _env, table, offset, limit = 50) {
+		const all = Array.from({ length: table.rows }, (_, i) => [String(i + 1), `${table.name} ${i + 1}`]);
+		return delay({ columns: ['id', 'title'], rows: all.slice(offset, offset + limit), truncated: false });
+	},
+	async dbQuery(_app, env, sql, write) {
+		if (write && env === 'dev') return delay({ columns: [], rows: [], row_count: 0, truncated: false, command: 'UPDATE 1', ms: 4 });
+		if (/^\s*select/i.test(sql)) return delay({ columns: ['id', 'title'], rows: [['1', 'Dune'], ['2', null]], row_count: 2, truncated: false, command: 'SELECT 2', ms: 12 });
+		throw new ApiError('syntax error at or near "x"', 400);
+	},
+	appDatabase: () => delay({ engine: 'postgres', envs: [{ env: 'dev', port: 17005, user: 'app', database: 'app', copies: dbCopies.dev.map((c) => ({ ...c })) }, { env: 'prod', port: 17015, user: 'app', database: 'app', copies: dbCopies.prod.map((c) => ({ ...c })) }] }),
+	async makeDbCopy(_id, env) {
+		dbCopies[env].unshift({ name: `${Date.now()}-manual`, made: new Date().toISOString(), size_bytes: 2_100_000, kind: 'manual' });
+		await delay(null);
+	},
+	restoreDbCopy: async () => void (await delay(null)),
+	copyProdToDev: async () => void (await delay(null))
 };

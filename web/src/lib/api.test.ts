@@ -187,3 +187,43 @@ describe('invite and password API', () => {
 		expect(fetch.mock.calls[0][0]).toBe('/api/email/test');
 	});
 });
+
+describe('databases API', () => {
+	afterEach(() => vi.unstubAllGlobals());
+	const json = (body: string, status = 200) => new Response(body, { status, headers: { 'Content-Type': 'application/json' } });
+
+	it('lists databases, with null as none', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json('{"databases":null}')));
+		await expect(api.databases()).resolves.toEqual([]);
+	});
+
+	it('asks for 50 rows of a table at an offset, with the name encoded', async () => {
+		const fetch = vi.fn().mockResolvedValue(json('{"columns":["id"],"rows":[["1"]],"truncated":false}'));
+		vi.stubGlobal('fetch', fetch);
+		await expect(api.dbRows('movies', 'dev', { schema: 'public', name: 'my notes', rows: 1 }, 50)).resolves.toEqual({ columns: ['id'], rows: [['1']], truncated: false });
+		expect(fetch.mock.calls[0][0]).toBe('/api/db/movies/dev/tables/my%20notes/rows?schema=public&limit=50&offset=50');
+	});
+
+	it('sends the SQL with write off or on', async () => {
+		const fetch = vi.fn().mockImplementation(async () => json('{"columns":null,"rows":null,"row_count":0,"truncated":false,"command":"UPDATE 0","ms":3}'));
+		vi.stubGlobal('fetch', fetch);
+		const r = await api.dbQuery('movies', 'prod', 'update t set a = 1', true);
+		expect(r.columns).toEqual([]);
+		expect(fetch.mock.calls[0][0]).toBe('/api/db/movies/prod/query');
+		expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ sql: 'update t set a = 1', write: true });
+	});
+
+	it('reads copies and starts the copy actions', async () => {
+		const fetch = vi.fn().mockImplementation(async (url: string) => (url.endsWith('/db') ? json('{"engine":"postgres","envs":[{"env":"dev","port":17005,"copies":null}]}') : json('', 202)));
+		vi.stubGlobal('fetch', fetch);
+		await expect(api.appDatabase('movies')).resolves.toEqual({ engine: 'postgres', envs: [{ env: 'dev', port: 17005, copies: [] }] });
+		await api.makeDbCopy('movies', 'dev');
+		await api.restoreDbCopy('movies', 'dev', '20261023-120000-manual');
+		await api.copyProdToDev('movies');
+		expect(fetch.mock.calls.slice(1).map((c) => `${c[1].method} ${c[0]}`)).toEqual([
+			'POST /api/apps/movies/envs/dev/db/copies',
+			'POST /api/apps/movies/envs/dev/db/copies/20261023-120000-manual/restore',
+			'POST /api/apps/movies/db/copy-prod-to-dev'
+		]);
+	});
+});

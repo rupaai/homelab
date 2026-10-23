@@ -131,6 +131,9 @@ files 0444, so the app's user can read them whoever it is; the environment's own
 `HOMELAB_TOKEN` and the other `HOMELAB_*` settings stay environment variables in both modes.
 Services (such as Jellyfin) are unchanged.
 
+`database: postgres` (or `sqlite`) in homelab.yaml gives each environment its own database and a
+`DATABASE_URL`. See [platform-services.md](platform-services.md#databases).
+
 ### Logs
 
 Logs shown in the companion or returned by `GET /api/apps/{id}/envs/{env}/logs` have every

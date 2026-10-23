@@ -68,7 +68,7 @@ Files, databases and data are served by a second program, `homelab-services`, wr
 - Nothing calls it directly. Apps, keys and the companion call Homelab at `/api/files`, `/api/db` and `/api/data`. Homelab checks who is calling and forwards the call.
 - Every forwarded call carries who it is for (`X-Homelab-Caller`) and a signature (`X-Homelab-Signature`). homelabd makes a new signing key at every start and gives the program only the public half. The program refuses calls that are unsigned, more than 30 seconds old, or signed for another method or path. Homelab removes any `X-Homelab-*` headers, cookies and the key from the incoming call first.
 - Releases ship it for Linux (amd64 and arm64). Updating Homelab updates it too. On the Mac, `make build` builds it.
-- Databases and data come in the next changes.
+- Data comes in the next change.
 
 Checks: `make check-services` (format, lint, tests).
 
@@ -243,3 +243,70 @@ let key = homelab.secrets().get("STRIPE_KEY", Default::default()).await?;
 ```
 
 `get` reads the file `/run/secrets/<name>` first when there is one, so a config secret costs no web call. Pass `fresh` (`{ fresh: true }`, `fresh=True`, `.fresh()`) to always ask Homelab, for example to see a value that changed. Asking for a `version` always asks Homelab. Names are checked before anything is sent. A value never appears in an error or in debug output. See [plugins](../plugins/README.md).
+
+## Databases
+
+Add one line to `homelab.yaml` and every environment gets its own database:
+
+```yaml
+database: postgres   # or sqlite
+```
+
+Dev and prod never share one. The app reads `DATABASE_URL` with any normal driver.
+
+| | `postgres` | `sqlite` |
+|---|---|---|
+| What runs | One more container, `db` (Postgres 17, 256 MB), next to the app | A file in the app's own folder, `/homelab/db/app.db` |
+| `DATABASE_URL` | `postgres://app:<password>@db:5432/app` | `sqlite:////homelab/db/app.db` |
+| Also set | The secret `DATABASE_PASSWORD` | `DATABASE_PATH=/homelab/db/app.db` |
+
+- With `postgres`, the app starts after the database says it is ready. The password is made once for each environment and never changes. `DATABASE_URL` is a secret, so it follows `secrets_as`. `DATABASE_URL` and `DATABASE_PASSWORD` are Homelab's: the app can't list them in `secrets`, `generate_secrets` or `env`. A service called `db` is not allowed.
+- With `sqlite`, an app data entry called `homelab-db` or with the path `/homelab/db` is not allowed.
+- Postgres is only reachable from the device itself (`127.0.0.1`), never from the home network. To use it from another computer, see "Connect from your Mac".
+
+### Copies
+
+A copy is a snapshot of one environment's database. They are kept with the other copies of the app's data, and old ones are removed the same way.
+
+- **Before every promote**, prod's database is copied with its data. If the new version fails and Homelab goes back, the database goes back too.
+- **Copy now**: on the database screen, **Copy now** makes a copy of dev or prod. The app keeps running.
+- **Copy prod to dev**: replaces dev's data with a copy of prod. Prod keeps running. Dev's app stops for a moment, and dev's own data is copied first, so nothing is lost.
+- **Restore**: puts a copy back. The app stops for a moment. A copy of the current data is made first.
+
+Copying and restoring are for admins, and every one goes in the activity log. They answer at once and finish in the background.
+
+### Connect from your Mac
+
+Postgres only. Open the database in the companion and look under **Connect from your Mac**.
+
+1. Type your login on this device. The companion remembers it in your browser.
+2. Copy the first line and run it in Terminal. Keep it open: `ssh -N -L 15432:127.0.0.1:<port> <login>@<this computer>`.
+3. Tap **Show address**, copy it, and paste it into TablePlus or `psql`: `postgres://app:<password>@127.0.0.1:15432/app`.
+
+The password is fetched only when you tap **Show address**, with the same rule as any secret: only people who can see secrets get it, and the view goes in the activity log.
+
+### Look inside and run SQL
+
+The **Databases** screen lists every database with its size and tables. Open one to see its tables and their rows (50 at a time), and to run SQL.
+
+- SQL is **read only** by default. Postgres runs it as a read-only role; SQLite opens the file read only and takes one statement at a time.
+- A statement can run for at most 10 seconds and shows at most 500 rows (the screen says when it cut the list). SQL can be up to 100 KB.
+- Only Postgres can be changed, and only by a signed-in person: switch on **Allow changes**. On prod, Homelab asks first ("This changes prod's data. Run it?"). Apps and keys can't change data this way.
+- Homelab never logs the SQL or the values. It logs who, which database, and how long it took.
+- A database that is down shows "Not answering"; one that has not saved anything yet shows "Nothing saved yet".
+
+### Databases API
+
+A signed-in person can do everything. An admin key needs the `db:read` scope. An app key sees only its own app and environment; any other is 404. Full reference: [db.openapi.yaml](db.openapi.yaml).
+
+| Call | Gives |
+|---|---|
+| `GET /api/db` | every database: app, env, engine, status, size, connections, tables |
+| `GET /api/db/{app}/{env}` | one of them |
+| `GET /api/db/{app}/{env}/tables` | its tables, with row counts |
+| `GET /api/db/{app}/{env}/tables/{table}/rows` | rows (`limit` 1-200, `offset`) |
+| `POST /api/db/{app}/{env}/query` | runs `{"sql": "...", "write": false}` |
+
+The plugins (TypeScript, Python, Rust) wrap these calls as `db.list`, `db.info`, `db.tables`, `db.rows` and `db.query`; they never write. See [plugins](../plugins/README.md).
+
+The companion's own calls (admins only): `GET /api/apps/{id}/db` (engine, port and copies), `POST /api/apps/{id}/envs/{env}/db/copies` (copy now), `POST /api/apps/{id}/envs/{env}/db/copies/{name}/restore`, `POST /api/apps/{id}/db/copy-prod-to-dev`.
