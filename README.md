@@ -4,13 +4,9 @@ A self-hosted home platform: push code, see it running in dev, promote the exact
 build to prod, and roll back with a tap. One program, `homelabd`, keeps the desired state
 in SQLite and a reconciler makes Docker and GitHub match it.
 
-Milestones so far: 1, the deploy loop on a Mac ([docs/milestone1.md](docs/milestone1.md)), and
-2, apps with no setup: encrypted secrets set in the companion, auto-promote with automatic
-rollback, signed identity headers and a mirror of every app's code
-([docs/milestone2.md](docs/milestone2.md)); 3, people and sign-in
-([docs/milestone3.md](docs/milestone3.md)); 4, access from anywhere (removed; [docs/milestone4.md](docs/milestone4.md)); 5, know what's happening
-([docs/milestone5.md](docs/milestone5.md)); and 6, running on a Linux device at home with
-self-update ([docs/milestone6.md](docs/milestone6.md)).
+**Start here:** [HANDOVER.md](HANDOVER.md) says what each part is, where it lives, its state and
+what's open. Guides for app developers are in [docs/](docs/); how each milestone was built is
+in [docs/history/](docs/history/).
 
 ## Build
 
@@ -52,7 +48,7 @@ and run `sudo ./homelabd-linux-amd64 setup`. It writes `addresses: ip`, so other
 `http://<the device's IP>:7080` and sign in with the password you set with
 `sudo -u homelab /var/lib/homelab/bin/homelabd password --home /var/lib/homelab`. After that it
 updates itself from the companion's Resources screen. Setup refuses an older program unless you
-add `--force`. See [docs/milestone6.md](docs/milestone6.md).
+add `--force`. See [docs/history/milestone6.md](docs/history/milestone6.md).
 
 ## Adding an app
 
