@@ -1,8 +1,11 @@
 export class ApiError extends Error {
 	status: number;
-	constructor(message: string, status: number) {
+	/** The server wants the person to type the environment's name first. */
+	needsConfirm: boolean;
+	constructor(message: string, status: number, needsConfirm = false) {
 		super(message);
 		this.status = status;
+		this.needsConfirm = needsConfirm;
 	}
 }
 
@@ -18,6 +21,15 @@ export function errorMessage(status: number, body: string): string {
 	if (status === 404) return "Homelab couldn't find that.";
 	if (status >= 500) return 'Something went wrong inside Homelab. Try again in a moment.';
 	return `Something went wrong (error ${status}).`;
+}
+
+/** True when a failed body says {"needs_confirm": true}. */
+export function wantsConfirm(body: string): boolean {
+	try {
+		return JSON.parse(body)?.needs_confirm === true;
+	} catch {
+		return false;
+	}
 }
 
 export const NETWORK_MESSAGE = "Can't reach Homelab. Check your connection and try again.";

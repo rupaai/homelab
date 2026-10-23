@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { copyKindWords, dbAddress, dbStatusWords, loginProblem, needsConfirm, rowsRange, saveLogin, savedLogin, tableCount, tunnelCommand } from './databases';
+import { PROD_COPY_NOTE, changeTime, changeWords, confirmLabel, hasMoreChanges, percent, personName, writeHint, copyKindWords, dbAddress, dbStatusWords, loginProblem, needsConfirm, rowsRange, saveLogin, savedLogin, tableCount, tunnelCommand } from './databases';
 
 describe('dbStatusWords', () => {
 	it('says it plainly', () => {
@@ -66,5 +66,33 @@ describe('rowsRange', () => {
 		expect(rowsRange(0, 50)).toBe('Rows 1 to 50');
 		expect(rowsRange(50, 40)).toBe('Rows 51 to 90');
 		expect(rowsRange(0, 0)).toBe('No rows');
+	});
+});
+
+describe('import and changes helpers', () => {
+	it('shows upload progress as a percent', () => {
+		expect(percent(0.256)).toBe('26%');
+		expect(percent(2)).toBe('100%');
+		expect(percent(-1)).toBe('0%');
+	});
+	it('says the write words', () => {
+		expect(writeHint(true)).toBe('This can change data.');
+		expect(writeHint(false)).toBe('Read only. Nothing is changed.');
+		expect(PROD_COPY_NOTE).toBe('On prod, Homelab makes a copy first, so you can undo with Restore.');
+		expect(confirmLabel('prod')).toBe('Type prod to run it');
+	});
+	it('names people, or keeps the id', () => {
+		expect(personName([{ id: 'p1', name: 'Alex' }], 'p1')).toBe('Alex');
+		expect(personName([], 'p9')).toBe('p9');
+	});
+	it('turns change times and results into words', () => {
+		expect(changeTime(0)).toBe('1970-01-01T00:00:00.000Z');
+		expect(changeWords(true, 1)).toBe('Worked · 1 row');
+		expect(changeWords(true, 3)).toBe('Worked · 3 rows');
+		expect(changeWords(false, 0)).toBe('Failed');
+	});
+	it('offers more only after a full page', () => {
+		expect(hasMoreChanges(50, 50)).toBe(true);
+		expect(hasMoreChanges(7, 50)).toBe(false);
 	});
 });

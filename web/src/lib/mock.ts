@@ -1,6 +1,6 @@
 // Fake data for developing the UI without the Go server (see api.ts for how it's switched on).
 import { ApiError } from './errors';
-import type { ActivityEvent, Api, DbCopy, DbInfo, DbTable, AppView, SavedSecretView, FileFolder, StorageDisk, StoredFile, UploadResult, EnvName, EnvView, PersonInput, KeyView, PersonView, ReleaseView, SecretView, SettingView, SecretVersion } from './types';
+import type { ActivityEvent, Api, DbChange, DbCopy, DbInfo, DbTable, AppView, SavedSecretView, FileFolder, StorageDisk, StoredFile, UploadResult, EnvName, EnvView, PersonInput, KeyView, PersonView, ReleaseView, SecretView, SettingView, SecretVersion } from './types';
 
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 const delay = <T>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
@@ -204,6 +204,13 @@ const dbCopies: Record<string, DbCopy[]> = {
 	dev: [{ name: '20261023-120000-manual', made: ago(90), size_bytes: 2_100_000, kind: 'manual' }],
 	prod: [{ name: '20261022-090000-promote', made: ago(60 * 27), size_bytes: 9_800_000, kind: 'promote' }]
 };
+const nowSec = () => Math.floor(Date.now() / 1000);
+const dbChangeStore: DbChange[] = [
+	{ id: 4, person: 'owner', at: nowSec() - 300, sql: "delete from votes where movie_id = 9", ok: true, rows: 3, ms: 8, error: '', copy: '20261023-120500-before-write' },
+	{ id: 3, person: 'owner', at: nowSec() - 3600, sql: 'update movies set title = oops', ok: false, rows: 0, ms: 2, error: 'column "oops" does not exist', copy: null },
+	{ id: 2, person: 'rupaai', at: nowSec() - 86400, sql: "update movies set year = 2021 where title = 'Dune'", ok: true, rows: 1, ms: 5, error: '', copy: null },
+	{ id: 1, person: 'rupaai', at: nowSec() - 90000, sql: "insert into movies (title) values ('Heat')", ok: true, rows: 1, ms: 4, error: '', copy: null }
+];
 const fileStore: StoredFile[] = [
 	{ id: 'f005', folder: 'documents', name: 'harbour.jpg', content_type: 'image/jpeg', size: 3_400_000, sha256: 'd'.repeat(64), created_at: ago(10), created_by: 'owner', tags: ['trip'], info: {}, meta: { width: 4032, height: 3024, taken_at: '2026-10-03T14:21:07Z', camera_make: 'Apple', camera_model: 'iPhone 15 Pro', lens: 'iPhone 15 Pro back triple camera 6.86mm f/1.78', orientation: 1, gps: { lat: 55.67594, lon: 12.56553, alt: 12 } } },
 	{ id: 'f004', folder: 'documents', name: 'birthday.mp4', content_type: 'video/mp4', size: 24_800_000, sha256: 'e'.repeat(64), created_at: ago(20), created_by: 'owner', tags: [], info: {}, meta: { width: 1920, height: 1080, taken_at: '2026-08-14T18:02:00Z', camera_make: 'Canon', camera_model: 'Canon EOS R6', duration_s: 151, video_codec: 'h264' } },
@@ -562,10 +569,25 @@ export const mockApi: Api = {
 		const all = Array.from({ length: table.rows }, (_, i) => [String(i + 1), `${table.name} ${i + 1}`]);
 		return delay({ columns: ['id', 'title'], rows: all.slice(offset, offset + limit), truncated: false });
 	},
-	async dbQuery(_app, env, sql, write) {
-		if (write && env === 'dev') return delay({ columns: [], rows: [], row_count: 0, truncated: false, command: 'UPDATE 1', ms: 4 });
+	async dbQuery(_app, env, sql, write, confirm) {
+		if (write && /^\s*(delete|update)\b(?!.*\bwhere\b)/is.test(sql) && confirm?.trim() !== env) {
+			await delay(null);
+			throw new ApiError(`This can't be undone easily. Type ${env} to run it.`, 409, true);
+		}
+		if (write && /\b(begin|commit)\b/i.test(sql)) throw new ApiError('Leave out BEGIN and COMMIT; Homelab runs it all in one go.', 400);
+		if (write) return delay({ columns: [], rows: [], row_count: 0, truncated: false, command: 'UPDATE 1', ms: 4 });
 		if (/^\s*select/i.test(sql)) return delay({ columns: ['id', 'title'], rows: [['1', 'Dune'], ['2', null]], row_count: 2, truncated: false, command: 'SELECT 2', ms: 12 });
 		throw new ApiError('syntax error at or near "x"', 400);
+	},
+	async dbChanges(_app, _env, before, limit = 50) {
+		return delay(dbChangeStore.filter((c) => !before || c.id < before).slice(0, limit).map((c) => ({ ...c })));
+	},
+	async importDb(_id, _env, file, onProgress) {
+		for (let i = 1; i <= 5; i++) {
+			await delay(null, 150);
+			onProgress?.(i / 5);
+		}
+		return /\.(db|sqlite3?)$/i.test(file.name) ? 'sqlite' : /\.dump$/i.test(file.name) ? 'pg_dump' : 'sql';
 	},
 	appDatabase: () => delay({ engine: 'postgres', envs: [{ env: 'dev', port: 17005, user: 'app', database: 'app', copies: dbCopies.dev.map((c) => ({ ...c })) }, { env: 'prod', port: 17015, user: 'app', database: 'app', copies: dbCopies.prod.map((c) => ({ ...c })) }] }),
 	async makeDbCopy(_id, env) {

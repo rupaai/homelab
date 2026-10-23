@@ -4,9 +4,9 @@
 	import { api } from '#lib/api.ts';
 	import { ApiError, messageOf } from '#lib/errors.ts';
 	import { bytes } from '#lib/format.ts';
-	import { PAGE_ROWS, copyKindWords, dbAddress, dbStatusWords, loginProblem, needsConfirm, rowsRange, saveLogin, savedLogin, tableCount, tunnelCommand } from '#lib/databases.ts';
+	import { PAGE_ROWS, PROD_COPY_NOTE, changeTime, changeWords, confirmLabel, copyKindWords, dbAddress, dbStatusWords, hasMoreChanges, loginProblem, needsConfirm, percent, personName, rowsRange, saveLogin, savedLogin, tableCount, tunnelCommand, writeHint } from '#lib/databases.ts';
 	import { copyText } from '#lib/clipboard.ts';
-	import type { AppDatabase, DbCopy, EnvName, DbInfo, DbResult, DbRows, DbTable } from '#lib/types.ts';
+	import type { AppDatabase, DbChange, DbCopy, EnvName, DbInfo, DbResult, DbRows, DbTable, PersonView } from '#lib/types.ts';
 	import RevealedValue from '#lib/components/RevealedValue.svelte';
 	import Sheet from '#lib/components/Sheet.svelte';
 	import Spinner from '#lib/components/Spinner.svelte';
@@ -20,9 +20,70 @@
 	let appDb = $state<AppDatabase | null>(null);
 	let loaded = $state(false);
 	let error = $state('');
+	const CHANGES_PAGE = 50;
+	let changes = $state<DbChange[]>([]);
+	let moreChanges = $state(false);
+	let changesBusy = $state(false);
+	let changesError = $state('');
+	let people = $state<PersonView[]>([]);
+
+	async function loadMoreChanges() {
+		changesBusy = true;
+		changesError = '';
+		try {
+			const next = await api.dbChanges(app, env, changes[changes.length - 1]?.id, CHANGES_PAGE);
+			changes = [...changes, ...next];
+			moreChanges = hasMoreChanges(next.length, CHANGES_PAGE);
+		} catch (e) {
+			changesError = messageOf(e);
+		} finally {
+			changesBusy = false;
+		}
+	}
+
+	// Import
+	let picker = $state<HTMLInputElement | null>(null);
+	let importFile = $state<File | null>(null);
+	let importing = $state(false);
+	let progress = $state(0);
+	let importError = $state('');
+	let importNote = $state('');
+	function picked() {
+		importFile = picker?.files?.[0] ?? null;
+		importError = '';
+		importNote = '';
+	}
+	function closeImport() {
+		if (importing) return;
+		importFile = null;
+		importError = '';
+		if (picker) picker.value = '';
+	}
+	async function doImport() {
+		if (!importFile) return;
+		importing = true;
+		progress = 0;
+		importError = '';
+		try {
+			await api.importDb(app, env, importFile, (d) => (progress = d));
+			importNote = 'Started.';
+			importFile = null;
+			if (picker) picker.value = '';
+			await load();
+		} catch (e) {
+			importError = messageOf(e);
+		} finally {
+			importing = false;
+		}
+	}
 
 	async function load() {
-		const [i, t, c] = await Promise.allSettled([api.database(app, env), api.dbTables(app, env), api.appDatabase(app)]);
+		const [i, t, c, ch, pe] = await Promise.allSettled([api.database(app, env), api.dbTables(app, env), api.appDatabase(app), api.dbChanges(app, env, undefined, CHANGES_PAGE), api.people()]);
+		if (ch.status === 'fulfilled') {
+			changes = ch.value;
+			moreChanges = hasMoreChanges(ch.value.length, CHANGES_PAGE);
+		}
+		if (pe.status === 'fulfilled') people = pe.value;
 		if (i.status === 'fulfilled') info = i.value;
 		if (t.status === 'fulfilled') tables = t.value;
 		if (c.status === 'fulfilled') appDb = c.value;
@@ -67,10 +128,12 @@
 	let sqlError = $state('');
 	let running = $state(false);
 	let confirmingRun = $state(false);
+	let typedEnv = $state('');
+	let askTyped = $state(false);
 	function run(e: Event) {
 		e.preventDefault();
 		if (!sql.trim() || running) return;
-		if (needsConfirm(env, postgres && allowChanges)) confirmingRun = true;
+		if (!askTyped && needsConfirm(env, postgres && allowChanges)) confirmingRun = true;
 		else send();
 	}
 	async function send() {
@@ -79,11 +142,24 @@
 		sqlError = '';
 		result = null;
 		try {
-			result = await api.dbQuery(app, env, sql, postgres && allowChanges);
+			result = await api.dbQuery(app, env, sql, postgres && allowChanges, askTyped ? typedEnv.trim() : undefined);
+			askTyped = false;
+			typedEnv = '';
+			if (postgres && allowChanges) await refreshChanges();
 		} catch (e) {
+			askTyped = e instanceof ApiError && e.status === 409 && e.needsConfirm;
 			sqlError = messageOf(e);
 		} finally {
 			running = false;
+		}
+	}
+
+	async function refreshChanges() {
+		try {
+			changes = await api.dbChanges(app, env, undefined, CHANGES_PAGE);
+			moreChanges = hasMoreChanges(changes.length, CHANGES_PAGE);
+		} catch {
+			// The list stays as it was.
 		}
 	}
 
@@ -212,12 +288,17 @@
 			<h2 id="sql-h">SQL</h2>
 			<form onsubmit={run}>
 				<label class="sr-only" for="sql">SQL</label>
-				<textarea id="sql" bind:value={sql} rows="5" spellcheck="false" autocapitalize="none" autocomplete="off" placeholder="select * from notes"></textarea>
+				<textarea id="sql" bind:value={sql} oninput={() => ((askTyped = false), (typedEnv = ''))} rows="5" spellcheck="false" autocapitalize="none" autocomplete="off" placeholder="select * from notes"></textarea>
 				{#if postgres}
 					<label class="check"><input type="checkbox" bind:checked={allowChanges} /> Allow changes</label>
 				{/if}
-				<p class="muted small hint">{postgres && allowChanges ? 'This can change data.' : 'Read only. Nothing is changed.'}</p>
-				<div class="row-actions"><button class="btn primary" type="submit" disabled={running || !sql.trim()}>{running ? 'Running…' : 'Run'}</button></div>
+				<p class="muted small hint">{writeHint(postgres && allowChanges)}</p>
+				{#if env === 'prod' && postgres}<p class="muted small hint">{PROD_COPY_NOTE}</p>{/if}
+				{#if askTyped}
+					<label for="typed-env">{confirmLabel(env)}</label>
+					<input id="typed-env" type="text" bind:value={typedEnv} autocomplete="off" autocapitalize="none" spellcheck="false" placeholder={env} />
+				{/if}
+				<div class="row-actions"><button class="btn primary" type="submit" disabled={running || !sql.trim() || (askTyped && !typedEnv.trim())}>{running ? 'Running…' : 'Run'}</button></div>
 			</form>
 			{#if sqlError}<p class="notice bad" role="alert">{sqlError}</p>{/if}
 			{#if result}
@@ -252,6 +333,42 @@
 			</div>
 		</section>
 
+		<section class="card" aria-labelledby="import-h">
+			<h2 id="import-h">Import</h2>
+			<p class="muted small">Replace this database with a file.</p>
+			{#if importNote}<p class="muted small" role="status">{importNote}</p>{/if}
+			{#if importError && !importFile}<p class="notice bad" role="alert">{importError}</p>{/if}
+			<label class="sr-only" for="import-file">Choose a database file</label>
+			<input id="import-file" type="file" accept=".db,.sqlite,.sqlite3,.dump,.sql,*/*" bind:this={picker} onchange={picked} />
+		</section>
+
+		<section class="card" aria-labelledby="changes-h">
+			<h2 id="changes-h">Changes</h2>
+			{#if changes.length === 0}
+				<p class="muted none">No changes yet.</p>
+			{:else}
+				<ul>
+					{#each changes as c (c.id)}
+						<li class="change">
+							<p class="small"><strong class={c.ok ? '' : 'failed'}>{changeWords(c.ok, c.rows)}</strong> · {personName(people, c.person)} · <Time at={changeTime(c.at)} /></p>
+							{#if !c.ok && c.error}<p class="notice bad small">{c.error}</p>{/if}
+							<details>
+								<summary class="small">SQL</summary>
+								<pre>{c.sql}</pre>
+							</details>
+							{#if c.copy}
+								{@const made = copies.find((x) => x.name === c.copy)}
+								<p class="muted small">Copy made first: {c.copy}</p>
+								{#if made}<div class="row-actions"><button class="btn small" type="button" disabled={copyBusy} onclick={() => (restoring = made)}>Restore<span class="sr-only"> {c.copy}</span></button></div>{/if}
+							{/if}
+						</li>
+					{/each}
+				</ul>
+				{#if changesError}<p class="notice bad" role="alert">{changesError}</p>{/if}
+				{#if moreChanges}<div class="row-actions"><button class="btn small" type="button" disabled={changesBusy} onclick={loadMoreChanges}>{changesBusy ? 'Loading…' : 'Load more'}</button></div>{/if}
+			{/if}
+		</section>
+
 		{#if postgres && mine?.port}
 			<section class="card" aria-labelledby="mac-h">
 				<h2 id="mac-h">Connect from your Mac</h2>
@@ -281,6 +398,21 @@
 			{#snippet footer()}
 				<button class="btn" type="button" onclick={closeRestore}>Cancel</button>
 				<button class="btn danger" type="button" disabled={copyBusy} onclick={restore}>{copyBusy ? 'Starting…' : 'Restore'}</button>
+			{/snippet}
+		</Sheet>
+	{/if}
+
+	{#if importFile}
+		<Sheet title="Replace this database?" onclose={closeImport}>
+			{#snippet children()}
+				<p>Replace this database with the file? A copy of the current data is made first.</p>
+				<p class="muted small">{importFile?.name} · {bytes(importFile?.size ?? 0)}</p>
+				{#if importing}<progress max="1" value={progress} aria-label="Upload progress"></progress> <span class="muted small" role="status">{percent(progress)}</span>{/if}
+				{#if importError}<p class="notice bad" role="alert">{importError}</p>{/if}
+			{/snippet}
+			{#snippet footer()}
+				<button class="btn" type="button" disabled={importing} onclick={closeImport}>Cancel</button>
+				<button class="btn danger" type="button" disabled={importing} onclick={doImport}>{importing ? 'Sending…' : 'Import'}</button>
 			{/snippet}
 		</Sheet>
 	{/if}
@@ -396,6 +528,32 @@
 		align-items: center;
 		gap: 0.5rem;
 		font-weight: 600;
+	}
+	.change p {
+		margin: 0.15rem 0;
+	}
+	.failed {
+		color: var(--bad, inherit);
+	}
+	summary {
+		cursor: pointer;
+		min-height: 44px;
+		display: flex;
+		align-items: center;
+	}
+	pre {
+		margin: 0.25rem 0;
+		padding: 0.5rem 0.6rem;
+		font-family: var(--mono);
+		font-size: 0.85rem;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+		border-radius: 8px;
+		border: 1px solid var(--border);
+		background: var(--bg);
+	}
+	progress {
+		width: 100%;
 	}
 	.line {
 		margin: 0.8rem 0 0;

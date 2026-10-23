@@ -279,7 +279,10 @@ export interface Api {
 	database(app: string, env: string): Promise<DbInfo>;
 	dbTables(app: string, env: string): Promise<DbTable[]>;
 	dbRows(app: string, env: string, table: DbTable, offset: number, limit?: number): Promise<DbRows>;
-	dbQuery(app: string, env: string, sql: string, write: boolean): Promise<DbResult>;
+	dbQuery(app: string, env: string, sql: string, write: boolean, confirm?: string): Promise<DbResult>;
+	dbChanges(app: string, env: string, before?: number, limit?: number): Promise<DbChange[]>;
+	/** Sends the file to replace the database. onProgress gets 0 to 1 while it uploads. */
+	importDb(id: string, env: string, file: File, onProgress?: (done: number) => void): Promise<string>;
 	appDatabase(id: string): Promise<AppDatabase>;
 	makeDbCopy(id: string, env: string): Promise<void>;
 	restoreDbCopy(id: string, env: string, name: string): Promise<void>;
@@ -292,6 +295,8 @@ export interface DbTable { schema: string; name: string; rows: number; }
 /** Cells are text, or null. */
 export interface DbRows { columns: string[]; rows: (string | null)[][]; truncated: boolean; }
 export interface DbResult extends DbRows { row_count: number; command: string; ms: number; }
+/** One write someone ran from the SQL box. `at` is unix seconds; `copy` is the copy made first, if any. */
+export interface DbChange { id: number; person: string; at: number; sql: string; ok: boolean; rows: number; ms: number; error: string; copy: string | null; }
 export interface DbCopy { name: string; made: string; size_bytes: number; kind: string; }
 export interface DbEnv { env: string; port?: number; user?: string; database?: string; copies: DbCopy[]; }
 /** engine is empty when the app has no database. */
