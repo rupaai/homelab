@@ -20,8 +20,9 @@ those belong in the PR. Keep the section numbers, other docs point to them.
 - **Ideas, not agreed:** logs with search, alerts to phones from apps, scheduled jobs, closing
   ports that aren't needed. Milestones 7 to 11 (home automation, backups, domain, leaving
   GitHub, appliance) are not started. Backups are deferred.
-- Workflow: one branch and one PR per piece of work. Labiba merges. Every merge to `main`
-  becomes a release.
+- Workflow: one branch and one PR per piece of work. Labiba merges. A merge to `main` becomes
+  a release `vX.Y.Z` unless it is only docs, chore, test, ci, style, refactor or build. PR titles
+  must start with `feat:`, `fix:`, `docs:` ... (`feat!:` is breaking); CI checks it.
 
 ## 1. What this is
 Homelab is a self-hosted home platform, like an OS for developers running on Docker. You push
@@ -74,7 +75,9 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
   activity. Done.
 - **On the device** (milestone 6): `homelabd setup` installs it; it updates itself from the
   companion (Settings → Resources: Update, or try a test version then Keep) and goes back on
-  its own if a new version doesn't stay up. Done.
+  its own if a new version doesn't stay up. Done. Versions: `build-N` or `vX.Y.Z` (any `v` is
+  newer than any `build`); test versions `pr-N-<commit>` or `vX.Y.Z-pr.N[.<commit>]`
+  (`internal/adapters/selfupdate/version.go`). Releases are still named `build-N`.
 - **API keys and users API**: every app environment gets `HOMELAB_TOKEN` and
   `HOMELAB_API_URL` automatically; admins make keys for outside servers. Done. See
   [docs/platform-services.md](docs/platform-services.md).
@@ -94,7 +97,8 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
   every promote and before SQL changes to prod. Copy now, Copy prod to dev, Restore, Import.
   Connect from the Mac over ssh. Databases screen with tables, rows and a read-only SQL box
   (changes only for Postgres, when switched on). Done. OpenAPI: `docs/db.openapi.yaml`.
-- **Release versions**: every app gets versions with no repo change (dev `v0.4.0-dev.1`, prod `v0.4.0`), shown in the companion and set as `HOMELAB_VERSION`; GitHub refusing never blocks a deploy. Apps list theirs with `releases:read`. `homelab-services release` also works in any CI. See [docs/platform-services.md](docs/platform-services.md).
+- **Release versions**: `homelab-services release <prod|dev|test>` picks the next `vX.Y.Z` (or `-dev.N` / `-pr.N`) from PR titles and makes the GitHub release; works in any repo's CI. Every app gets versions with no repo change (dev `v0.4.0-dev.1`, prod `v0.4.0`), shown in the companion and set as `HOMELAB_VERSION`; GitHub refusing never blocks a deploy. Apps list theirs with `releases:read`. See [docs/platform-services.md](docs/platform-services.md).
+- **Homelab's own releases**: `release.yml` runs `homelab-services release` for `vX.Y.Z` (first `v0.20.0`), test versions are `vX.Y.Z-pr.N.<commit>`; the companion shows the update's new/fix counts and notes (older ones were `build-N`).
 
 ## 4. Ports and files on the device
 - `7080` companion and API. `7081` Pocket ID (container on `7082`). `7085` app door (apps reach

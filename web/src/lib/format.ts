@@ -194,3 +194,24 @@ export function noteLines(notes: string | undefined): string[] {
 	}
 	return out;
 }
+
+/** "1 breaking, 2 new, 1 fix" for the changes of a Homelab release; nothing when it has none. */
+export function changesSummary(c: { breaking: number; new: number; fixes: number } | undefined): string {
+	if (!c) return '';
+	const parts: string[] = [];
+	if (c.breaking > 0) parts.push(`${c.breaking} breaking`);
+	if (c.new > 0) parts.push(`${c.new} new`);
+	if (c.fixes > 0) parts.push(c.fixes === 1 ? '1 fix' : `${c.fixes} fixes`);
+	return parts.join(', ');
+}
+
+/** Release notes ("## New" then "- line" lines) as sections to show as lists. */
+export function noteSections(notes: string | undefined): { title: string; items: string[] }[] {
+	const out: { title: string; items: string[] }[] = [];
+	for (const raw of (notes ?? '').split('\n')) {
+		const line = raw.trim();
+		if (line.startsWith('## ')) out.push({ title: line.slice(3), items: [] });
+		else if (line.startsWith('- ') && out.length > 0) out[out.length - 1].items.push(line.slice(2));
+	}
+	return out;
+}

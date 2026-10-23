@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { api } from '#lib/api.ts';
 	import { messageOf } from '#lib/errors.ts';
-	import { bytes, relativeTime, uptime } from '#lib/format.ts';
+	import { bytes, changesSummary, noteSections, relativeTime, uptime } from '#lib/format.ts';
 	import type { DeviceView, ResourcesView, TestVersion } from '#lib/types.ts';
 	import Spinner from '#lib/components/Spinner.svelte';
 
@@ -146,7 +146,15 @@
 						</div>
 					{/if}
 					{#if u.managed && u.available}
-						<button class="btn" type="button" disabled={updating} onclick={update}>{updating ? 'Updating…' : `Update to ${u.latest}`}</button>
+						<button class="btn" type="button" disabled={updating} onclick={update}>{updating ? 'Updating…' : `Update to ${u.latest}${changesSummary(u.changes) ? ': ' + changesSummary(u.changes) : ''}`}</button>
+						{#if u.changes?.notes}
+							<div class="notes">
+								{#each noteSections(u.changes.notes) as sec (sec.title)}
+									<h3>{sec.title}</h3>
+									<ul>{#each sec.items as item}<li>{item}</li>{/each}</ul>
+								{/each}
+							</div>
+						{/if}
 					{:else if u.managed && !u.testing}<p class="muted">Homelab is up to date.</p>{/if}
 					{#if updateMsg}<p class="notice" role="status">{updateMsg}</p>{/if}
 					{#if u.managed && !u.testing}
@@ -204,6 +212,8 @@
 	section .btn { margin-top: 0.25rem; }
 	section .notice { margin: 0 0 0.8rem; }
 	.actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0 0 0.8rem; }
+	.notes h3 { margin: 0.75rem 0 0.25rem; font-size: 1rem; }
+	.notes ul { margin: 0; padding-left: 1.25rem; }
 	.tests { margin-top: 1rem; }
 	.tests summary { cursor: pointer; font-weight: 600; }
 	.tests ul { list-style: none; padding: 0; margin: 0.5rem 0 0; }

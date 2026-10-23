@@ -1,7 +1,8 @@
 name: Test build
 
-# Every open pull request gets a test version: a pre-release named pr-<number>-<commit>
-# that can be tried on the device from the companion (Resources → Homelab → Test versions).
+# Every open pull request gets a test version: a pre-release named
+# vX.Y.Z-pr.<number>.<commit> (the version comes from the pull request titles, see
+# `homelab-services release`) that can be tried on the device from the companion (Resources → Homelab → Test versions).
 # A new push replaces it; closing the pull request deletes it. Pull requests from forks get
 # none, because they can't publish releases.
 on:
@@ -35,25 +36,48 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: Build the release tool
+        working-directory: services
+        run: cargo build --release --locked
+      - name: Pick the test version
+        id: version
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if ! BASE=$(services/target/release/homelab-services release test --repo "$GITHUB_REPOSITORY" --pr "$PR" --title "$PR_TITLE" --commit "$SHA" --first v0.20.0 --always --dry-run 2>raw-notes.txt); then
+            cat raw-notes.txt >&2
+            exit 1
+          fi
+          cat raw-notes.txt
+          if [ -z "$BASE" ]; then
+            echo "No test version for this pull request."
+            exit 0
+          fi
+          echo "version=$BASE.${SHA::7}" >> "$GITHUB_OUTPUT"
       - name: Rust targets for homelab-services
+        if: steps.version.outputs.version != ''
         run: |
           rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
           pip install ziglang==0.17.0 cargo-zigbuild
       - name: Build the companion
+        if: steps.version.outputs.version != ''
         working-directory: web
         run: npm ci && npm run build
       - name: Build homelabd
+        if: steps.version.outputs.version != ''
         env:
-          SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          echo "VERSION=pr-$PR-${SHA::7}" >> "$GITHUB_ENV"
-          scripts/build-release.sh "pr-$PR-${SHA::7}"
+          VERSION: ${{ steps.version.outputs.version }}
+        run: scripts/build-release.sh "$VERSION"
       - name: Replace the test version
+        if: steps.version.outputs.version != ''
         env:
+          VERSION: ${{ steps.version.outputs.version }}
           SHA: ${{ github.event.pull_request.head.sha }}
           TITLE: ${{ github.event.pull_request.title }}
         run: |
-          gh release list --limit 200 --json tagName -q '.[].tagName' | { grep "^pr-$PR-" || true; } | while read -r tag; do
+          gh release list --limit 200 --json tagName -q '.[].tagName' | { grep -E "^(pr-$PR-|v[0-9]+\.[0-9]+\.[0-9]+-pr\.$PR\.)" || true; } | while read -r tag; do
             gh release delete "$tag" --cleanup-tag --yes
           done
           gh release create "$VERSION" dist/* --prerelease --target "$SHA" --title "$TITLE" \
@@ -65,6 +89,6 @@ jobs:
     steps:
       - name: Delete the test version
         run: |
-          gh release list -R "$GITHUB_REPOSITORY" --limit 200 --json tagName -q '.[].tagName' | { grep "^pr-$PR-" || true; } | while read -r tag; do
+          gh release list -R "$GITHUB_REPOSITORY" --limit 200 --json tagName -q '.[].tagName' | { grep -E "^(pr-$PR-|v[0-9]+\.[0-9]+\.[0-9]+-pr\.$PR\.)" || true; } | while read -r tag; do
             gh release delete "$tag" -R "$GITHUB_REPOSITORY" --cleanup-tag --yes
           done

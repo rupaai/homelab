@@ -9,7 +9,7 @@ as a system service. Everything from milestones 1 to 5 works the same way there.
 What it adds:
 
 - **`homelabd setup`**: one command, run with sudo on the device, that installs Homelab.
-- **Releases**: every merge to `main` becomes a numbered GitHub release (`build-<n>`) with the
+- **Releases**: every merge to `main` becomes a GitHub release (`build-<n>` at the time; now `vX.Y.Z`, see HANDOVER.md) with the
   program for Linux and the Mac (the Mac build is for developing Homelab).
 - **Self-update** from the companion, with an automatic return to the previous version if a
   new one doesn't stay up.
@@ -71,7 +71,7 @@ Homelab folder itself is 0700, so nobody else on the device can reach them.
 
 ## Updates
 
-`.github/workflows/release.yml` publishes `build-<n>` on every push to
+`.github/workflows/release.yml` publishes a release (`build-<n>` at the time) on every push to
 `main` with `homelabd-linux-amd64`, `homelabd-linux-arm64`, `homelabd-darwin-arm64` and
 `checksums.txt`. The repo is private, so Homelab reads releases with the `GITHUB_TOKEN` from
 Settings (it needs the `repo` scope, which it already has for private app repos).
@@ -93,7 +93,7 @@ On the Mac nothing changes: update with `git pull && make build`.
 ### Test versions
 
 `.github/workflows/test-build.yml` builds every open pull request (from this repo, not
-forks) as a pre-release named `pr-<number>-<commit>`, titled with the pull request's title.
+forks) as a pre-release named `pr-<number>-<commit>` (now `vX.Y.Z-pr.<number>.<commit>`), titled with the pull request's title.
 A new push replaces it; closing the pull request deletes it. Pre-releases never count as the
 newest version, so normal updates ignore them. Both workflows build with
 `scripts/build-release.sh`.

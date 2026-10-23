@@ -321,12 +321,13 @@ export const mockApi: Api = {
 			],
 			rebootRequired: true, updatesPending: 4, securityPending: 2, reportedAt: new Date().toISOString()
 		},
-		update: { managed: true, current: 'build-12', latest: 'build-14', available: true, checkedAt: new Date().toISOString(), lastResult: 'Updated to build-12.' }
+		update: { managed: true, current: 'v0.20.0', latest: 'v0.21.0', available: true, checkedAt: new Date().toISOString(), lastResult: 'Updated to v0.20.0.',
+			changes: { breaking: 0, new: 2, fixes: 1, notes: '## New\n\n- Show what an update changes (#31)\n- Pick release versions from PR titles (#30)\n\n## Fixes\n\n- Keep the test version when Homelab restarts (#29)' } }
 	}),
-	updateHomelab: () => delay('build-14'),
-	testVersions: () => delay([{ version: 'pr-17-1a2b3c4', pr: 17, title: 'Test version button' }, { version: 'pr-16-9f8e7d6', pr: 16, title: 'Platform services' }]),
+	updateHomelab: () => delay('v0.21.0'),
+	testVersions: () => delay([{ version: 'v0.21.0-pr.17.1a2b3c4', pr: 17, title: 'Test version button' }, { version: 'v0.21.0-pr.16.9f8e7d6', pr: 16, title: 'Platform services' }]),
 	tryTestVersion: (version: string) => delay({ version, pr: 17, title: 'Test version button' }),
-	endTest: (keep: boolean) => delay(keep ? '' : 'build-12'),
+	endTest: (keep: boolean) => delay(keep ? '' : 'v0.20.0'),
 	async removePerson(id: string) {
 		const entry = household.find((p) => p.id === id);
 		if (!entry) throw new ApiError("That person isn't in Homelab.", 404);

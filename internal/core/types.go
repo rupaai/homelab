@@ -319,12 +319,23 @@ type UpdateStatus struct {
 	Latest    string     `json:"latest,omitempty"`
 	Available bool       `json:"available"`
 	CheckedAt *time.Time `json:"checkedAt,omitempty"`
-	// LastResult says how the last update went, e.g. "Updated to build-12" or "build-12
-	// didn't start, so Homelab went back to build-11".
+	// Changes is what the newest version changes, read from its release notes.
+	Changes *UpdateChanges `json:"changes,omitempty"`
+	// LastResult says how the last update went, e.g. "Updated to v0.21.0" or "v0.21.0
+	// didn't start, so Homelab went back to v0.20.0".
 	LastResult string `json:"lastResult,omitempty"`
 	Note       string `json:"note,omitempty"`
 	// Testing is set while a test version (a pull request's build) runs.
 	Testing *TestRun `json:"testing,omitempty"`
+}
+
+// UpdateChanges is the release notes of the newest version: how many lines each section
+// has, and the notes themselves (lines such as "## New" and "- add x (#2)").
+type UpdateChanges struct {
+	Breaking int    `json:"breaking"`
+	New      int    `json:"new"`
+	Fixes    int    `json:"fixes"`
+	Notes    string `json:"notes,omitempty"`
 }
 
 // TestVersion is a build of an open Homelab pull request that can be tried on the device.

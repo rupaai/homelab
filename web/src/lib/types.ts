@@ -363,7 +363,8 @@ export interface SystemInfo {
 	/** -1 when unknown */
 	updatesPending: number; securityPending: number; reportedAt?: string;
 }
-export interface UpdateStatus { managed: boolean; current: string; latest?: string; available: boolean; checkedAt?: string; lastResult?: string; note?: string; testing?: TestRun; }
+export interface UpdateChanges { breaking: number; new: number; fixes: number; notes?: string; }
+export interface UpdateStatus { managed: boolean; current: string; latest?: string; available: boolean; checkedAt?: string; changes?: UpdateChanges; lastResult?: string; note?: string; testing?: TestRun; }
 /** A build of an open Homelab pull request. */
 export interface TestVersion { version: string; pr: number; title: string; }
 export interface TestRun extends TestVersion { from: string; at: string; }
