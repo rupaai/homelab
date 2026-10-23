@@ -25,7 +25,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -249,7 +248,8 @@ func prune(binDir string) {
 	}
 	type version struct {
 		name string
-		n    int
+		rel  relVer
+		ok   bool // a release version; the others sort last
 	}
 	var vs []version
 	for _, e := range entries {
@@ -257,10 +257,19 @@ func prune(binDir string) {
 		if !ok || e.Type()&os.ModeSymlink != 0 || strings.HasSuffix(v, ".tmp") {
 			continue
 		}
-		n, _ := BuildNumber(v)
-		vs = append(vs, version{e.Name(), n})
+		r, ok := parseRelease(v)
+		vs = append(vs, version{e.Name(), r, ok})
 	}
-	sort.Slice(vs, func(i, j int) bool { return vs[i].n > vs[j].n })
+	sort.Slice(vs, func(i, j int) bool {
+		a, b := vs[i], vs[j]
+		if a.ok != b.ok {
+			return a.ok
+		}
+		if c := a.rel.compare(b.rel); c != 0 {
+			return c > 0
+		}
+		return a.name > b.name
+	})
 	for i, v := range vs {
 		if i >= keepVersions && !keep[v.name] {
 			os.Remove(filepath.Join(binDir, v.name))
@@ -269,25 +278,13 @@ func prune(binDir string) {
 	}
 }
 
-// BuildNumber reads the number of a release version such as "build-12".
+// BuildNumber reads the number of an old release version such as "build-12".
 func BuildNumber(v string) (int, bool) {
-	s, ok := strings.CutPrefix(v, "build-")
-	if !ok {
+	r, ok := parseRelease(v)
+	if !ok || r.semver {
 		return 0, false
 	}
-	n, err := strconv.Atoi(s)
-	return n, err == nil && n > 0
-}
-
-// Newer says whether latest should replace current. A Homelab built by hand (not a
-// numbered release) always takes a release.
-func Newer(latest, current string) bool {
-	l, ok := BuildNumber(latest)
-	if !ok {
-		return false
-	}
-	c, ok := BuildNumber(current)
-	return !ok || l > c
+	return r.major, true
 }
 
 // relink points binDir/name at target in one step.

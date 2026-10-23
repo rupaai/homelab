@@ -201,7 +201,7 @@ func (u *Updater) Apply(ctx context.Context) (string, error) {
 	return r.Tag, nil
 }
 
-// Tests lists the test versions: pre-releases named pr-<number>-<commit> that have a
+// Tests lists the test versions: pre-releases named pr-<number>-<commit> or v<x.y.z>-pr.<number> that have a
 // program for this computer.
 func (u *Updater) Tests(ctx context.Context) ([]core.TestVersion, error) {
 	body, err := u.get(ctx, u.o.API+"/repos/"+u.o.Repo+"/releases?per_page=50", "application/vnd.github+json", 4<<20)

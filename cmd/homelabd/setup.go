@@ -306,15 +306,13 @@ func activate(bin, version string, program []byte, force bool) error {
 }
 
 // checkNotOlder refuses to replace a newer release with an older one. Versions that aren't
-// numbered releases (a test version or a build by hand) can't be compared and are let through.
+// release versions (a test version or a build by hand) can't be compared and are let through.
 func checkNotOlder(bin, version string) error {
 	running, err := selfupdate.Running(bin)
 	if err != nil {
 		return nil
 	}
-	n, ok := selfupdate.BuildNumber(version)
-	r, rok := selfupdate.BuildNumber(running)
-	if ok && rok && n < r {
+	if c, ok := selfupdate.Compare(version, running); ok && c < 0 {
 		return fmt.Errorf("this program is %s, but %s is already installed. Use the newer program, or add --force to go back", version, running)
 	}
 	return nil

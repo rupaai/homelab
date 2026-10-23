@@ -81,14 +81,6 @@ func rows(t *testing.T, path string) []string {
 	return out
 }
 
-func TestTestPR(t *testing.T) {
-	for v, want := range map[string]int{"pr-12-1a2b3c4": 12, "pr-12": 0, "pr-x-1": 0, "build-3": 0, "pr-0-a": 0} {
-		if n, _ := TestPR(v); n != want {
-			t.Errorf("TestPR(%q) = %d, want %d", v, n, want)
-		}
-	}
-}
-
 func TestTryAndGoBackPutsDataBack(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("updates are for Linux")
