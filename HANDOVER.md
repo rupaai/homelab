@@ -96,6 +96,7 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
   every promote and before SQL changes to prod. Copy now, Copy prod to dev, Restore, Import.
   Connect from the Mac over ssh. Databases screen with tables, rows and a read-only SQL box
   (changes only for Postgres, when switched on). Done. OpenAPI: `docs/db.openapi.yaml`.
+- **Release versions**: `homelab-services release <prod|dev|test>` picks the next `vX.Y.Z` (or `-dev.N` / `-pr.N`) from PR titles and makes the GitHub release; works in any repo's CI. Command only, not wired into homelabd or the companion yet. See [docs/platform-services.md](docs/platform-services.md).
 
 ## 4. Ports and files on the device
 - `7080` companion and API. `7081` Pocket ID (container on `7082`). `7085` app door (apps reach

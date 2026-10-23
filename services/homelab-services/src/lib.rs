@@ -13,9 +13,13 @@ pub mod dbs_sql;
 pub mod disk;
 pub mod files;
 pub mod meta;
+pub mod releases;
+pub mod releases_github;
 pub mod secrets;
 pub mod secrets_api;
 
+#[cfg(test)]
+mod releases_tests;
 #[cfg(test)]
 mod testutil;
 

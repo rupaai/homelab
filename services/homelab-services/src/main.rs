@@ -7,10 +7,16 @@ use homelab_services::app::{app, AppState};
 use homelab_services::config::{prepare_data_dir, prepare_storage, Config};
 use homelab_services::dbs::Dbs;
 use homelab_services::files::{spawn_purge, Files};
+use homelab_services::releases;
 use homelab_services::secrets::Secrets;
 use homelab_services::VERSION;
 
 const USAGE: &str = "usage: homelab-services [version]\n\
+       homelab-services release <prod|dev|test> --repo owner/name --commit <sha>\n\
+                        [--pr N --title \"...\"] [--first vX.Y.Z] [--always] [--dry-run]\n\
+\n\
+release picks the next version and makes the GitHub release. It needs GITHUB_TOKEN and reads\n\
+GITHUB_API_URL (optional). It prints the version on stdout and the notes on stderr.\n\
 \n\
 With no arguments, runs the server. It is configured with:\n\
   HOMELAB_SERVICES_LISTEN  loopback ip:port to listen on\n\
@@ -25,6 +31,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.as_slice() {
         [] => {}
+        [cmd, rest @ ..] if cmd == "release" => return releases::command(rest),
         [arg] if arg == "version" => {
             println!("homelab-services {VERSION}");
             return ExitCode::SUCCESS;

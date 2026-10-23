@@ -82,3 +82,23 @@ fn missing_or_bad_storage_is_refused() {
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("HOMELAB_SERVICES_STORAGE"));
 }
+
+#[test]
+fn release_without_a_token_exits_one_and_names_the_setting() {
+    let out = bin()
+        .env_remove("GITHUB_TOKEN")
+        .args(["release", "prod", "--repo", "a/b", "--commit", "abc"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("GITHUB_TOKEN"));
+    assert!(out.stdout.is_empty());
+}
+
+#[test]
+fn release_with_bad_arguments_exits_two_with_usage() {
+    let out = bin().args(["release", "weekly"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert!(text.contains("unknown channel") && text.contains("usage:"));
+}
