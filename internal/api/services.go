@@ -15,9 +15,9 @@ import (
 // servicePaths are the parts of the API that homelab-services serves (platform services).
 // Homelab decides who is calling, then forwards the call with that caller signed.
 //
-// /api/secrets is for an app's own key only (the secrets API). Homelab refuses everyone else
+// /api/secrets and /api/releases are for an app's own key only. Homelab refuses everyone else
 // before forwarding, and homelab-services refuses them again.
-var servicePaths = []string{"/api/files", "/api/db", "/api/data", "/api/secrets"}
+var servicePaths = []string{"/api/files", "/api/db", "/api/data", "/api/secrets", "/api/releases"}
 
 // secretsPath is the part of the API that apps use for their secrets.
 const secretsPath = "/api/secrets"
@@ -26,6 +26,15 @@ const secretsPath = "/api/secrets"
 func isSecretsAPI(path string) bool {
 	return path == secretsPath || strings.HasPrefix(path, secretsPath+"/")
 }
+
+// releasesPath is the part of the API where an app lists its own release versions.
+const releasesPath = "/api/releases"
+
+func isReleasesAPI(path string) bool {
+	return path == releasesPath || strings.HasPrefix(path, releasesPath+"/")
+}
+
+const msgReleasesAppOnly = "Release versions can only be read by the app itself, with its own key (HOMELAB_TOKEN)."
 
 const msgSecretsAppOnly = "Secrets can only be used by the app itself, with its own key (HOMELAB_TOKEN)."
 
@@ -49,6 +58,10 @@ func (s *server) personToServices(w http.ResponseWriter, r *http.Request) {
 	// People use the companion's own secrets screens, never the app's secrets API.
 	if isSecretsAPI(r.URL.Path) {
 		writeErr(w, http.StatusForbidden, msgSecretsAppOnly)
+		return
+	}
+	if isReleasesAPI(r.URL.Path) {
+		writeErr(w, http.StatusForbidden, msgReleasesAppOnly)
 		return
 	}
 	dropCopyParam(r)
@@ -140,6 +153,19 @@ func (s *server) keyToServices(w http.ResponseWriter, r *http.Request) {
 	if isSecretsAPI(r.URL.Path) && c.Kind != hub.KeyKindApp {
 		writeErr(w, http.StatusForbidden, msgSecretsAppOnly)
 		return
+	}
+	if isReleasesAPI(r.URL.Path) {
+		if c.Kind != hub.KeyKindApp {
+			writeErr(w, http.StatusForbidden, msgReleasesAppOnly)
+			return
+		}
+		// Homelab knows the app's repo and holds the GitHub token; the app needs neither.
+		hd, err := s.hub.ReleasesHeaders(r.Context(), c.App)
+		if err != nil {
+			writeErr(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		r = r.WithContext(core.WithServiceHeaders(r.Context(), hd))
 	}
 	dropCopyParam(r)
 	sc := core.ServiceCaller{Kind: "admin", Person: c.PersonID, Key: c.KeyID, Scopes: c.Scopes}

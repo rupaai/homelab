@@ -801,6 +801,7 @@ mod tests {
             secrets: None,
             secrets_problem: "broken".into(),
             dbs: env.dbs.clone(),
+            github_api: String::new(),
         };
         let router = crate::app::app(state);
         for caller in [person(), admin(&[SCOPE_READ])] {

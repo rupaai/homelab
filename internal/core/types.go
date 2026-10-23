@@ -65,6 +65,11 @@ type Release struct {
 	When     time.Time `json:"when"`     // commit time
 	BuildURL string    `json:"buildUrl"` // where the build's logs are
 	Manifest []byte    `json:"-"`        // homelab.yaml at this commit
+	// Version is the release version from GitHub (v0.4.0-dev.1 on dev, v0.4.0 on prod), with
+	// a one-line Summary ("2 new, 1 fix") and the Notes. All empty when it couldn't be made.
+	Version string `json:"version,omitempty"`
+	Summary string `json:"summary,omitempty"`
+	Notes   string `json:"notes,omitempty"`
 }
 
 // ImageRef is how the image is pulled and run: by digest when known.
@@ -81,6 +86,14 @@ func (r Release) Short() string {
 		return r.Commit[:7]
 	}
 	return r.Commit
+}
+
+// Label is how people name the release: its version when it has one, else the short commit.
+func (r Release) Label() string {
+	if r.Version != "" {
+		return r.Version
+	}
+	return r.Short()
 }
 
 // Mount is a host folder made available inside the app's containers.

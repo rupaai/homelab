@@ -89,7 +89,7 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
   never read secrets. Views are logged, 5 versions kept, hidden in logs. Apps get them as files
   in `/run/secrets` (and as environment variables unless `secrets_as: files`).
   `generate_secrets` makes them automatically. Apps can save their own through the API. Done.
-- **Plugins**: files, secrets and databases (read only) in TypeScript, Python and Rust, e.g.
+- **Plugins**: files, secrets, databases (read only) and releases in TypeScript, Python and Rust, e.g.
   `Homelab().secrets.get("X")`. Not published to package registries yet. See
   [plugins/README.md](plugins/README.md).
 - **Databases**: `database: postgres` or `sqlite` in `homelab.yaml` gives each environment its
@@ -97,8 +97,8 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
   every promote and before SQL changes to prod. Copy now, Copy prod to dev, Restore, Import.
   Connect from the Mac over ssh. Databases screen with tables, rows and a read-only SQL box
   (changes only for Postgres, when switched on). Done. OpenAPI: `docs/db.openapi.yaml`.
+- **Release versions**: `homelab-services release <prod|dev|test>` picks the next `vX.Y.Z` (or `-dev.N` / `-pr.N`) from PR titles and makes the GitHub release; works in any repo's CI. Every app gets versions with no repo change (dev `v0.4.0-dev.1`, prod `v0.4.0`), shown in the companion and set as `HOMELAB_VERSION`; GitHub refusing never blocks a deploy. Apps list theirs with `releases:read`. See [docs/platform-services.md](docs/platform-services.md).
 - **Homelab's own releases**: `release.yml` runs `homelab-services release` for `vX.Y.Z` (first `v0.20.0`), test versions are `vX.Y.Z-pr.N.<commit>`; the companion shows the update's new/fix counts and notes (older ones were `build-N`).
-- **Release versions**: `homelab-services release <prod|dev|test>` picks the next `vX.Y.Z` (or `-dev.N` / `-pr.N`) from PR titles and makes the GitHub release; works in any repo's CI. Homelab's own releases use it; apps can use it in their CI. See [docs/platform-services.md](docs/platform-services.md).
 
 ## 4. Ports and files on the device
 - `7080` companion and API. `7081` Pocket ID (container on `7082`). `7085` app door (apps reach

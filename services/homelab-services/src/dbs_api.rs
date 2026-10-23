@@ -1524,6 +1524,7 @@ mod tests {
             secrets: None,
             secrets_problem: "broken".into(),
             dbs,
+            github_api: String::new(),
         });
         let req = request(
             &person(),

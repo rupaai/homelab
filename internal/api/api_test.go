@@ -64,7 +64,10 @@ func (f flakySource) ReadFile(ctx context.Context, repo, ref, path string) ([]by
 	return f.Source.ReadFile(ctx, repo, ref, path)
 }
 
-func newRig(t *testing.T) *rig {
+func newRig(t *testing.T) *rig { return newRigWith(t) }
+
+// newRigWith is newRig with changes to the hub's adapters.
+func newRigWith(t *testing.T, change ...func(*hub.Adapters)) *rig {
 	t.Helper()
 	dir := t.TempDir()
 	st, err := state.Open(filepath.Join(dir, "homelab.db"))
@@ -81,14 +84,18 @@ func newRig(t *testing.T) *rig {
 	sec := fake.NewSecrets()
 	mail := &fake.Email{}
 	build, reg, dep := fake.NewBuilder(), fake.NewRegistry(), fake.NewDeployer()
-	h := hub.New(hub.Config{DataDir: dir}, st, hub.Adapters{
+	ad := hub.Adapters{
 		Source: flakySource{src, fail}, Builder: build, Registry: reg, Deployer: dep, Databases: fake.NewDatabases(),
 		Addresses: fake.NewAddresses(), Health: fake.NewHealth(), Secrets: sec, Identity: idp, Email: mail,
 		Notifier: fake.NewNotifier(), Resources: &fake.Resources{Usage: core.DeviceUsage{DiskUsed: 1, DiskTotal: 2}},
 		System: &fake.System{Report: core.SystemInfo{OS: "Ubuntu 24.04.4 LTS", UpdatesPending: -1, SecurityPending: -1}},
 		Updater: &fake.Updater{State: core.UpdateStatus{Managed: true, Current: "build-1", Latest: "build-2", Available: true},
 			TestList: []core.TestVersion{{Version: "pr-7-abc1234", PR: 7, Title: "Better sign-in"}}},
-	})
+	}
+	for _, c := range change {
+		c(&ad)
+	}
+	h := hub.New(hub.Config{DataDir: dir}, st, ad)
 	return &rig{h: h, src: src, build: build, reg: reg, dep: dep, fail: fail, store: st, idp: idp, sec: sec, mail: mail}
 }
 

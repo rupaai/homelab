@@ -15,6 +15,12 @@ export interface Release {
 	author: string;
 	when: string;
 	buildUrl: string;
+	/** The release version (v0.4.0-dev.1 on dev, v0.4.0 on prod). Missing when it couldn't be made. */
+	version?: string;
+	/** One line about what changed, like "2 new, 1 fix". */
+	summary?: string;
+	/** The release notes as markdown. */
+	notes?: string;
 }
 
 export interface ReleaseView extends Release {
@@ -129,6 +135,8 @@ export interface AppView {
 	autoPromote: AutoPromote | null;
 	held: HeldCommit[];
 	mirror: MirrorStatus | null;
+	/** Why Homelab can't make release versions for this app now. Empty when it can. */
+	versionProblem: string;
 	envs: EnvView[];
 	latestBuild: BuildView | null;
 }
@@ -150,6 +158,10 @@ export interface PromotePreview {
 	missingSecrets: string[];
 	devHealth: Health;
 	blockers: string[];
+	/** The version prod gets, like v0.4.0. Empty when versions aren't made for this app. */
+	nextVersion: string;
+	summary: string;
+	notes: string;
 }
 
 export interface RollbackPreview {

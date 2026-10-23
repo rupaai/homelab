@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { api } from '#lib/api.ts';
 	import { messageOf } from '#lib/errors.ts';
+	import { noteLines, promoteTitle } from '#lib/format.ts';
 	import type { PromotePreview } from '#lib/types.ts';
 	import ReleaseLine from './ReleaseLine.svelte';
 	import Sheet from './Sheet.svelte';
@@ -33,6 +34,7 @@
 		}
 	}
 	const blocked = $derived(!preview || preview.blockers.length > 0);
+	const notes = $derived(noteLines(preview?.notes));
 </script>
 
 <Sheet title="Promote to prod" {onclose}>
@@ -41,7 +43,16 @@
 			<p class="loading"><Spinner /> Checking what would change…</p>
 		{/if}
 		{#if preview}
-			<p class="lead">This puts the exact build running on dev onto prod.</p>
+			<p class="lead">
+				{#if preview.nextVersion}<strong>{promoteTitle(preview.to?.version, preview.nextVersion)}.</strong>{/if}
+				This puts the exact build running on dev onto prod.
+			</p>
+			{#if preview.summary}<p class="summary">{preview.summary}</p>{/if}
+			{#if notes.length}
+				<ul class="notes" aria-label="Release notes">
+					{#each notes as line}<li>{line}</li>{/each}
+				</ul>
+			{/if}
 
 			<h3>Prod runs now</h3>
 			<ReleaseLine release={preview.from} empty="Nothing yet. This is prod's first version." />
@@ -96,6 +107,14 @@
 		margin: 0.4rem 0 0;
 		color: var(--muted);
 		font-size: 1.2rem;
+	}
+	.summary {
+		margin: 0.3rem 0 0;
+		color: var(--muted);
+	}
+	.notes {
+		margin: 0.4rem 0 0;
+		padding-left: 1.1rem;
 	}
 	.commits {
 		margin: 0;

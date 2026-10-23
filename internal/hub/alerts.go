@@ -117,7 +117,7 @@ func (h *Hub) diskAlert(ctx context.Context, key, what string, full float64) {
 func (h *Hub) alertRollback(ctx context.Context, a state.App, from, to core.Release) {
 	h.notify(ctx, h.appAudience(ctx, a.ID), core.Notification{
 		Title: a.Name + " was rolled back",
-		Body:  fmt.Sprintf("%s turned unhealthy after it was promoted, so prod went back to %s.", from.Short(), to.Short()),
+		Body:  fmt.Sprintf("%s turned unhealthy after it was promoted, so prod went back to %s.", from.Label(), to.Label()),
 		URL:   "/apps/" + a.ID, Tag: "rollback:" + a.ID,
 	})
 }

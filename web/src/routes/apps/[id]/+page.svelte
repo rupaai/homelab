@@ -90,6 +90,10 @@
 			<p class="notice info"><Spinner /> A new build ({app.latestBuild.short}) is being made.</p>
 		{/if}
 
+		{#if app.versionProblem}
+			<p class="notice"><strong>No versions for now</strong>{app.versionProblem} Deploys still work; they just have no version.</p>
+		{/if}
+
 		{#each app.envs as env (env.env)}
 			<EnvCard
 				{app}

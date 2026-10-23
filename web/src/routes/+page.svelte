@@ -3,7 +3,7 @@
 	import { onMount } from 'svelte';
 	import { api } from '#lib/api.ts';
 	import { messageOf } from '#lib/errors.ts';
-	import { appInitial, envLabel } from '#lib/format.ts';
+	import { appInitial, envLabel, releaseName } from '#lib/format.ts';
 	import type { AppView, MeView } from '#lib/types.ts';
 	import { startPolling } from '#lib/poll.ts';
 	import Sheet from '#lib/components/Sheet.svelte';
@@ -89,7 +89,7 @@
 								<StatusDot health={env.health} />
 							{/if}
 						</span>
-						<code class="sha">{env.version ? env.version.short : '—'}</code>
+						<code class="sha">{env.version ? releaseName(env.version) : '—'}</code>
 					</li>
 				{/each}
 			</ul>

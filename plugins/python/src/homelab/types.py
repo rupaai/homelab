@@ -293,3 +293,28 @@ def _rows_fields(d: Dict[str, Any]) -> Dict[str, Any]:
         "rows": [list(r) for r in rows if isinstance(r, list)] if isinstance(rows, list) else [],
         "truncated": d.get("truncated") is True,
     }
+
+
+@dataclass(frozen=True)
+class Release:
+    """One release of the app. Dev builds are pre-releases (``prerelease`` is true)."""
+
+    tag: str  # for example "v0.4.0" or "v0.4.0-dev.2"
+    prerelease: bool
+    commit: str  # the full commit it was made from
+    date: str  # ISO 8601
+    summary: str  # for example "2 new, 1 fix"; empty without notes
+    notes: str  # markdown
+    raw: Dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "Release":
+        return cls(
+            tag=_str(d.get("tag")),
+            prerelease=d.get("prerelease") is True,
+            commit=_str(d.get("commit")),
+            date=_str(d.get("date")),
+            summary=_str(d.get("summary")),
+            notes=_str(d.get("notes")),
+            raw=d,
+        )

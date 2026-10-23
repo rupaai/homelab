@@ -384,6 +384,57 @@ func (s *Store) SetWant(ctx context.Context, d Deployment) (Deployment, error) {
 	return d, tx.Commit()
 }
 
+// SetVersion puts a release version on what an environment runs now (and on its latest
+// history entry), when that is the given commit. It changes nothing else.
+func (s *Store) SetVersion(ctx context.Context, app, env, commit, version, summary, notes string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	set := func(raw sql.NullString) (sql.NullString, bool, error) {
+		r, err := decodeRelease(raw)
+		if err != nil || r == nil || r.Commit != commit {
+			return raw, false, err
+		}
+		r.Version, r.Summary, r.Notes = version, summary, notes
+		enc, err := encodeRelease(r)
+		return enc, err == nil, err
+	}
+	var want sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT want FROM envs WHERE app = ? AND env = ?`, app, env).Scan(&want); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return core.ErrNotFound
+		}
+		return err
+	}
+	enc, ok, err := set(want)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return core.ErrNotFound
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE envs SET want = ? WHERE app = ? AND env = ?`, enc, app, env); err != nil {
+		return err
+	}
+	var id int64
+	var rel string
+	err = tx.QueryRowContext(ctx, `SELECT id, release FROM deployments WHERE app = ? AND env = ? ORDER BY id DESC LIMIT 1`, app, env).Scan(&id, &rel)
+	if err == nil {
+		if enc, ok, err := set(sql.NullString{String: rel, Valid: true}); err != nil {
+			return err
+		} else if ok {
+			if _, err := tx.ExecContext(ctx, `UPDATE deployments SET release = ? WHERE id = ?`, enc.String, id); err != nil {
+				return err
+			}
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	return tx.Commit()
+}
+
 // SetLastBuild records the newest build handled for an environment.
 func (s *Store) SetLastBuild(ctx context.Context, app, env, commit string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE envs SET last_build = ? WHERE app = ? AND env = ?`, commit, app, env)

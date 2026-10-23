@@ -61,6 +61,10 @@ const (
 	ScopeFilesWrite = "files:write" // also make folders, save, change and delete files
 	ScopeDBRead     = "db:read"     // look inside every database (read only)
 
+	// ScopeReleasesRead belongs to an app's own key: it lists the app's own releases. No admin
+	// key can be made with it, and homelab-services refuses admin keys on that route.
+	ScopeReleasesRead = "releases:read"
+
 	// Secrets scopes belong to an app's own key and never to an admin key: no admin key can
 	// be made with them, and homelab-services refuses admin keys on every secrets route.
 	ScopeSecretsRead  = "secrets:read"  // list and read the app's own secrets
@@ -101,11 +105,11 @@ func checkScope(s string) error {
 	return nil
 }
 
-// appKeyScopes are the scopes an app's own key has. secrets_api in homelab.yaml decides the
+// appKeyScopes are the scopes an app's own key has: users:read and releases:read always. secrets_api in homelab.yaml decides the
 // secrets ones: read (the default) gives secrets:read, write also gives secrets:write, and
 // none gives neither.
 func appKeyScopes(m *manifest.Manifest) []string {
-	out := []string{ScopeUsersRead}
+	out := []string{ScopeUsersRead, ScopeReleasesRead}
 	switch m.SecretsAPI {
 	case manifest.SecretsAPINone:
 	case manifest.SecretsAPIWrite:

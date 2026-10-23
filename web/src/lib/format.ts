@@ -164,6 +164,37 @@ export function shortDate(iso: string | null | undefined): string {
 	return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+/** What people call a release: its version when it has one, else the short commit. */
+export function releaseName(r: { version?: string; short: string } | null | undefined): string {
+	return r ? r.version || r.short : '';
+}
+
+/** The title of the promote sheet: "Promote v0.4.0-dev.2 to prod as v0.4.0" when both versions are known. */
+export function promoteTitle(devVersion: string | undefined, nextVersion: string | undefined): string {
+	if (devVersion && nextVersion) return `Promote ${devVersion} to prod as ${nextVersion}`;
+	if (nextVersion) return `Promote to prod as ${nextVersion}`;
+	return 'Promote to prod';
+}
+
+/**
+ * Release notes (markdown with "## New" headings and "- item" lines) as a plain list. Items
+ * under "Breaking" start with "Breaking:" so they stand out without the headings.
+ */
+export function noteLines(notes: string | undefined): string[] {
+	const out: string[] = [];
+	let breaking = false;
+	for (const raw of (notes ?? '').split('\n')) {
+		const line = raw.trim();
+		const heading = /^#{1,6}\s+(.*)$/.exec(line);
+		if (heading) {
+			breaking = heading[1].trim().toLowerCase() === 'breaking';
+		} else if (line.startsWith('- ') && line.length > 2) {
+			out.push(breaking ? `Breaking: ${line.slice(2)}` : line.slice(2));
+		}
+	}
+	return out;
+}
+
 /** "1 breaking, 2 new, 1 fix" for the changes of a Homelab release; nothing when it has none. */
 export function changesSummary(c: { breaking: number; new: number; fixes: number } | undefined): string {
 	if (!c) return '';

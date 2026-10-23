@@ -310,7 +310,7 @@ func TestAppKeyIsInjectedAndStable(t *testing.T) {
 		t.Fatal("prod shares dev's token")
 	}
 	c, err := r.hub.Authenticate(ctx, tok)
-	if err != nil || c.Kind != KeyKindApp || c.App != "movies" || c.Env != core.Dev || !reflect.DeepEqual(c.Scopes, []string{ScopeUsersRead, ScopeSecretsRead}) {
+	if err != nil || c.Kind != KeyKindApp || c.App != "movies" || c.Env != core.Dev || !reflect.DeepEqual(c.Scopes, []string{ScopeUsersRead, ScopeReleasesRead, ScopeSecretsRead}) {
 		t.Fatalf("caller=%+v err=%v", c, err)
 	}
 	if got := c.Label(); got != "app key movies/dev" {

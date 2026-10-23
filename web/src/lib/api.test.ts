@@ -308,3 +308,23 @@ describe('databases API', () => {
 		});
 	});
 });
+
+describe('release versions in the API', () => {
+	afterEach(() => vi.unstubAllGlobals());
+	const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+
+	it('fills in the version fields older servers leave out', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ from: null, to: null, commits: null, compareUrl: '', dataCopy: false, missingSecrets: null, devHealth: 'healthy', blockers: null })));
+		const p = await api.promotePreview('movies');
+		expect(p).toMatchObject({ nextVersion: '', summary: '', notes: '', commits: [], blockers: [] });
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json([{ id: 'movies', envs: null, held: null }])));
+		expect((await api.apps())[0].versionProblem).toBe('');
+	});
+
+	it('keeps the versions the server sends', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ from: null, to: null, commits: [], blockers: [], missingSecrets: [], nextVersion: 'v0.4.0', summary: '2 new, 1 fix', notes: '## New\n\n- a\n' })));
+		expect(await api.promotePreview('movies')).toMatchObject({ nextVersion: 'v0.4.0', summary: '2 new, 1 fix' });
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json([{ id: 'movies', versionProblem: "Can't make versions on GitHub: the token needs Contents: read and write." }])));
+		expect((await api.apps())[0].versionProblem).toContain('Contents: read and write');
+	});
+});

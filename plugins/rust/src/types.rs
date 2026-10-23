@@ -371,3 +371,22 @@ impl RowsOptions {
         self
     }
 }
+
+/// One release of the app. Dev builds are pre-releases.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Release {
+    /// For example `v0.4.0` or `v0.4.0-dev.2`.
+    pub tag: String,
+    pub prerelease: bool,
+    /// The full commit it was made from.
+    pub commit: String,
+    /// An ISO 8601 time.
+    pub date: String,
+    /// A short line such as `2 new, 1 fix`. Empty without notes.
+    pub summary: String,
+    /// The release notes as markdown.
+    pub notes: String,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}

@@ -19,7 +19,7 @@ Small libraries that let your code use Homelab's services in one line, for examp
 | Rust | [rust](rust) | `homelab-sdk = { git = "https://github.com/rupaai/homelab" }` |
 
 Each folder's README has a quick start and every call. Services so far: **files**,
-**secrets** and **databases**. Data comes next, as `homelab.data`.
+**secrets**, **databases** and **releases** (the app's own versions). Data comes next, as `homelab.data`.
 
 ## The contract every plugin follows
 
@@ -99,6 +99,16 @@ Per-language shape: TS `db.list/info/tables/rows/query` (app, env may be `undefi
 Python `db.list/info/tables/rows/query` (`info(app=None, env=None)`, `tables(app=None, env=None)`,
 `rows(table, *, app, env, schema, limit, offset)`, `query(sql, *, app, env)`); Rust `db().list/info/tables/rows/query` (`Option<&str>`).
 
+## Releases
+Every build of an app gets a version from Homelab: `HOMELAB_VERSION` in the app's environment
+(`v0.4.0-dev.2` on dev, `v0.4.0` on prod). It is missing when GitHub didn't let Homelab make one.
+version() -> string | null                                 reads env HOMELAB_VERSION (trimmed; empty = null)
+    Also on the client: version() (TS), version() (Python), version() (Rust). No key needed.
+client.releases.list({limit?}) -> Release[]                 GET    /api/releases[?limit=n]  -> {releases: [...]}
+    The app's own releases, newest first. `limit` is a whole number from 1, checked before sending.
+    Needs the `releases:read` scope, which every app key has. Admin keys and people get 403.
+    TS `releases.list({ limit })`, Python `releases.list(limit=)`, Rust `releases().list(Some(n))`.
+
 ## Types
 Folder { name, disk, app, env, files, bytes, created_at }
 File   { id, folder, name, content_type, size, sha256, created_at, created_by, tags[], info{}, meta{} }
@@ -111,4 +121,5 @@ DbInfo   { app, env, engine ("postgres" | "sqlite"), status, size_bytes, connect
 DbTable  { schema, name, rows }
 DbRows   { columns[], rows[][], truncated }
 DbQueryResult { columns[], rows[][], truncated, row_count, command, ms }
+Release  { tag, prerelease, commit, date, summary, notes }   (tag such as v0.4.0 or v0.4.0-dev.2; notes are markdown)
 Unknown fields from the server are kept/ignored, never an error (forward compatible).

@@ -94,6 +94,7 @@ function fixApp(a: AppView): AppView {
 		autoPromote: a.autoPromote ?? null,
 		held: list(a.held),
 		mirror: a.mirror ?? null,
+		versionProblem: a.versionProblem ?? '',
 		envs: list(a.envs).map((e) => ({ ...e, missingSecrets: list(e.missingSecrets) }))
 	};
 }
@@ -124,7 +125,7 @@ const realApi: Api = {
 	deploy: (id, commit) => request('POST', `/api/apps/${enc(id)}/deploy`, commit ? { commit } : {}),
 	promotePreview: async (id) => {
 		const p = await request<PromotePreview>('GET', `/api/apps/${enc(id)}/promote`);
-		return { ...p, commits: list(p.commits), blockers: list(p.blockers), missingSecrets: list(p.missingSecrets) };
+		return { ...p, commits: list(p.commits), blockers: list(p.blockers), missingSecrets: list(p.missingSecrets), nextVersion: p.nextVersion ?? '', summary: p.summary ?? '', notes: p.notes ?? '' };
 	},
 	promote: (id) => request('POST', `/api/apps/${enc(id)}/promote`),
 	rollbackPreview: async (id, env) => {

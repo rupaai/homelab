@@ -8,10 +8,16 @@
 {#if release}
 	<div class="release">
 		<p class="msg">
-			<a class="sha" href={release.commitUrl} target="_blank" rel="noopener">{release.short}</a>
+			{#if release.version}
+				<span class="version">{release.version}</span>
+			{:else}
+				<a class="sha" href={release.commitUrl} target="_blank" rel="noopener">{release.short}</a>
+			{/if}
 			{release.message}
 		</p>
-		<p class="meta">{release.author} · <Time at={release.when} /></p>
+		<p class="meta">
+			{#if release.version}<a class="commit" href={release.commitUrl} target="_blank" rel="noopener">{release.short}</a> · {/if}{release.author} · <Time at={release.when} />{#if release.summary} · {release.summary}{/if}
+		</p>
 	</div>
 {:else}
 	<p class="muted">{empty}</p>
@@ -24,7 +30,8 @@
 	.msg {
 		overflow-wrap: anywhere;
 	}
-	.sha {
+	.sha,
+	.version {
 		font-family: var(--mono);
 		font-size: 0.9em;
 		background: var(--chip);
@@ -32,6 +39,14 @@
 		border-radius: 6px;
 		margin-right: 0.3rem;
 		text-decoration: none;
+	}
+	.version {
+		font-weight: 600;
+	}
+	.commit {
+		font-family: var(--mono);
+		font-size: 0.85em;
+		color: inherit;
 	}
 	.meta {
 		color: var(--muted);
