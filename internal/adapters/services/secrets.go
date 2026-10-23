@@ -63,11 +63,17 @@ type reply struct {
 	body   []byte
 }
 
-// call sends one system call. A service that is down, or doesn't answer, is
-// core.ErrSecretsUnavailable. Failed answers become plain errors with the service's message.
+// call sends one system call to the secrets service.
 func (c *Secrets) call(method, path string, query url.Values, in any) (reply, error) {
-	if !c.s.Up() {
-		return reply{}, core.ErrSecretsUnavailable
+	return c.s.call("secrets", core.ErrSecretsUnavailable, callTimeout, method, path, query, in)
+}
+
+// call sends one system call. A service that is down, or doesn't answer, is down (what
+// the caller says that means). Failed answers become plain errors with the service's
+// message. what names the part of the service for the log and for people.
+func (s *Services) call(what string, down error, timeout time.Duration, method, path string, query url.Values, in any) (reply, error) {
+	if !s.Up() {
+		return reply{}, down
 	}
 	var body io.Reader
 	if in != nil {
@@ -81,25 +87,27 @@ func (c *Secrets) call(method, path string, query url.Values, in any) (reply, er
 	if len(query) > 0 {
 		target += "?" + query.Encode()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, method, "http://"+c.s.addr+target, body)
+	req, err := http.NewRequestWithContext(ctx, method, "http://"+s.addr+target, body)
 	if err != nil {
 		return reply{}, err
 	}
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	c.s.sign(req, core.ServiceCaller{Kind: core.ServiceKindSystem})
-	res, err := c.s.client.Do(req)
+	s.sign(req, core.ServiceCaller{Kind: core.ServiceKindSystem})
+	client := *s.client // the context sets the time limit, not the client's default
+	client.Timeout = 0
+	res, err := client.Do(req)
 	if err != nil {
-		c.s.o.Logger.Warn("homelab-services didn't answer a secrets call", "err", err)
-		return reply{}, core.ErrSecretsUnavailable
+		s.o.Logger.Warn("homelab-services didn't answer a "+what+" call", "err", err)
+		return reply{}, down
 	}
 	defer res.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(res.Body, 4<<20))
 	if err != nil {
-		return reply{}, core.ErrSecretsUnavailable
+		return reply{}, down
 	}
 	r := reply{status: res.StatusCode, body: b}
 	if res.StatusCode >= 200 && res.StatusCode < 300 {
@@ -108,14 +116,14 @@ func (c *Secrets) call(method, path string, query url.Values, in any) (reply, er
 	msg := serviceMessage(b)
 	switch {
 	case res.StatusCode == http.StatusServiceUnavailable:
-		c.s.o.Logger.Warn("the secrets service is not available", "why", msg)
+		s.o.Logger.Warn("the "+what+" service is not available", "why", msg)
 		return r, &permanent{msg: strings.TrimSuffix(msg, ".")}
 	case res.StatusCode >= 500:
-		c.s.o.Logger.Error("the secrets service failed", "status", res.StatusCode, "why", msg)
-		return r, errors.New("the secrets service had a problem; look in Homelab's log")
+		s.o.Logger.Error("the "+what+" service failed", "status", res.StatusCode, "why", msg)
+		return r, errors.New("the " + what + " service had a problem; look in Homelab's log")
 	}
 	if msg == "" {
-		msg = "the secrets service refused that"
+		msg = "the " + what + " service refused that"
 	}
 	return r, &refused{status: res.StatusCode, msg: strings.TrimSuffix(msg, ".")}
 }

@@ -148,3 +148,50 @@ export interface GetSecretOptions {
   /** Skip the `/run/secrets/<name>` file and always ask Homelab. */
   fresh?: boolean;
 }
+
+/** One database, as returned by the Databases API. */
+export interface DbInfo {
+  app: string;
+  env: string;
+  /** "postgres" or "sqlite". */
+  engine: string;
+  /** For example "up" or "down". */
+  status: string;
+  size_bytes: number;
+  connections: number;
+  tables: number;
+}
+
+/** One table in a database. */
+export interface DbTable {
+  schema: string;
+  name: string;
+  /** An estimate of the row count. */
+  rows: number;
+}
+
+export interface DbRowsOptions {
+  /** Defaults to "public" on the server. */
+  schema?: string;
+  /** 1-200, default 50. */
+  limit?: number;
+  /** From 0. */
+  offset?: number;
+}
+
+/** The answer to `db.rows`. Each row is an array in the order of `columns`. */
+export interface DbRows {
+  columns: string[];
+  rows: unknown[][];
+  /** True when more rows were left out. */
+  truncated: boolean;
+}
+
+/** The answer to `db.query` (read-only SQL). */
+export interface DbQueryResult extends DbRows {
+  row_count: number;
+  /** The SQL command, for example "SELECT". */
+  command: string;
+  /** How long the query took, in milliseconds. */
+  ms: number;
+}

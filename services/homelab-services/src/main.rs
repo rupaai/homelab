@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use homelab_services::app::{app, AppState};
 use homelab_services::config::{prepare_data_dir, prepare_storage, Config};
+use homelab_services::dbs::Dbs;
 use homelab_services::files::{spawn_purge, Files};
 use homelab_services::secrets::Secrets;
 use homelab_services::VERSION;
@@ -82,12 +83,14 @@ async fn serve(config: Config) -> Result<(), String> {
         config.max_upload,
     )?);
     spawn_purge(files.clone());
+    let dbs = Arc::new(Dbs::open(&config.data_dir.join("dbs.db"))?);
     let state = AppState {
         key: Arc::new(config.key),
         version: VERSION,
         files,
         secrets,
         secrets_problem,
+        dbs,
     };
     axum::serve(listener, app(state))
         .with_graceful_shutdown(shutdown_signal())

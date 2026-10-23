@@ -18,13 +18,13 @@ Small libraries that let your code use Homelab's services in one line, for examp
 | Python 3.9+ | [python](python) | `pip install "git+https://github.com/rupaai/homelab#subdirectory=plugins/python"` |
 | Rust | [rust](rust) | `homelab-sdk = { git = "https://github.com/rupaai/homelab" }` |
 
-Each folder's README has a quick start and every call. Services so far: **files** and
-**secrets**. Databases and data come next, as `homelab.db` and `homelab.data`.
+Each folder's README has a quick start and every call. Services so far: **files**,
+**secrets** and **databases**. Data comes next, as `homelab.data`.
 
 ## The contract every plugin follows
 
 requests, reading answers, and turning errors into one error type. The source of truth is
-docs/files.openapi.yaml, docs/secrets.openapi.yaml and docs/platform-services.md.
+docs/files.openapi.yaml, docs/secrets.openapi.yaml, services/homelab-services/src/dbs_api.rs and docs/platform-services.md.
 
 ## Config
 - `url` and `token`. Default to env `HOMELAB_API_URL` and `HOMELAB_TOKEN`. Missing either
@@ -78,6 +78,27 @@ also blank the value in an error message if a server ever echoed it back.
 `set` and `delete` need the `secrets:write` scope (`secrets_api: write` in homelab.yaml); a
 missing scope is a 403.
 
+## Databases
+Apps use `DATABASE_URL` with any normal driver to read and write their data. The plugin is for
+looking inside: list databases, tables, rows, and read-only SQL. It never writes: `write` is never
+sent (writing is for people in the companion).
+client.db.list() -> DbInfo[]                                GET    /api/db  -> {databases: [...]}
+client.db.info(app, env) -> DbInfo                          GET    /api/db/{app}/{env}
+client.db.tables(app, env) -> DbTable[]                     GET    /api/db/{app}/{env}/tables  -> {tables: [...]}
+client.db.rows(app, env, table, {schema?, limit?, offset?}) -> {columns, rows, truncated}
+                                                             GET    /api/db/{app}/{env}/tables/{table}/rows?schema=&limit=&offset=
+client.db.query(app, env, sql) -> {columns, rows, row_count, truncated, command, ms}
+                                                             POST   /api/db/{app}/{env}/query  {"sql": "..."}
+
+`app` and `env` default to env `HOMELAB_APP` and `HOMELAB_ENV` (Homelab sets both in every app);
+missing both -> HomelabError status 0 ("Set HOMELAB_APP or pass app"). `limit` is 1-200 and
+`offset` from 0, checked before sending. app, env and table go through the safe path encoder
+("." and ".." refused). An app key sees only its own database (any other is 404); an admin key
+needs the `db:read` scope. Each row is an array in the order of `columns`.
+Per-language shape: TS `db.list/info/tables/rows/query` (app, env may be `undefined`);
+Python `db.list/info/tables/rows/query` (`info(app=None, env=None)`, `tables(app=None, env=None)`,
+`rows(table, *, app, env, schema, limit, offset)`, `query(sql, *, app, env)`); Rust `db().list/info/tables/rows/query` (`Option<&str>`).
+
 ## Types
 Folder { name, disk, app, env, files, bytes, created_at }
 File   { id, folder, name, content_type, size, sha256, created_at, created_by, tags[], info{}, meta{} }
@@ -86,4 +107,8 @@ Meta   { width?, height?, taken_at?, camera_make?, camera_model?, lens?, orienta
 SecretInfo    { name, kind ("config" | "app"), version, updated_at }   (never a value)
 SecretVersion { version, set_at }                                      (never a value)
 Saved         { name, version }
+DbInfo   { app, env, engine ("postgres" | "sqlite"), status, size_bytes, connections, tables }
+DbTable  { schema, name, rows }
+DbRows   { columns[], rows[][], truncated }
+DbQueryResult { columns[], rows[][], truncated, row_count, command, ms }
 Unknown fields from the server are kept/ignored, never an error (forward compatible).

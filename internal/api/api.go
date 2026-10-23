@@ -168,6 +168,11 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("POST /api/apps/{id}/envs/{env}/secrets/{name}/versions/{n}/restore", s.restoreSecret)
 	mux.HandleFunc("POST /api/apps/{id}/envs/{env}/saved/{name}/reveal", s.revealSavedSecret)
 	mux.HandleFunc("DELETE /api/apps/{id}/envs/{env}/saved/{name}", s.deleteSavedSecret)
+	mux.HandleFunc("GET /api/apps/{id}/db", s.appDatabase)
+	mux.HandleFunc("POST /api/apps/{id}/envs/{env}/db/copies", s.makeDBCopy)
+	mux.HandleFunc("POST /api/apps/{id}/envs/{env}/db/copies/{name}/restore", s.restoreDBCopy)
+	mux.HandleFunc("POST /api/apps/{id}/db/copy-prod-to-dev", s.copyProdToDev)
+	mux.HandleFunc("POST /api/apps/{id}/envs/{env}/db/import", s.importDB)
 	mux.HandleFunc("GET /api/settings/secrets", s.settings)
 	mux.HandleFunc("PUT /api/settings/secrets/{name}", s.setSetting)
 	mux.HandleFunc("DELETE /api/settings/secrets/{name}", s.deleteSetting)
@@ -316,6 +321,14 @@ func (s *server) guard(w http.ResponseWriter, r *http.Request) bool {
 		if isServicePath(r.URL.Path) {
 			return true
 		}
+		// A database import is the raw file, which the hub streams to disk and limits.
+		if isDBImport(r) {
+			if ct := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]); !strings.EqualFold(ct, "application/octet-stream") {
+				writeErr(w, http.StatusUnsupportedMediaType, "Send the file with Content-Type: application/octet-stream.")
+				return false
+			}
+			return true
+		}
 		if r.ContentLength != 0 {
 			ct := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0])
 			if !strings.EqualFold(ct, "application/json") {
@@ -378,6 +391,8 @@ func apiAction(r *http.Request) (string, string) {
 				return hub.ActionSecrets, app
 			case "deploy", "promote", "rollback":
 				return hub.ActionProjects, app
+			case "db":
+				return hub.ActionManage, app // copies and restores of an app's database: admins
 			}
 		}
 		if r.Method == http.MethodGet {
@@ -871,6 +886,66 @@ func (s *server) rollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	accepted(w)
+}
+
+// appDatabase describes the app's database and its copies.
+func (s *server) appDatabase(w http.ResponseWriter, r *http.Request) {
+	v, err := s.hub.Database(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *server) makeDBCopy(w http.ResponseWriter, r *http.Request) {
+	if !decode(w, r, &struct{}{}, false) {
+		return
+	}
+	c, err := s.hub.MakeDBCopy(actionCtx(r), r.PathValue("id"), r.PathValue("env"), viewer(r))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, c)
+}
+
+func (s *server) restoreDBCopy(w http.ResponseWriter, r *http.Request) {
+	if !decode(w, r, &struct{}{}, false) {
+		return
+	}
+	if err := s.hub.RestoreDBCopy(actionCtx(r), r.PathValue("id"), r.PathValue("env"), r.PathValue("name"), viewer(r)); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	accepted(w)
+}
+
+func (s *server) copyProdToDev(w http.ResponseWriter, r *http.Request) {
+	if !decode(w, r, &struct{}{}, false) {
+		return
+	}
+	if err := s.hub.CopyProdToDev(actionCtx(r), r.PathValue("id"), viewer(r)); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	accepted(w)
+}
+
+// isDBImport says whether a request uploads a file to import into an app's database.
+func isDBImport(r *http.Request) bool {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	return r.Method == http.MethodPost && len(parts) == 7 && parts[1] == "apps" && parts[3] == "envs" && parts[5] == "db" && parts[6] == "import"
+}
+
+// importDB loads the uploaded file (the whole body) into an environment's database.
+func (s *server) importDB(w http.ResponseWriter, r *http.Request) {
+	kind, err := s.hub.ImportDB(actionCtx(r), r.PathValue("id"), r.PathValue("env"), r.Body, viewer(r))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "kind": kind})
 }
 
 func (s *server) logs(w http.ResponseWriter, r *http.Request) {

@@ -1,0 +1,327 @@
+openapi: 3.1.0
+info:
+  title: Homelab Databases API
+  version: "1.0"
+  summary: Look inside the databases of your apps.
+  description: |
+    List databases, their tables and rows, and run SQL. Every call needs an API key or a
+    signed-in person. The database itself is reached by the app with `DATABASE_URL`; this
+    API is for looking inside.
+
+    **Base URL.** Whatever `HOMELAB_API_URL` is. From inside an app that is the app door
+    (`http://host.docker.internal:7085`); a server outside Homelab uses the companion's
+    own address with an admin key.
+
+    **Who sees what.** An app key sees its own database only (the app and environment it
+    belongs to); every other database looks like it does not exist (404). An admin key
+    needs `db:read`, and can only read. A signed-in person can do everything.
+
+    **Read only.** SQL is read only unless `write` is `true`. Writing is for a signed-in
+    person and for Postgres only.
+
+    **Cells.** Every cell is text, or `null`. Numbers and booleans are their text.
+
+    **Errors.** A failed call answers with a status and `{"error": "A sentence."}`.
+    The database's own message is passed on for a bad SQL statement (400).
+servers:
+  - url: "{HOMELAB_API_URL}"
+    description: The value of HOMELAB_API_URL.
+    variables:
+      HOMELAB_API_URL:
+        default: "http://host.docker.internal:7085"
+security:
+  - apiKey: []
+tags:
+  - name: Databases
+  - name: SQL
+paths:
+  /api/db:
+    get:
+      tags: [Databases]
+      operationId: listDatabases
+      summary: The databases you can see
+      description: |
+        A database that does not answer within 2 seconds is listed with status `down`; the
+        list never fails because of one database.
+      responses:
+        "200":
+          description: The databases.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [databases]
+                properties:
+                  databases:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Database"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/db/{app}/{env}:
+    parameters:
+      - $ref: "#/components/parameters/app"
+      - $ref: "#/components/parameters/env"
+    get:
+      tags: [Databases]
+      operationId: getDatabase
+      summary: One database
+      responses:
+        "200":
+          description: The database.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Database"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NoDatabase" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/db/{app}/{env}/tables:
+    parameters:
+      - $ref: "#/components/parameters/app"
+      - $ref: "#/components/parameters/env"
+    get:
+      tags: [Databases]
+      operationId: listTables
+      summary: The tables
+      description: |
+        Postgres: tables in your own schemas (not `pg_catalog` or `information_schema`).
+        `rows` can be an estimate for a big table. SQLite: tables that do not start with
+        `sqlite_`, with exact counts.
+      responses:
+        "200":
+          description: The tables.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tables]
+                properties:
+                  tables:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Table"
+        "400":
+          description: The database did not answer the question.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NoDatabase" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/db/{app}/{env}/tables/{table}/rows:
+    parameters:
+      - $ref: "#/components/parameters/app"
+      - $ref: "#/components/parameters/env"
+      - name: table
+        in: path
+        required: true
+        description: A table from the tables list. Nothing else is accepted.
+        schema: { type: string }
+    get:
+      tags: [Databases]
+      operationId: tableRows
+      summary: Rows of a table
+      parameters:
+        - name: schema
+          in: query
+          description: The table's schema. Postgres only.
+          schema: { type: string, default: public }
+        - name: limit
+          in: query
+          description: Rows to return, 1-200.
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          description: Rows to skip, from 0.
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "200":
+          description: The rows, each an array in the order of `columns`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Rows"
+        "400":
+          description: A bad `limit` or `offset`, or the table is not one of the tables.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NoDatabase" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/db/{app}/{env}/query:
+    parameters:
+      - $ref: "#/components/parameters/app"
+      - $ref: "#/components/parameters/env"
+    post:
+      tags: [SQL]
+      operationId: runQuery
+      summary: Run SQL
+      description: |
+        Read only by default. Postgres runs it as a read-only role; SQLite opens the file
+        read only, allows one statement, and does not allow `ATTACH`. A statement is
+        stopped after 10 seconds. At most 500 rows come back (`truncated` says if there
+        were more). Homelab does not log the SQL or the values.
+
+        With `write: true` the statement runs as the database's owner. That is for a
+        signed-in person and Postgres only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Query"
+      responses:
+        "200":
+          description: The result. A statement that changes data has no columns and `row_count` is the number of rows it changed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Result"
+        "400":
+          description: |
+            Not a valid body, SQL over 100 KB, `write` on SQLite, or the database's own
+            message for a statement that failed (including the 10 second limit).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: |
+            The key lacks `db:read`, or `write` was asked by something other than a
+            signed-in person.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404": { $ref: "#/components/responses/NoDatabase" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      description: |
+        A Homelab API key (`hlk_` and 43 characters): an app's `HOMELAB_TOKEN`, or an
+        admin key with `db:read`. An app key only works at the app door
+        (`HOMELAB_API_URL`); an admin key only on the companion's own address.
+  parameters:
+    app:
+      name: app
+      in: path
+      required: true
+      description: An app name. An app you cannot see is 404.
+      schema: { type: string }
+    env:
+      name: env
+      in: path
+      required: true
+      schema: { type: string, enum: [dev, prod] }
+  responses:
+    Unauthorized:
+      description: No key, a wrong key, a revoked or expired key. Comes with `WWW-Authenticate`.
+      headers:
+        WWW-Authenticate:
+          schema: { type: string, examples: ['Bearer realm="homelab"'] }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: The key may not use this API from here (wrong door), or lacks `db:read`.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NoDatabase:
+      description: There is no such database, or you cannot see it.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unavailable:
+      description: Homelab's services program is not running. Sent by Homelab itself.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: A plain sentence for a person.
+    Database:
+      type: object
+      required: [app, env, engine, status, size_bytes, connections, tables]
+      properties:
+        app: { type: string }
+        env: { type: string, enum: [dev, prod] }
+        engine: { type: string, enum: [postgres, sqlite] }
+        status:
+          type: string
+          enum: [ok, down, empty]
+          description: "`empty` is a SQLite file that has not been made yet."
+        size_bytes: { type: integer }
+        connections:
+          type: [integer, "null"]
+          description: Open connections. `null` for SQLite.
+        tables: { type: integer }
+    Table:
+      type: object
+      required: [schema, name, rows]
+      properties:
+        schema: { type: string, examples: [public] }
+        name: { type: string }
+        rows: { type: integer }
+    Rows:
+      type: object
+      required: [columns, rows, truncated]
+      properties:
+        columns:
+          type: array
+          items: { type: string }
+        rows:
+          type: array
+          items:
+            type: array
+            items: { type: [string, "null"] }
+        truncated: { type: boolean }
+    Query:
+      type: object
+      additionalProperties: false
+      required: [sql]
+      properties:
+        sql:
+          type: string
+          maxLength: 102400
+          description: At most 100 KB.
+        write:
+          type: boolean
+          default: false
+          description: Allow changes. A signed-in person only, Postgres only.
+    Result:
+      type: object
+      required: [columns, rows, row_count, truncated, command, ms]
+      properties:
+        columns:
+          type: array
+          items: { type: string }
+        rows:
+          type: array
+          maxItems: 500
+          items:
+            type: array
+            items: { type: [string, "null"] }
+        row_count: { type: integer }
+        truncated:
+          type: boolean
+          description: True when there were more than 500 rows.
+        command:
+          type: string
+          examples: ["SELECT 2", "UPDATE 1"]
+        ms:
+          type: integer
+          description: How long it took, in milliseconds.

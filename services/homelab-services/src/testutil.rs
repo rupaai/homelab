@@ -10,6 +10,7 @@ use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
 
 use crate::config::Disk;
+use crate::dbs::Dbs;
 use crate::files::Files;
 use crate::secrets::Secrets;
 
@@ -138,6 +139,7 @@ pub struct TestEnv {
     pub disk: std::path::PathBuf,
     pub files: Arc<Files>,
     pub secrets: Arc<Secrets>,
+    pub dbs: Arc<Dbs>,
     pub router: Router,
 }
 
@@ -155,18 +157,21 @@ pub fn test_env(max_upload: u64) -> TestEnv {
     let key = data.join("master.key");
     write_master_key(&key, &TEST_MASTER_KEY);
     let secrets = Arc::new(Secrets::open(&data.join("secrets.db"), &key, None).unwrap());
+    let dbs = Arc::new(Dbs::open(&data.join("dbs.db")).unwrap());
     let router = app(AppState {
         key: Arc::new(test_key().verifying_key()),
         version: "test",
         files: files.clone(),
         secrets: Some(secrets.clone()),
         secrets_problem: String::new(),
+        dbs: dbs.clone(),
     });
     TestEnv {
         dir,
         disk,
         files,
         secrets,
+        dbs,
         router,
     }
 }

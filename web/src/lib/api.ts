@@ -1,7 +1,7 @@
-import { ApiError, NETWORK_MESSAGE, errorMessage } from './errors';
+import { ApiError, NETWORK_MESSAGE, errorMessage, wantsConfirm } from './errors';
 import { SIGN_IN_MESSAGE, sessionLost } from './session';
 import { clearToken, getToken, setToken } from './token';
-import type { Api, AppView, FileFolder, FilePage, FileQuery, StorageDisk, StoredFile, UploadResult, FileMeta, BootstrapView, CreatedKey, KeysView, DeviceView, EnvSecrets, Invitation, KeyView, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult, TestVersion, AppSecretsView, SecretVersion } from './types';
+import type { Api, AppDatabase, AppView, DbChange, DbInfo, DbResult, DbRows, DbTable, FileFolder, FilePage, FileQuery, StorageDisk, StoredFile, UploadResult, FileMeta, BootstrapView, CreatedKey, KeysView, DeviceView, EnvSecrets, Invitation, KeyView, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult, TestVersion, AppSecretsView, SecretVersion } from './types';
 
 /** Mock mode: `?mock` in the URL or VITE_MOCK=1 gives fake data, no server needed. Dev builds only, so the mock data is dropped from the real companion. */
 export const useMock: boolean =
@@ -25,8 +25,8 @@ async function send(path: string, init: RequestInit): Promise<Response> {
 }
 
 /** Turns a failed response into an ApiError. An expired session sends the layout back to sign-in. */
-function failure(res: Response, text: string): ApiError {
-	const err = new ApiError(errorMessage(res.status, text), res.status);
+function failure(res: { status: number }, text: string): ApiError {
+	const err = new ApiError(errorMessage(res.status, text), res.status, wantsConfirm(text));
 	if (res.status === 403 && err.message === SIGN_IN_MESSAGE) { clearToken(); sessionLost(); }
 	return err;
 }
@@ -47,6 +47,31 @@ async function upload(path: string, file: File): Promise<UploadResult> {
 	const text = await res.text();
 	if (!res.ok) throw failure(res, text);
 	return { file: fixFile(JSON.parse(text) as StoredFile), duplicate: res.headers.get('X-Homelab-Duplicate') === 'true' };
+}
+
+/** The raw file to import, sent with XMLHttpRequest because fetch can't report upload progress. */
+function importFile(path: string, file: File, onProgress?: (done: number) => void): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const xhr = new XMLHttpRequest();
+		xhr.open('POST', path);
+		xhr.setRequestHeader('Accept', 'application/json');
+		xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+		for (const [k, v] of Object.entries(authHeaders(true))) xhr.setRequestHeader(k, v);
+		xhr.upload.onprogress = (e) => {
+			if (e.lengthComputable && e.total > 0) onProgress?.(e.loaded / e.total);
+		};
+		xhr.onerror = () => reject(new ApiError(NETWORK_MESSAGE, 0));
+		xhr.onabort = xhr.onerror;
+		xhr.onload = () => {
+			if (xhr.status < 200 || xhr.status >= 300) return reject(failure(xhr, xhr.responseText));
+			try {
+				resolve((JSON.parse(xhr.responseText) as { kind?: string }).kind ?? '');
+			} catch {
+				resolve('');
+			}
+		};
+		xhr.send(file);
+	});
 }
 
 /** A file's bytes. A plain <img src> or link can't send the token, so the screens fetch it here. */
@@ -183,7 +208,32 @@ const realApi: Api = {
 		return upload(`/api/files/${enc(folder)}?${p}`, file);
 	},
 	fileBlob: (folder, id) => download(`/api/files/${enc(folder)}/${enc(id)}`),
-	deleteFile: (folder, id) => request('DELETE', `/api/files/${enc(folder)}/${enc(id)}`)
+	deleteFile: (folder, id) => request('DELETE', `/api/files/${enc(folder)}/${enc(id)}`),
+	databases: async () => list((await request<{ databases: DbInfo[] | null }>('GET', '/api/db')).databases),
+	database: (app, env) => request<DbInfo>('GET', `/api/db/${enc(app)}/${enc(env)}`),
+	dbTables: async (app, env) => list((await request<{ tables: DbTable[] | null }>('GET', `/api/db/${enc(app)}/${enc(env)}/tables`)).tables),
+	dbRows: async (app, env, table, offset, limit = 50) => {
+		const p = new URLSearchParams({ schema: table.schema, limit: String(limit), offset: String(offset) });
+		const r = await request<DbRows>('GET', `/api/db/${enc(app)}/${enc(env)}/tables/${enc(table.name)}/rows?${p}`);
+		return { columns: list(r.columns), rows: list(r.rows), truncated: r.truncated === true };
+	},
+	dbQuery: async (app, env, sql, write, confirm) => {
+		const r = await request<DbResult>('POST', `/api/db/${enc(app)}/${enc(env)}/query`, confirm ? { sql, write, confirm } : { sql, write });
+		return { ...r, columns: list(r.columns), rows: list(r.rows) };
+	},
+	dbChanges: async (app, env, before, limit = 50) => {
+		const p = new URLSearchParams({ limit: String(limit) });
+		if (before) p.set('before', String(before));
+		return list((await request<{ changes: DbChange[] | null }>('GET', `/api/db/${enc(app)}/${enc(env)}/changes?${p}`)).changes).map((c) => ({ ...c, error: c.error ?? '', copy: c.copy || null }));
+	},
+	importDb: (id, env, file, onProgress) => importFile(`/api/apps/${enc(id)}/envs/${enc(env)}/db/import`, file, onProgress),
+	appDatabase: async (id) => {
+		const r = await request<AppDatabase>('GET', `/api/apps/${enc(id)}/db`);
+		return { engine: r.engine ?? '', envs: list(r.envs).map((e) => ({ ...e, copies: list(e.copies) })) };
+	},
+	makeDbCopy: async (id, env) => { await request('POST', `/api/apps/${enc(id)}/envs/${enc(env)}/db/copies`); },
+	restoreDbCopy: (id, env, name) => request('POST', `/api/apps/${enc(id)}/envs/${enc(env)}/db/copies/${enc(name)}/restore`),
+	copyProdToDev: (id) => request('POST', `/api/apps/${enc(id)}/db/copy-prod-to-dev`)
 };
 
 // The import sits inside the DEV check, so production builds leave mock.ts out.

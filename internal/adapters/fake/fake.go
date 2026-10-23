@@ -4,8 +4,10 @@ package fake
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -146,10 +148,19 @@ type Deployer struct {
 	Calls    []string
 	LogTail  string // added to every Logs answer
 	FilesErr error  // what CheckFiles returns
+	// CopyErr, when set, is asked before each Copy; an error it returns fails the copy.
+	CopyErr func(from, to string) error
+
+	// DB is what each environment's postgres database holds ("app/env"), as text: a dump is
+	// that text in a file, and a restore sets it from a file.
+	DB          map[string]string
+	DumpErr     error   // what DumpDatabase returns, when set
+	RestoreErrs []error // what the next calls of RestoreDatabase return, one each; later calls work
+	ImportErr   error   // what ImportSQL returns, when set; the database is then left half loaded
 }
 
 func NewDeployer() *Deployer {
-	return &Deployer{Envs: map[string]core.Running{}, Specs: map[string]core.EnvSpec{}, FailFor: map[string]error{}}
+	return &Deployer{Envs: map[string]core.Running{}, Specs: map[string]core.EnvSpec{}, FailFor: map[string]error{}, DB: map[string]string{}}
 }
 
 func (d *Deployer) Prepare(_ context.Context, spec core.EnvSpec) error {
@@ -195,6 +206,83 @@ func (d *Deployer) StopApp(_ context.Context, app, env string) error {
 		r.State = core.StateExited
 		d.Envs[k] = r
 	}
+	return nil
+}
+
+// StartApp starts the app's container again.
+func (d *Deployer) StartApp(_ context.Context, app, env string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.Calls = append(d.Calls, "start-app "+app+"/"+env)
+	k := app + "/" + env
+	if r, ok := d.Envs[k]; ok {
+		r.State = core.StateRunning
+		d.Envs[k] = r
+	}
+	return nil
+}
+
+// SetDB sets what an environment's database holds; DBContent reads it.
+func (d *Deployer) SetDB(app, env, content string) {
+	d.mu.Lock()
+	d.DB[app+"/"+env] = content
+	d.mu.Unlock()
+}
+
+func (d *Deployer) DBContent(app, env string) string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.DB[app+"/"+env]
+}
+
+// DumpDatabase writes what the environment's database holds to file.
+func (d *Deployer) DumpDatabase(_ context.Context, app, env, file string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.Calls = append(d.Calls, "dump-db "+app+"/"+env)
+	if d.DumpErr != nil {
+		return d.DumpErr
+	}
+	if _, err := os.Lstat(file); err == nil {
+		return errors.New(file + " already exists")
+	}
+	return os.WriteFile(file, []byte(d.DB[app+"/"+env]), 0o600)
+}
+
+// RestoreDatabase sets what the environment's database holds from file.
+func (d *Deployer) RestoreDatabase(_ context.Context, app, env, file string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.Calls = append(d.Calls, "restore-db "+app+"/"+env)
+	if len(d.RestoreErrs) > 0 {
+		err := d.RestoreErrs[0]
+		d.RestoreErrs = d.RestoreErrs[1:]
+		if err != nil {
+			return err
+		}
+	}
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	d.DB[app+"/"+env] = string(b)
+	return nil
+}
+
+// ImportSQL sets what the environment's database holds to the script's text.
+func (d *Deployer) ImportSQL(_ context.Context, app, env, file string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.Calls = append(d.Calls, "import-sql "+app+"/"+env)
+	if d.ImportErr != nil {
+		d.DB[app+"/"+env] = "half loaded"
+		return d.ImportErr
+	}
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	d.DB[app+"/"+env] = string(b)
 	return nil
 }
 
@@ -572,3 +660,62 @@ var (
 	_ core.SmokeTester = (*Smoke)(nil)
 	_ core.Mirror      = (*Mirror)(nil)
 )
+
+// Databases records the databases homelab-services is told about. Snapshot copies the
+// registered sqlite file.
+type Databases struct {
+	mu         sync.Mutex
+	Registered map[string]core.DatabaseRegistration // "app/env"
+	Calls      []string
+	// RegisterErr and SnapshotErr, when set, are what those calls return.
+	RegisterErr error
+	SnapshotErr error
+}
+
+func NewDatabases() *Databases { return &Databases{Registered: map[string]core.DatabaseRegistration{}} }
+
+func (d *Databases) Register(app, env string, db core.DatabaseRegistration) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.Calls = append(d.Calls, "register "+app+"/"+env+" "+db.Engine)
+	if d.RegisterErr != nil {
+		return d.RegisterErr
+	}
+	d.Registered[app+"/"+env] = db
+	return nil
+}
+
+func (d *Databases) Forget(app string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.Calls = append(d.Calls, "forget "+app)
+	for k := range d.Registered {
+		if strings.HasPrefix(k, app+"/") {
+			delete(d.Registered, k)
+		}
+	}
+	return nil
+}
+
+func (d *Databases) Snapshot(app, env, to string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.Calls = append(d.Calls, "snapshot "+app+"/"+env)
+	if d.SnapshotErr != nil {
+		return d.SnapshotErr
+	}
+	reg, ok := d.Registered[app+"/"+env]
+	if !ok {
+		return errors.New("that database isn't registered")
+	}
+	if _, err := os.Lstat(to); err == nil {
+		return errors.New(to + " already exists")
+	}
+	info, err := os.Stat(reg.Path)
+	if err != nil {
+		return err
+	}
+	return copyFile(reg.Path, to, info.Mode().Perm())
+}
+
+var _ core.Databases = (*Databases)(nil)

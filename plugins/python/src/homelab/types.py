@@ -205,3 +205,91 @@ class SecretSaved:
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "SecretSaved":
         return cls(name=_str(d.get("name")), version=_int(d.get("version")), raw=d)
+
+
+@dataclass(frozen=True)
+class DbInfo:
+    """One database."""
+
+    app: str
+    env: str
+    engine: str  # "postgres" or "sqlite"
+    status: str  # for example "up" or "down"
+    size_bytes: int
+    connections: int
+    tables: int
+    raw: Dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "DbInfo":
+        return cls(
+            app=_str(d.get("app")),
+            env=_str(d.get("env")),
+            engine=_str(d.get("engine")),
+            status=_str(d.get("status")),
+            size_bytes=_int(d.get("size_bytes")),
+            connections=_int(d.get("connections")),
+            tables=_int(d.get("tables")),
+            raw=d,
+        )
+
+
+@dataclass(frozen=True)
+class DbTable:
+    """One table. ``rows`` is an estimate."""
+
+    schema: str
+    name: str
+    rows: int
+    raw: Dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "DbTable":
+        return cls(schema=_str(d.get("schema")), name=_str(d.get("name")), rows=_int(d.get("rows")), raw=d)
+
+
+@dataclass(frozen=True)
+class DbRows:
+    """One page of a table. Each row is a list in the order of ``columns``."""
+
+    columns: List[str]
+    rows: List[List[Any]]
+    truncated: bool
+    raw: Dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "DbRows":
+        return cls(**_rows_fields(d), raw=d)
+
+
+@dataclass(frozen=True)
+class DbQueryResult:
+    """The answer to ``db.query`` (read-only SQL)."""
+
+    columns: List[str]
+    rows: List[List[Any]]
+    truncated: bool
+    row_count: int
+    command: str  # for example "SELECT"
+    ms: int  # how long it took
+    raw: Dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "DbQueryResult":
+        return cls(
+            **_rows_fields(d),
+            row_count=_int(d.get("row_count")),
+            command=_str(d.get("command")),
+            ms=_int(d.get("ms")),
+            raw=d,
+        )
+
+
+def _rows_fields(d: Dict[str, Any]) -> Dict[str, Any]:
+    columns = d.get("columns")
+    rows = d.get("rows")
+    return {
+        "columns": [c for c in columns if isinstance(c, str)] if isinstance(columns, list) else [],
+        "rows": [list(r) for r in rows if isinstance(r, list)] if isinstance(rows, list) else [],
+        "truncated": d.get("truncated") is True,
+    }

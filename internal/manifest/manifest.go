@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -63,6 +64,13 @@ type Manifest struct {
 	// default), "write" (also save and delete the app's own secrets) or "none".
 	SecretsAPI string `yaml:"secrets_api"`
 	Memory     string `yaml:"memory"`
+	// Database says which database each environment gets (see core.Database*): "postgres",
+	// "sqlite", or a map {engine: sqlite, path: /data/app.db} to use a sqlite file the app
+	// already keeps in one of its data folders. DatabaseRaw is what the file says; Parse
+	// fills Database (the engine, or empty for none) and DatabasePath (adopted file only).
+	DatabaseRaw  yaml.Node `yaml:"database"`
+	Database     string    `yaml:"-"`
+	DatabasePath string    `yaml:"-"`
 
 	// Folders are the device's shared folders the app sees, e.g. its media library. The
 	// device names them in config.yaml (folders:), so an app can't reach anything else.
@@ -183,6 +191,9 @@ func Parse(b []byte, d Defaults) (*Manifest, error) {
 	if m.Name == "" && d.Repo != "" {
 		m.Name = NameFromRepo(d.Repo)
 	}
+	if err := m.readDatabase(); err != nil {
+		return nil, fmt.Errorf("%s: %w", FileName, err)
+	}
 	m.PromoteAfter = DefaultPromoteAfter
 	if m.PromoteAfterRaw != "" {
 		pa, err := time.ParseDuration(m.PromoteAfterRaw)
@@ -260,6 +271,7 @@ func (m *Manifest) validate() error {
 	default:
 		add("promotion must be manual, auto-dev or auto")
 	}
+	m.checkDatabase(add)
 	hasDev, hasProd := false, false
 	for _, e := range m.Environments {
 		switch e {
@@ -352,6 +364,125 @@ func (m *Manifest) validate() error {
 		return fmt.Errorf("%s", strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+// readDatabase reads database: in either form, "sqlite" or {engine: sqlite, path: ...}.
+func (m *Manifest) readDatabase() error {
+	n := &m.DatabaseRaw
+	switch {
+	case n.Kind == 0 || n.Tag == "!!null":
+		return nil
+	case n.Kind == yaml.ScalarNode:
+		m.Database = n.Value
+	case n.Kind == yaml.MappingNode:
+		var in struct {
+			Engine string `yaml:"engine"`
+			Path   string `yaml:"path"`
+		}
+		for i := 0; i < len(n.Content); i += 2 {
+			if k := n.Content[i].Value; k != "engine" && k != "path" {
+				return fmt.Errorf("database: %q isn't known; use engine and path", k)
+			}
+		}
+		if err := n.Decode(&in); err != nil {
+			return fmt.Errorf("database: %w", err)
+		}
+		m.Database, m.DatabasePath = in.Engine, in.Path
+	default:
+		return errors.New("database must be postgres or sqlite, or engine and path")
+	}
+	return nil
+}
+
+// SQLiteFile says where a sqlite database is: the path the app sees, the name of the data
+// folder that holds it, and its path inside that folder. Without a path of its own the
+// app gets the folder homelab-db with app.db in it. ok is false when the app has no
+// sqlite database, or its path isn't in a data folder (validation refuses that).
+func (m *Manifest) SQLiteFile() (inApp, folder, rel string, ok bool) {
+	if m.Database != core.DatabaseSQLite {
+		return "", "", "", false
+	}
+	if m.DatabasePath == "" {
+		return core.DatabaseSQLiteDir + "/" + core.DatabaseSQLiteFile, core.DatabaseFolder, core.DatabaseSQLiteFile, true
+	}
+	best := -1
+	for i, d := range m.Data {
+		root := strings.TrimRight(d.Path, "/")
+		if strings.HasPrefix(m.DatabasePath, root+"/") && (best < 0 || len(root) > len(strings.TrimRight(m.Data[best].Path, "/"))) {
+			best = i
+		}
+	}
+	if best < 0 {
+		return "", "", "", false
+	}
+	d := m.Data[best]
+	return m.DatabasePath, d.Name, strings.TrimPrefix(m.DatabasePath, strings.TrimRight(d.Path, "/")+"/"), true
+}
+
+// OwnsDatabaseFolder says whether Homelab gives the app a data folder (homelab-db) for its
+// sqlite database, rather than the app keeping the file in a folder of its own.
+func (m *Manifest) OwnsDatabaseFolder() bool {
+	return m.Database == core.DatabaseSQLite && m.DatabasePath == ""
+}
+
+// checkDatabase checks database: and the names Homelab sets for the database.
+func (m *Manifest) checkDatabase(add func(string, ...any)) {
+	switch m.Database {
+	case "":
+		if m.DatabasePath != "" {
+			add("database.engine must be postgres or sqlite")
+		}
+		return
+	case core.DatabasePostgres:
+		if m.DatabasePath != "" {
+			add("database.path is only for sqlite")
+		}
+		for _, s := range m.Services {
+			if s.Name == core.DatabaseService {
+				add("services.%s: the name %s is used by the database", s.Name, s.Name)
+			}
+		}
+	case core.DatabaseSQLite:
+		for _, d := range m.Data {
+			if d.Name == core.DatabaseFolder || d.Path == core.DatabaseSQLiteDir {
+				add("data %q: the name %s and the path %s are used by the database", d.Name, core.DatabaseFolder, core.DatabaseSQLiteDir)
+			}
+		}
+		if p := m.DatabasePath; p != "" {
+			if !strings.HasPrefix(p, "/") || path.Clean(p) != p {
+				add("database.path %q must be an absolute path with no .. or double slashes", p)
+			} else if _, _, _, ok := m.SQLiteFile(); !ok {
+				add("database.path %q must be inside one of the app's data folders (data:)", p)
+			}
+		}
+	default:
+		add("database must be postgres or sqlite")
+		return
+	}
+	for _, name := range core.DatabaseNames(m.Database) {
+		if slices.Contains(m.Secrets, name) || slices.Contains(m.GenerateSecrets, name) {
+			add("%s is set by Homelab for the database; remove it from secrets and generate_secrets", name)
+		}
+		// An app that adopts its sqlite file may also set DATABASE_PATH itself (older
+		// Homelab versions need it), as long as it is the path Homelab sets.
+		same := name == core.DatabasePath && m.DatabasePath != ""
+		if v, ok := m.Env[name]; ok && !(same && v == m.DatabasePath) {
+			add("%s is set by Homelab for the database; %s", name, pathAdvice(same, "env", m.DatabasePath))
+		}
+		for env, vars := range m.EnvFor {
+			if v, ok := vars[name]; ok && !(same && v == m.DatabasePath) {
+				add("%s is set by Homelab for the database; %s", name, pathAdvice(same, "env_for."+env, m.DatabasePath))
+			}
+		}
+	}
+}
+
+// pathAdvice says what to do about a DATABASE_PATH the app sets itself.
+func pathAdvice(adopted bool, where, want string) string {
+	if adopted {
+		return "in " + where + " it must be " + want + ", the same as database.path, or be left out"
+	}
+	return "remove it from " + where
 }
 
 // checkMounts checks one container's data and folder lists.

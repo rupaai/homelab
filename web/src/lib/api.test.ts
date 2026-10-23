@@ -187,3 +187,124 @@ describe('invite and password API', () => {
 		expect(fetch.mock.calls[0][0]).toBe('/api/email/test');
 	});
 });
+
+describe('databases API', () => {
+	afterEach(() => vi.unstubAllGlobals());
+	const json = (body: string, status = 200) => new Response(body, { status, headers: { 'Content-Type': 'application/json' } });
+
+	it('lists databases, with null as none', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json('{"databases":null}')));
+		await expect(api.databases()).resolves.toEqual([]);
+	});
+
+	it('asks for 50 rows of a table at an offset, with the name encoded', async () => {
+		const fetch = vi.fn().mockResolvedValue(json('{"columns":["id"],"rows":[["1"]],"truncated":false}'));
+		vi.stubGlobal('fetch', fetch);
+		await expect(api.dbRows('movies', 'dev', { schema: 'public', name: 'my notes', rows: 1 }, 50)).resolves.toEqual({ columns: ['id'], rows: [['1']], truncated: false });
+		expect(fetch.mock.calls[0][0]).toBe('/api/db/movies/dev/tables/my%20notes/rows?schema=public&limit=50&offset=50');
+	});
+
+	it('sends the SQL with write off or on', async () => {
+		const fetch = vi.fn().mockImplementation(async () => json('{"columns":null,"rows":null,"row_count":0,"truncated":false,"command":"UPDATE 0","ms":3}'));
+		vi.stubGlobal('fetch', fetch);
+		const r = await api.dbQuery('movies', 'prod', 'update t set a = 1', true);
+		expect(r.columns).toEqual([]);
+		expect(fetch.mock.calls[0][0]).toBe('/api/db/movies/prod/query');
+		expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ sql: 'update t set a = 1', write: true });
+	});
+
+	it('reads copies and starts the copy actions', async () => {
+		const fetch = vi.fn().mockImplementation(async (url: string) => (url.endsWith('/db') ? json('{"engine":"postgres","envs":[{"env":"dev","port":17005,"copies":null}]}') : json('', 202)));
+		vi.stubGlobal('fetch', fetch);
+		await expect(api.appDatabase('movies')).resolves.toEqual({ engine: 'postgres', envs: [{ env: 'dev', port: 17005, copies: [] }] });
+		await api.makeDbCopy('movies', 'dev');
+		await api.restoreDbCopy('movies', 'dev', '20261023-120000-manual');
+		await api.copyProdToDev('movies');
+		expect(fetch.mock.calls.slice(1).map((c) => `${c[1].method} ${c[0]}`)).toEqual([
+			'POST /api/apps/movies/envs/dev/db/copies',
+			'POST /api/apps/movies/envs/dev/db/copies/20261023-120000-manual/restore',
+			'POST /api/apps/movies/db/copy-prod-to-dev'
+		]);
+	});
+
+	it('sends the typed confirm only when there is one, and flags a needs_confirm answer', async () => {
+		const fetch = vi.fn().mockResolvedValueOnce(json('{"error":"This can\'t be undone easily. Type prod to run it.","needs_confirm":true}', 409)).mockResolvedValueOnce(json('{"columns":[],"rows":[],"row_count":1,"truncated":false,"command":"DELETE 1","ms":3}'));
+		vi.stubGlobal('fetch', fetch);
+		const err = await api.dbQuery('movies', 'prod', 'delete from t', true).catch((e) => e);
+		expect(err.status).toBe(409);
+		expect(err.needsConfirm).toBe(true);
+		expect(err.message).toBe("This can't be undone easily. Type prod to run it.");
+		await api.dbQuery('movies', 'prod', 'delete from t', true, 'prod');
+		expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({ sql: 'delete from t', write: true, confirm: 'prod' });
+	});
+
+	it('does not flag other failures as needing a confirm', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json('{"error":"Leave out BEGIN and COMMIT; Homelab runs it all in one go."}', 400)));
+		const err = await api.dbQuery('movies', 'prod', 'begin', true).catch((e) => e);
+		expect(err.needsConfirm).toBe(false);
+	});
+
+	it('reads the changes list, paging with before', async () => {
+		const fetch = vi.fn().mockImplementation(async () => json('{"changes":[{"id":9,"person":"p1","at":1790000000,"sql":"delete from t where a=1","ok":true,"rows":1,"ms":4,"error":"","copy":"c1"},{"id":8,"person":"p1","at":1789999999,"sql":"x","ok":false,"rows":0,"ms":1,"error":"bad","copy":null}]}'));
+		vi.stubGlobal('fetch', fetch);
+		const r = await api.dbChanges('movies', 'prod');
+		expect(r.map((c) => c.copy)).toEqual(['c1', null]);
+		expect(fetch.mock.calls[0][0]).toBe('/api/db/movies/prod/changes?limit=50');
+		await api.dbChanges('movies', 'prod', 8, 10);
+		expect(fetch.mock.calls[1][0]).toBe('/api/db/movies/prod/changes?limit=10&before=8');
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json('{"changes":null}')));
+		await expect(api.dbChanges('movies', 'prod')).resolves.toEqual([]);
+	});
+
+	describe('importing a file', () => {
+		class FakeXhr {
+			static last: FakeXhr;
+			static status = 202;
+			static reply = '{"ok":true,"kind":"sqlite"}';
+			headers: Record<string, string> = {};
+			upload: { onprogress?: (e: { lengthComputable: boolean; loaded: number; total: number }) => void } = {};
+			onload?: () => void;
+			onerror?: () => void;
+			onabort?: () => void;
+			status = 0;
+			responseText = '';
+			method = '';
+			url = '';
+			body: unknown;
+			constructor() { FakeXhr.last = this; }
+			open(m: string, u: string) { this.method = m; this.url = u; }
+			setRequestHeader(k: string, v: string) { this.headers[k] = v; }
+			send(b: unknown) {
+				this.body = b;
+				this.upload.onprogress?.({ lengthComputable: true, loaded: 1, total: 4 });
+				this.status = FakeXhr.status;
+				this.responseText = FakeXhr.reply;
+				this.onload?.();
+			}
+		}
+		afterEach(() => { FakeXhr.status = 202; FakeXhr.reply = '{"ok":true,"kind":"sqlite"}'; });
+
+		it('posts the raw file with progress and answers the kind', async () => {
+			vi.stubGlobal('XMLHttpRequest', FakeXhr);
+			const file = new File(['abcd'], 'my.db');
+			const seen: number[] = [];
+			await expect(api.importDb('movies', 'dev', file, (d) => seen.push(d))).resolves.toBe('sqlite');
+			expect(FakeXhr.last.method).toBe('POST');
+			expect(FakeXhr.last.url).toBe('/api/apps/movies/envs/dev/db/import');
+			expect(FakeXhr.last.headers['Content-Type']).toBe('application/octet-stream');
+			expect(FakeXhr.last.headers['X-Homelab-Request']).toBe('1');
+			expect(FakeXhr.last.body).toBe(file);
+			expect(seen).toEqual([0.25]);
+		});
+
+		it('turns a 400 or 409 into a plain error', async () => {
+			vi.stubGlobal('XMLHttpRequest', FakeXhr);
+			FakeXhr.status = 400;
+			FakeXhr.reply = '{"error":"That file is empty."}';
+			await expect(api.importDb('movies', 'dev', new File([''], 'a.db'))).rejects.toMatchObject({ message: 'That file is empty.', status: 400 });
+			FakeXhr.status = 409;
+			FakeXhr.reply = '{"error":"Homelab is busy with this app."}';
+			await expect(api.importDb('movies', 'dev', new File(['x'], 'a.db'))).rejects.toMatchObject({ status: 409 });
+		});
+	});
+});

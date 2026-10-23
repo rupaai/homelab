@@ -8,6 +8,7 @@ and prod) gets its own copy. The app reaches them by name, e.g. `http://jellyfin
 folders:                      # shared folders from the device (see below)
   - {name: media, path: /media}
 ports: ["6881-6891:6881-6891", "6881-6891:6881-6891/udp"]   # opened on the device, prod only
+database: postgres            # or sqlite: its own database for dev and prod (see platform-services.md)
 
 services:
   - name: jellyfin
