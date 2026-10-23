@@ -46,7 +46,7 @@ jobs:
           SHA: ${{ github.event.pull_request.head.sha }}
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          if ! BASE=$(services/target/release/homelab-services release test --repo "$GITHUB_REPOSITORY" --pr "$PR" --title "$PR_TITLE" --commit "$SHA" --always --dry-run 2>raw-notes.txt); then
+          if ! BASE=$(services/target/release/homelab-services release test --repo "$GITHUB_REPOSITORY" --pr "$PR" --title "$PR_TITLE" --commit "$SHA" --first v0.20.0 --always --dry-run 2>raw-notes.txt); then
             cat raw-notes.txt >&2
             exit 1
           fi
