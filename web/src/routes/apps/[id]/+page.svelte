@@ -149,6 +149,7 @@
 		<section class="card" aria-labelledby="more">
 			<h2 id="more">{admin ? 'Secrets and code' : 'Code'}</h2>
 			{#if admin}<p><a href="/apps/{encodeURIComponent(app.id)}/secrets">Secrets for dev and prod</a></p>{/if}
+			{#if admin}<p><a href="/databases">Databases</a></p>{/if}
 			{#if app.mirror}
 				{#if app.mirror.error}
 					<p class="notice bad">The copy of the code on this computer isn't working. {app.mirror.error}{#if app.mirror.lastSync} It last worked <span>{relativeTime(app.mirror.lastSync, clock.now)}</span>.{/if}</p>

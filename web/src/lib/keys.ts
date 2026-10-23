@@ -1,10 +1,11 @@
 import type { KeyView } from './types';
 
-/** What a key can be allowed to do, in plain words. Databases and data come later. */
+/** What a key can be allowed to do, in plain words. Data comes later. */
 export const KEY_SCOPES: { scope: string; words: string }[] = [
 	{ scope: 'users:read', words: 'Read people' },
 	{ scope: 'files:read', words: 'Read files' },
-	{ scope: 'files:write', words: 'Save and delete files' }
+	{ scope: 'files:write', words: 'Save and delete files' },
+	{ scope: 'db:read', words: 'Look inside databases (read only)' }
 ];
 
 /** Scopes in plain words. Unknown ones stay as they are. */

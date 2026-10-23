@@ -1,6 +1,6 @@
 # homelab-sdk (Python)
 
-A small Python client for Homelab's **Files** and **Secrets** services. Standard library only (no runtime
+A small Python client for Homelab's **Files**, **Secrets** and **Databases** services. Standard library only (no runtime
 dependencies), Python 3.9+, fully typed.
 
 ## Install
@@ -171,9 +171,47 @@ for v in homelab.secrets.versions("google_token:user42"):
     print(v.version, v.set_at)
 ```
 
+## Databases
+
+Apps connect with `DATABASE_URL` and any normal driver. `homelab.db` is for looking inside:
+list databases, tables, rows and read-only SQL. It never writes (writing is for people in the
+companion). `app` and `env` default to `HOMELAB_APP` and `HOMELAB_ENV`, which Homelab sets in
+every app. An app key sees only its own database.
+
+### `list() -> list[DbInfo]`
+`app, env, engine, status, size_bytes, connections, tables` for each database.
+```python
+for d in homelab.db.list():
+    print(d.app, d.env, d.engine, d.status)
+```
+
+### `info(app=None, env=None) -> DbInfo`
+```python
+me = homelab.db.info()  # this app, this env
+```
+
+### `tables(app=None, env=None) -> list[DbTable]`
+```python
+for t in homelab.db.tables():
+    print(t.schema, t.name, t.rows)
+```
+
+### `rows(table, *, app=None, env=None, schema=None, limit=None, offset=None) -> DbRows`
+One page of a table: `columns`, `rows` (each a list in column order) and `truncated`.
+`limit` is 1-200 (default 50), `offset` from 0, `schema` defaults to `public`.
+```python
+page = homelab.db.rows("orders", limit=20, offset=40)
+```
+
+### `query(sql, *, app=None, env=None) -> DbQueryResult`
+Read-only SQL: `columns, rows, row_count, truncated, command, ms`.
+```python
+r = homelab.db.query("select count(*) from orders")
+```
+
 ## Types
 
-`Folder`, `File`, `Meta` (with `Gps`), `SecretInfo`, `SecretVersion` and `SecretSaved` are frozen dataclasses. `File` has `id, folder, name,
+`Folder`, `File`, `Meta` (with `Gps`), `SecretInfo`, `SecretVersion`, `SecretSaved`, `DbInfo`, `DbTable`, `DbRows` and `DbQueryResult` are frozen dataclasses. `File` has `id, folder, name,
 content_type, size, sha256, created_at, created_by, tags, info, meta`; `Meta` has
 `width, height, taken_at, camera_make, camera_model, lens, orientation, gps, duration_s,
 title, artist, album, year, pages, author` (each `None` when the server did not find it).

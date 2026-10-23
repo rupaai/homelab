@@ -1,7 +1,7 @@
 # @homelab/sdk (TypeScript)
 
-Thin TypeScript client for the Homelab API. Today: Files (`homelab.files`) and Secrets
-(`homelab.secrets`). Databases and data (`homelab.db`, `homelab.data`) will be added next to them.
+Thin TypeScript client for the Homelab API. Today: Files (`homelab.files`), Secrets
+(`homelab.secrets`) and Databases (`homelab.db`). Data (`homelab.data`) will be added next to them.
 
 Zero runtime dependencies. Uses the global `fetch` (Node 18+ and browsers). ESM only.
 
@@ -174,11 +174,47 @@ The last 5 versions, newest first, as `{ version, set_at }`. 404 if the secret d
 const vs = await homelab.secrets.versions("google_token:user42");
 ```
 
+## Databases
+
+Apps connect with `DATABASE_URL` and any normal driver. `homelab.db` is for looking inside:
+list databases, tables, rows and read-only SQL. It never writes (writing is for people in the
+companion). `app` and `env` default to `HOMELAB_APP` and `HOMELAB_ENV`, which Homelab sets in
+every app; pass `undefined` to use them. An app key sees only its own database.
+
+### `db.list(): Promise<DbInfo[]>`
+`{ app, env, engine, status, size_bytes, connections, tables }` for each database.
+```ts
+for (const d of await homelab.db.list()) console.log(d.app, d.env, d.engine, d.status);
+```
+
+### `db.info(app?, env?): Promise<DbInfo>`
+```ts
+const me = await homelab.db.info(); // this app, this env
+```
+
+### `db.tables(app?, env?): Promise<DbTable[]>`
+```ts
+const tables = await homelab.db.tables(); // [{ schema, name, rows }]
+```
+
+### `db.rows(app, env, table, { schema?, limit?, offset? }): Promise<DbRows>`
+One page of a table: `{ columns, rows, truncated }`; each row is an array in column order.
+`limit` is 1-200 (default 50), `offset` from 0, `schema` defaults to `public`.
+```ts
+const page = await homelab.db.rows(undefined, undefined, "orders", { limit: 20, offset: 40 });
+```
+
+### `db.query(app, env, sql): Promise<DbQueryResult>`
+Read-only SQL: `{ columns, rows, row_count, truncated, command, ms }`.
+```ts
+const r = await homelab.db.query(undefined, undefined, "select count(*) from orders");
+```
+
 ## Types
 
 `Folder`, `File`, `Meta` (every key optional; unknown keys are kept), `ListFilters`,
 `ListResult`, `UploadOptions`, `UploadResult`, `UpdateFileOptions`, `SecretInfo`, `SecretVersion`,
-`SecretSaved`, `GetSecretOptions` and more are exported.
+`SecretSaved`, `GetSecretOptions`, `DbInfo`, `DbTable`, `DbRows`, `DbRowsOptions`, `DbQueryResult` and more are exported.
 Note that `File` shadows the DOM `File` when imported; use `import type { File as HomelabFile }`.
 
 ## Errors

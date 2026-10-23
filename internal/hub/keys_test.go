@@ -529,3 +529,24 @@ func TestAdminKeysMayHaveFileScopes(t *testing.T) {
 		}
 	}
 }
+
+func TestDBReadScope(t *testing.T) {
+	ctx := context.Background()
+	r, admin := keyRig(t)
+	tok, k, err := r.hub.CreateAdminKey(ctx, "sql box", []string{ScopeDBRead, ScopeUsersRead}, nil, admin)
+	if err != nil || ScopeDBRead != "db:read" || !slices.Equal(k.Scopes, []string{"db:read", "users:read"}) {
+		t.Fatalf("create: %+v %v", k, err)
+	}
+	c, err := r.hub.Authenticate(ctx, tok)
+	if err != nil || !c.Allows(ScopeDBRead) || c.Kind != KeyKindAdmin {
+		t.Fatalf("authenticate: %+v %v", c, err)
+	}
+	// Only a read scope exists; there is no way to write through a key.
+	if _, _, err := r.hub.CreateAdminKey(ctx, "x", []string{"db:write"}, nil, admin); !isUserErr(err) {
+		t.Fatalf("db:write: %v", err)
+	}
+	// An app's own key needs no scope for its own database.
+	if slices.Contains(appKeyScopes(&manifest.Manifest{}), ScopeDBRead) {
+		t.Fatal("app keys get db:read")
+	}
+}

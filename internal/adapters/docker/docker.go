@@ -135,20 +135,29 @@ func (d *Deployer) Prepare(ctx context.Context, spec core.EnvSpec) error {
 	return d.prepareServices(ctx, spec)
 }
 
-// prepareServices downloads the services' images that aren't here yet. Their tags are
-// fixed, so an image that is here is the right one. They come from public registries.
+// prepareServices downloads the services' images (and the database's) that aren't here
+// yet. Their tags are fixed, so an image that is here is the right one. They come from
+// public registries.
 func (d *Deployer) prepareServices(ctx context.Context, spec core.EnvSpec) error {
+	type image struct{ name, ref string }
+	var images []image
 	for _, s := range spec.Services {
-		have, err := d.api.hasImage(ctx, s.Image)
+		images = append(images, image{s.Name, s.Image})
+	}
+	if spec.Postgres != nil {
+		images = append(images, image{core.DatabaseService, core.DatabaseImage})
+	}
+	for _, img := range images {
+		have, err := d.api.hasImage(ctx, img.ref)
 		if err != nil {
 			return err
 		}
 		if have {
 			continue
 		}
-		d.log.Info("downloading image", "app", spec.App, "env", spec.Env, "service", s.Name, "image", s.Image)
-		if err := d.api.pull(ctx, s.Image, core.RegistryAuth{}); err != nil {
-			return fmt.Errorf("%s: %w", s.Name, err)
+		d.log.Info("downloading image", "app", spec.App, "env", spec.Env, "service", img.name, "image", img.ref)
+		if err := d.api.pull(ctx, img.ref, core.RegistryAuth{}); err != nil {
+			return fmt.Errorf("%s: %w", img.name, err)
 		}
 	}
 	return nil
@@ -255,6 +264,22 @@ func (d *Deployer) Stop(ctx context.Context, app, env string) error {
 // StopApp stops only the app's own container, so services such as Jellyfin keep running.
 func (d *Deployer) StopApp(ctx context.Context, app, env string) error {
 	return d.stop(ctx, app, env, serviceName)
+}
+
+// StartApp starts the app's own container again, after StopApp. It starts nothing else.
+func (d *Deployer) StartApp(ctx context.Context, app, env string) error {
+	if err := checkNames(app, env); err != nil {
+		return err
+	}
+	cs, err := d.api.containers(ctx, labelApp+"="+app, labelEnv+"="+env, "com.docker.compose.service="+serviceName)
+	if err != nil {
+		return err
+	}
+	if len(cs) == 0 {
+		return fmt.Errorf("%s/%s has no app container to start", app, env)
+	}
+	_, err = d.compose(ctx, d.envDir(app, env), app, env, "start", serviceName)
+	return err
 }
 
 // stop stops the containers of one compose service, or all of them when service is "".
@@ -434,7 +459,8 @@ func (d *Deployer) composeProject(ctx context.Context, dir, projectName, label s
 	return d.composeProjectWithEnv(ctx, dir, projectName, label, nil, args...)
 }
 
-func (d *Deployer) composeProjectWithEnv(ctx context.Context, dir, projectName, label string, extraEnv map[string]string, args ...string) ([]byte, error) {
+// composeCmd builds `docker compose -p <project> [-f compose.yaml] args...`, run in dir.
+func (d *Deployer) composeCmd(ctx context.Context, dir, projectName string, args ...string) (*exec.Cmd, error) {
 	full := []string{"compose", "-p", projectName}
 	if _, err := os.Stat(filepath.Join(dir, "compose.yaml")); err == nil {
 		full = append(full, "-f", "compose.yaml")
@@ -448,6 +474,14 @@ func (d *Deployer) composeProjectWithEnv(ctx context.Context, dir, projectName, 
 	cmd := exec.CommandContext(ctx, d.bin, full...)
 	cmd.Dir = dir
 	cmd.Env = d.env()
+	return cmd, nil
+}
+
+func (d *Deployer) composeProjectWithEnv(ctx context.Context, dir, projectName, label string, extraEnv map[string]string, args ...string) ([]byte, error) {
+	cmd, err := d.composeCmd(ctx, dir, projectName, args...)
+	if err != nil {
+		return nil, err
+	}
 	for k, v := range extraEnv {
 		prefix := k + "="
 		filtered := cmd.Env[:0]

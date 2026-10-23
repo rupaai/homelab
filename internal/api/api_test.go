@@ -41,6 +41,9 @@ const indexHTML = `<!doctype html><html><body><script>window.boot=1</script></bo
 type rig struct {
 	h     *hub.Hub
 	src   *fake.Source
+	build *fake.Builder
+	reg   *fake.Registry
+	dep   *fake.Deployer
 	fail  *atomic.Bool
 	store *state.Store
 	idp   *fake.Identity
@@ -77,15 +80,16 @@ func newRig(t *testing.T) *rig {
 	idp := fake.NewIdentity()
 	sec := fake.NewSecrets()
 	mail := &fake.Email{}
+	build, reg, dep := fake.NewBuilder(), fake.NewRegistry(), fake.NewDeployer()
 	h := hub.New(hub.Config{DataDir: dir}, st, hub.Adapters{
-		Source: flakySource{src, fail}, Builder: fake.NewBuilder(), Registry: fake.NewRegistry(), Deployer: fake.NewDeployer(),
+		Source: flakySource{src, fail}, Builder: build, Registry: reg, Deployer: dep, Databases: fake.NewDatabases(),
 		Addresses: fake.NewAddresses(), Health: fake.NewHealth(), Secrets: sec, Identity: idp, Email: mail,
 		Notifier: fake.NewNotifier(), Resources: &fake.Resources{Usage: core.DeviceUsage{DiskUsed: 1, DiskTotal: 2}},
 		System: &fake.System{Report: core.SystemInfo{OS: "Ubuntu 24.04.4 LTS", UpdatesPending: -1, SecurityPending: -1}},
 		Updater: &fake.Updater{State: core.UpdateStatus{Managed: true, Current: "build-1", Latest: "build-2", Available: true},
 			TestList: []core.TestVersion{{Version: "pr-7-abc1234", PR: 7, Title: "Better sign-in"}}},
 	})
-	return &rig{h: h, src: src, fail: fail, store: st, idp: idp, sec: sec, mail: mail}
+	return &rig{h: h, src: src, build: build, reg: reg, dep: dep, fail: fail, store: st, idp: idp, sec: sec, mail: mail}
 }
 
 const testBase = "http://localhost:7080"

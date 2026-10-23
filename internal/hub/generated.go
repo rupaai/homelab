@@ -3,6 +3,7 @@ package hub
 import (
 	"crypto/rand"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/rupaai/homelab/internal/core"
@@ -37,10 +38,20 @@ func newGeneratedSecret() (string, error) {
 	return sb.String(), nil
 }
 
-// ensureGenerated makes a value for each generate_secrets name that has none in this
+// generatedNames are the secrets Homelab makes for an app: its generate_secrets, and the
+// database password for postgres.
+func generatedNames(m *manifest.Manifest) []string {
+	names := slices.Clone(m.GenerateSecrets)
+	if m.Database == core.DatabasePostgres {
+		names = append(names, core.DatabasePassword)
+	}
+	return names
+}
+
+// ensureGenerated makes a value for each generated secret that has none in this
 // environment. A value that exists is never replaced.
 func (h *Hub) ensureGenerated(m *manifest.Manifest, app, env string) error {
-	missing, err := h.ad.Secrets.Missing(app, env, m.GenerateSecrets)
+	missing, err := h.ad.Secrets.Missing(app, env, generatedNames(m))
 	if err != nil {
 		return fmt.Errorf("read secrets: %w", err)
 	}

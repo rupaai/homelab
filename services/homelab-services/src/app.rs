@@ -14,6 +14,8 @@ use ed25519_dalek::VerifyingKey;
 use serde_json::json;
 
 use crate::caller::verify;
+use crate::dbs::Dbs;
+use crate::dbs_api;
 use crate::files::{self, Files};
 use crate::secrets::Secrets;
 use crate::secrets_api;
@@ -32,6 +34,8 @@ pub struct AppState {
     pub secrets: Option<Arc<Secrets>>,
     /// Why there is no secrets store, in a few words. Empty when there is one.
     pub secrets_problem: String,
+    /// The databases service.
+    pub dbs: Arc<Dbs>,
 }
 
 /// Builds the whole router. Used by `main` and by the tests.
@@ -42,6 +46,7 @@ pub fn app(state: AppState) -> Router {
         .route("/healthz", get(healthz).fallback(not_found))
         .merge(files::routes())
         .merge(secrets_api::routes())
+        .merge(dbs_api::routes())
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -88,6 +93,9 @@ async fn require_caller(State(state): State<AppState>, mut req: Request, next: N
             // People and admin API keys never use secrets, and only homelabd uses the
             // internal routes, whatever the path under them.
             if let Some(refusal) = secrets_api::refuse_path(&caller, req.uri().path()) {
+                return refusal.into_response();
+            }
+            if let Some(refusal) = dbs_api::refuse_path(&caller, req.uri().path()) {
                 return refusal.into_response();
             }
             req.extensions_mut().insert(caller);

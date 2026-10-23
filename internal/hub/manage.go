@@ -60,6 +60,11 @@ func (h *Hub) RemoveApp(ctx context.Context, appID string, by core.Viewer) error
 	if err := h.ad.Secrets.DeleteApp(appID); err != nil {
 		h.log.Error("remove app: secrets", "app", appID, "err", err)
 	}
+	if h.ad.Databases != nil {
+		if err := h.ad.Databases.Forget(appID); err != nil {
+			h.log.Warn("remove app: databases", "app", appID, "err", err)
+		}
+	}
 	h.mu.Lock()
 	for _, env := range []string{core.Dev, core.Prod} {
 		delete(h.status, envKey{appID, env})
@@ -140,7 +145,7 @@ func (h *Hub) AppSecrets(ctx context.Context, appID string) ([]EnvSecrets, error
 			es.Secrets = append(es.Secrets, secretView(n, true, byName))
 			delete(byName, n)
 		}
-		for _, n := range m.GenerateSecrets {
+		for _, n := range generatedNames(m) {
 			v := secretView(n, true, byName)
 			v.Generated = true
 			es.Secrets = append(es.Secrets, v)
@@ -252,6 +257,9 @@ func (h *Hub) RestoreSecret(ctx context.Context, appID, env, name string, versio
 	if reservedSecret(name) {
 		return userErr("Names starting with HOMELAB_ are Homelab's own.")
 	}
+	if err := h.guardDatabaseSecret(ctx, appID, name); err != nil {
+		return err
+	}
 	n, err := h.ad.Secrets.Restore(appID, env, name, version, by.Label())
 	if err != nil {
 		return secretFail(err)
@@ -274,6 +282,9 @@ func (h *Hub) SetSecret(ctx context.Context, appID, env, name, value string, by 
 		return userErr("There's no environment %q.", env)
 	}
 	if err := checkSecret(name, value); err != nil {
+		return err
+	}
+	if err := h.guardDatabaseSecret(ctx, appID, name); err != nil {
 		return err
 	}
 	if err := h.ad.Secrets.Set(appID, env, name, value, by.Label()); err != nil {
@@ -346,6 +357,9 @@ func (h *Hub) RegenerateSecret(ctx context.Context, appID, env, name string, by 
 	if err != nil {
 		return &UserError{Msg: err.Error()}
 	}
+	if err := h.guardDatabaseSecret(ctx, appID, name); err != nil {
+		return err
+	}
 	if !slices.Contains(m.GenerateSecrets, name) || (env != core.Dev && env != core.Prod) {
 		return userErr("%s isn't a secret Homelab makes for %s.", name, appID)
 	}
@@ -375,10 +389,29 @@ func (h *Hub) DeleteSecret(ctx context.Context, appID, env, name string, by core
 	if reservedSecret(name) {
 		return userErr("Names starting with HOMELAB_ are Homelab's own and can't be deleted.")
 	}
+	if err := h.guardDatabaseSecret(ctx, appID, name); err != nil {
+		return err
+	}
 	if err := h.ad.Secrets.Delete(appID, env, name); err != nil {
 		return secretFail(err)
 	}
 	h.logEvent(ctx, state.Event{Actor: by.Label(), App: appID, Env: env, Action: "secret.deleted", Detail: fmt.Sprintf("Deleted %s from %s", name, env)})
+	return nil
+}
+
+// guardDatabaseSecret refuses to change a postgres app's database password. The database
+// was set up with it, so a different one would lock the app out. (Revealing it is fine.)
+func (h *Hub) guardDatabaseSecret(ctx context.Context, appID, name string) error {
+	if name != core.DatabasePassword {
+		return nil
+	}
+	a, err := h.store.App(ctx, appID)
+	if err != nil {
+		return nil
+	}
+	if m, err := h.parse(a.Manifest, a.Repo); err == nil && m.Database == core.DatabasePostgres {
+		return userErr("%s is the database's own password and can't be changed here.", name)
+	}
 	return nil
 }
 

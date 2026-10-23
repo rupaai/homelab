@@ -12,6 +12,11 @@ func (d *Deployer) CheckFiles(context.Context) error { return d.FilesErr }
 
 // Copy copies a folder with Homelab's own account (the fake has no containers).
 func (d *Deployer) Copy(_ context.Context, from, to string) error {
+	if d.CopyErr != nil {
+		if err := d.CopyErr(from, to); err != nil {
+			return err
+		}
+	}
 	if _, err := os.Lstat(to); err == nil {
 		return errors.New(to + " already exists")
 	}

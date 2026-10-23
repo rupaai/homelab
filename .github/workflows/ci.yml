@@ -30,6 +30,19 @@ jobs:
 
   services:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-retries 30
+    env:
+      HOMELAB_TEST_POSTGRES: postgres://postgres:postgres@127.0.0.1:5432/postgres
     defaults:
       run:
         working-directory: services
