@@ -60,3 +60,9 @@ An app is a repo with a Dockerfile, a CI workflow that pushes an image tagged wi
 commit, and a `homelab.yaml` (its id, name and image default from the repo name; see
 [smart-recommender-player's](https://github.com/rupaai/smart-recommender-player/blob/main/homelab.yaml)).
 Add it in the companion with its `owner/name`.
+
+## Contributing
+
+New here? Start with [CONTRIBUTING.md](CONTRIBUTING.md). To try Homelab on a Mac, see
+[docs/getting-started.md](docs/getting-started.md). To learn how the parts fit, see
+[docs/how-it-works.md](docs/how-it-works.md).
