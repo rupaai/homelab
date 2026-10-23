@@ -183,7 +183,7 @@ func TestApply(t *testing.T) {
 	restarted := make(chan struct{})
 	u := New(Options{Home: home, Version: "build-1", API: srv.URL, Token: func() string { return "tok" },
 		Restart: func() { close(restarted) }, Now: func() time.Time { return t0 }})
-	s, err := u.Status(context.Background())
+	s, err := u.Status(context.Background(), false)
 	if err != nil || !s.Managed || !s.Available || s.Latest != "build-2" {
 		t.Fatalf("status = %+v, %v", s, err)
 	}
@@ -224,7 +224,7 @@ func TestApplyRefusesBadChecksum(t *testing.T) {
 
 func TestStatusUnmanaged(t *testing.T) {
 	u := New(Options{Home: t.TempDir(), Version: "dev"})
-	s, err := u.Status(context.Background())
+	s, err := u.Status(context.Background(), false)
 	if err != nil || s.Managed || s.Note == "" {
 		t.Fatalf("status = %+v, %v", s, err)
 	}
@@ -353,5 +353,31 @@ func TestApplyRefusedDuringATest(t *testing.T) {
 	}
 	if r, _ := Running(bin); r != "pr-7-abc" {
 		t.Fatalf("running %q", r)
+	}
+}
+
+func TestStatusAsksGitHubAgainWhenFresh(t *testing.T) {
+	home := installed(t, "build-1")
+	prog := script("build-2")
+	srv, hits := fakeGitHub(t, "build-2", prog, sha(prog))
+	now := t0
+	u := New(Options{Home: home, Version: "build-1", API: srv.URL, Token: func() string { return "tok" },
+		Now: func() time.Time { return now }})
+	latest := func() int32 { return hits.Load() }
+	u.Status(context.Background(), false)
+	first := latest()
+	u.Status(context.Background(), false)
+	if latest() != first {
+		t.Fatal("a second status within the hour asked GitHub again")
+	}
+	u.Status(context.Background(), true)
+	if latest() == first {
+		t.Fatal("a fresh status (Refresh) didn't ask GitHub")
+	}
+	now = now.Add(61 * time.Minute)
+	before := latest()
+	u.Status(context.Background(), false)
+	if latest() == before {
+		t.Fatal("an answer over an hour old was trusted")
 	}
 }

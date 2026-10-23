@@ -77,7 +77,8 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
   companion (Settings → Resources: Update, or try a test version then Keep) and goes back on
   its own if a new version doesn't stay up. Done. Versions: `build-N` or `vX.Y.Z` (any `v` is
   newer than any `build`); test versions `pr-N-<commit>` or `vX.Y.Z-pr.N[.<commit>]`
-  (`internal/adapters/selfupdate/version.go`). Releases are still named `build-N`.
+  (`internal/adapters/selfupdate/version.go`). Releases are still named `build-N`. It checks
+  GitHub for a new version every hour; Refresh on that screen checks right away.
 - **API keys and users API**: every app environment gets `HOMELAB_TOKEN` and
   `HOMELAB_API_URL` automatically; admins make keys for outside servers. Done. See
   [docs/platform-services.md](docs/platform-services.md).
