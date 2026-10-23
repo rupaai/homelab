@@ -4,7 +4,7 @@ These rules are for any AI helper: Gemini, Claude, Codex or others. A person (of
 
 ## Start here
 
-1. Read HANDOVER.md first. It has the current state and open work.
+1. Read HANDOVER.md first. It has the current state and open work. Its section 6 ("Rules") applies to you too.
 2. Then read docs/how-it-works.md. It says what each part does and where its code is.
 3. For the human steps (GitHub, PRs), see CONTRIBUTING.md.
 
