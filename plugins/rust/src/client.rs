@@ -8,6 +8,7 @@ use reqwest::{RequestBuilder, Response};
 use crate::db::Db;
 use crate::error::{Error, Result};
 use crate::files::Files;
+use crate::releases::Releases;
 use crate::secrets::{Secrets, DEFAULT_SECRETS_DIR};
 
 /// Env var holding the API address.
@@ -137,6 +138,14 @@ impl Homelab {
     /// The Databases service (read-only).
     pub fn db(&self) -> Db {
         Db::new(self.inner.clone())
+    }
+    /// The app's own versions.
+    pub fn releases(&self) -> Releases {
+        Releases::new(self.inner.clone())
+    }
+    /// This app's version (`HOMELAB_VERSION`), or `None` when Homelab has not given it one.
+    pub fn version(&self) -> Option<String> {
+        crate::releases::version()
     }
     // Room for `data()` later: each will be a small handle like
     // `Files` that shares `Inner`.

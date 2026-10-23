@@ -98,6 +98,10 @@ async fn serve(config: Config) -> Result<(), String> {
         secrets,
         secrets_problem,
         dbs,
+        github_api: std::env::var("GITHUB_API_URL")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| "https://api.github.com".to_string()),
     };
     axum::serve(listener, app(state))
         .with_graceful_shutdown(shutdown_signal())

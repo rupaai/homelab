@@ -73,6 +73,7 @@ type Adapters struct {
 	Updater   core.Updater   // may be nil: Homelab doesn't update itself (milestone 6)
 	Services  core.Services  // may be nil: no files, databases or data (platform services)
 	Databases core.Databases // may be nil: homelab-services isn't told about databases
+	Versions  core.Versions  // may be nil: builds get no release versions
 }
 
 // Hub is the core. Create it with New and run it with Run.
@@ -93,6 +94,10 @@ type Hub struct {
 	watches   map[string]*watch     // app -> prod being watched after a promote
 	smoked    map[string]string     // app -> dev commit whose smoke test passed
 	autoNote  map[string]autoState  // app -> what auto-promote is doing, for people
+
+	versionProblem map[string]string    // app -> why versions can't be made now
+	versionTried   map[string]time.Time // app -> when its first release was last tried
+	versionDone    map[string]bool      // app -> its first release is settled
 
 	diskCheckedAt time.Time // when the disk was last checked for the full-disk alert
 	kick          chan struct{}
@@ -164,17 +169,21 @@ func New(cfg Config, store *state.Store, ad Adapters) *Hub {
 	}
 	return &Hub{
 		cfg: cfg, store: store, ad: ad, log: cfg.Logger,
-		appLocks:   map[string]*sync.Mutex{},
-		status:     map[envKey]*envStatus{},
-		builds:     map[string]core.Build{},
-		failed:     map[string]string{},
-		addresses:  map[string]int{},
-		watches:    map[string]*watch{},
-		smoked:     map[string]string{},
-		autoNote:   map[string]autoState{},
-		kick:       make(chan struct{}, 1),
-		keyTouched: map[string]time.Time{},
-		keyLogged:  map[string]time.Time{},
+		appLocks:  map[string]*sync.Mutex{},
+		status:    map[envKey]*envStatus{},
+		builds:    map[string]core.Build{},
+		failed:    map[string]string{},
+		addresses: map[string]int{},
+		watches:   map[string]*watch{},
+		smoked:    map[string]string{},
+		autoNote:  map[string]autoState{},
+
+		versionProblem: map[string]string{},
+		versionTried:   map[string]time.Time{},
+		versionDone:    map[string]bool{},
+		kick:           make(chan struct{}, 1),
+		keyTouched:     map[string]time.Time{},
+		keyLogged:      map[string]time.Time{},
 	}
 }
 
@@ -443,7 +452,7 @@ func (h *Hub) reconcileEnv(ctx context.Context, a state.App, env string, r *core
 				why = "it had stopped"
 			}
 			h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: a.ID, Env: env, Action: "deploy.started",
-				Detail: fmt.Sprintf("Starting %s, because %s", e.Want.Short(), why)})
+				Detail: fmt.Sprintf("Starting %s, because %s", e.Want.Label(), why)})
 			if err := h.deploy(ctx, a, env, *e.Want); err != nil {
 				h.deployFailed(ctx, a.ID, env, err, true)
 			} else {
@@ -454,7 +463,7 @@ func (h *Hub) reconcileEnv(ctx context.Context, a state.App, env string, r *core
 					h.st(a.ID, env).nextAttempt = h.cfg.Now().Add(time.Minute)
 					h.mu.Unlock()
 				}
-				h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: a.ID, Env: env, Action: "deploy.done", Detail: e.Want.Short() + " is running"})
+				h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: a.ID, Env: env, Action: "deploy.done", Detail: e.Want.Label() + " is running"})
 			}
 		}
 	}
@@ -525,6 +534,9 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 		}
 	}
 	vars["HOMELAB_APP"], vars["HOMELAB_ENV"], vars["HOMELAB_COMMIT"] = a.ID, env, rel.Commit
+	if rel.Version != "" {
+		vars["HOMELAB_VERSION"] = rel.Version
+	}
 	// The app's own API key, and where to use it (platform services).
 	token, err := h.appKey(ctx, a.ID, env, appKeyScopes(m))
 	if err != nil {

@@ -1,7 +1,7 @@
 # @homelab/sdk (TypeScript)
 
 Thin TypeScript client for the Homelab API. Today: Files (`homelab.files`), Secrets
-(`homelab.secrets`) and Databases (`homelab.db`). Data (`homelab.data`) will be added next to them.
+(`homelab.secrets`), Databases (`homelab.db`) and Releases (`homelab.releases`). Data (`homelab.data`) will be added next to them.
 
 Zero runtime dependencies. Uses the global `fetch` (Node 18+ and browsers). ESM only.
 
@@ -210,11 +210,32 @@ Read-only SQL: `{ columns, rows, row_count, truncated, command, ms }`.
 const r = await homelab.db.query(undefined, undefined, "select count(*) from orders");
 ```
 
+## Releases
+
+Homelab gives every build of your app a version, with no change in your repo: `v0.4.0-dev.2` on
+dev, `v0.4.0` on prod. It sets `HOMELAB_VERSION` for the app, and `homelab.releases` lists the
+app's own versions (the key's `releases:read` scope is there by default).
+
+### `version(): string | null`
+The app's own version from `HOMELAB_VERSION`, or `null` when there is none (for example when
+GitHub didn't let Homelab make one). It needs no key: `import { version } from "@homelab/sdk"`
+works too, and so does `homelab.version()`.
+```ts
+console.log(`Movie Night ${homelab.version() ?? "(no version)"}`);
+```
+
+### `releases.list({ limit? }): Promise<Release[]>`
+The app's releases, newest first: `{ tag, prerelease, commit, date, summary, notes }`. Dev builds
+are pre-releases. `summary` is a line like `"2 new, 1 fix"`; `notes` is markdown.
+```ts
+for (const r of await homelab.releases.list({ limit: 10 })) console.log(r.tag, r.summary);
+```
+
 ## Types
 
 `Folder`, `File`, `Meta` (every key optional; unknown keys are kept), `ListFilters`,
 `ListResult`, `UploadOptions`, `UploadResult`, `UpdateFileOptions`, `SecretInfo`, `SecretVersion`,
-`SecretSaved`, `GetSecretOptions`, `DbInfo`, `DbTable`, `DbRows`, `DbRowsOptions`, `DbQueryResult` and more are exported.
+`SecretSaved`, `GetSecretOptions`, `DbInfo`, `DbTable`, `DbRows`, `DbRowsOptions`, `DbQueryResult`, `Release`, `ReleasesOptions` and more are exported.
 Note that `File` shadows the DOM `File` when imported; use `import type { File as HomelabFile }`.
 
 ## Errors

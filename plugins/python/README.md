@@ -1,6 +1,6 @@
 # homelab-sdk (Python)
 
-A small Python client for Homelab's **Files**, **Secrets** and **Databases** services. Standard library only (no runtime
+A small Python client for Homelab's **Files**, **Secrets**, **Databases** and **Releases** services. Standard library only (no runtime
 dependencies), Python 3.9+, fully typed.
 
 ## Install
@@ -209,9 +209,31 @@ Read-only SQL: `columns, rows, row_count, truncated, command, ms`.
 r = homelab.db.query("select count(*) from orders")
 ```
 
+## Releases
+
+Homelab gives every build of your app a version, with no change in your repo: `v0.4.0-dev.2` on
+dev, `v0.4.0` on prod. It sets `HOMELAB_VERSION` for the app, and `homelab.releases` lists the
+app's own versions (the key's `releases:read` scope is there by default).
+
+### `version() -> str | None`
+The app's own version from `HOMELAB_VERSION`, or `None` when there is none (for example when
+GitHub didn't let Homelab make one). It needs no key: `from homelab import version` works too,
+and so does `homelab.version()`.
+```python
+print(f"Movie Night {homelab.version() or '(no version)'}")
+```
+
+### `releases.list(*, limit=None) -> list[Release]`
+The app's releases, newest first: `Release(tag, prerelease, commit, date, summary, notes)`. Dev
+builds are pre-releases. `summary` is a line like `"2 new, 1 fix"`; `notes` is markdown.
+```python
+for r in homelab.releases.list(limit=10):
+    print(r.tag, r.summary)
+```
+
 ## Types
 
-`Folder`, `File`, `Meta` (with `Gps`), `SecretInfo`, `SecretVersion`, `SecretSaved`, `DbInfo`, `DbTable`, `DbRows` and `DbQueryResult` are frozen dataclasses. `File` has `id, folder, name,
+`Folder`, `File`, `Meta` (with `Gps`), `SecretInfo`, `SecretVersion`, `SecretSaved`, `DbInfo`, `DbTable`, `DbRows`, `DbQueryResult` and `Release` are frozen dataclasses. `File` has `id, folder, name,
 content_type, size, sha256, created_at, created_by, tags, info, meta`; `Meta` has
 `width, height, taken_at, camera_make, camera_model, lens, orientation, gps, duration_s,
 title, artist, album, year, pages, author` (each `None` when the server did not find it).

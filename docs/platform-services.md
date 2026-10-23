@@ -13,7 +13,7 @@ There are two kinds.
 - `HOMELAB_TOKEN`: the key.
 - `HOMELAB_API_URL`: where to use it, `http://host.docker.internal:7085`.
 
-An app key acts for its own app and environment only. It can read the people of its app. Later services decide what else it may touch from the app and environment it belongs to, so a dev key never gets prod's data. It only works at `HOMELAB_API_URL`, not on the companion's address.
+An app key acts for its own app and environment only. It can read the people of its app and its own release versions. Later services decide what else it may touch from the app and environment it belongs to, so a dev key never gets prod's data. It only works at `HOMELAB_API_URL`, not on the companion's address.
 
 An admin can revoke an app key under **Settings → API keys**, for example if it leaked. The app gets a new one the next time it's deployed.
 
@@ -25,6 +25,7 @@ An admin can revoke an app key under **Settings → API keys**, for example if i
 - `files:read`: read every folder's files.
 - `files:write`: also make folders, and save, change and delete files.
 - `db:read`: look inside every database (read only).
+- `releases:read`: list the app's own release versions. Only app keys have it (every app key does); admin keys can't.
 
 App keys need no files scope: an app always has its own folders, and only those. Databases and data add their own scopes when they arrive.
 
@@ -88,6 +89,52 @@ homelab-services release <prod|dev|test> --repo owner/name --commit <sha> \
 - The version comes from the PR titles since the last `vX.Y.Z` release: `feat:` raises the middle number, `fix:` (or a title with no prefix) the last one. `feat!:`, any `type!:`, or `BREAKING CHANGE` in the body is breaking: it raises the first number, or the middle one while the version is below 1.0. `docs:`, `chore:`, `test:`, `ci:`, `style:`, `refactor:` and `build:` need no release, unless you pass `--always` (then the last number goes up).
 - The first release is `--first`, else the version in `pyproject.toml`, `package.json` or `Cargo.toml` at that commit, else `v0.1.0`.
 - Running it twice for the same commit gives the same release. If the tag is on another commit, it stops with an error. A test version is tied to its pull request number, so a second test release of the same pull request on a newer commit stops with that error.
+
+### Versions for every app Homelab runs
+
+You don't have to do anything in the app's repo. Homelab makes the versions itself, with the GitHub token it already has (`GITHUB_TOKEN`; for releases it needs **Contents: read and write**).
+
+- **Dev:** before a new build goes on dev, Homelab makes a GitHub pre-release such as `v0.4.0-dev.1`. The next build is `v0.4.0-dev.2`, until prod catches up.
+- **Prod:** a promote makes the release `v0.4.0` on the same commit that dev ran, and prod runs it. The promote sheet says "Promote v0.4.0-dev.2 to prod as v0.4.0", with a line like "2 new, 1 fix" and the notes.
+- **Apps that already run:** if an app has no `vX.Y.Z` release yet and prod runs a commit, Homelab makes the first release for that commit once (from `pyproject.toml`, `package.json` or `Cargo.toml`, else `v0.1.0`), so the next dev build continues from it. The running prod container gets its `HOMELAB_VERSION` at its next deploy; nothing is restarted for a label.
+- **Only the app's container** gets `HOMELAB_VERSION`, not its extra containers. An app with a single environment gets prod releases for its deploys.
+- **Never in the way:** if GitHub says no (for example the token can't write releases), the app is deployed anyway, without a version. The app's page says "Can't make versions on GitHub: the token needs Contents: read and write." and the activity log has a line. Fix the token and the next build gets a version.
+- A rollback brings back the old version with the old build. The version is kept on the deploy record and on the environment.
+
+In the app, `HOMELAB_VERSION` holds it (unset when there is none). The plugins read it: `homelab.version()` (TypeScript), `homelab.version()` / `from homelab import version` (Python), `homelab::version()` (Rust).
+
+An app can list its own versions with its own key (scope `releases:read`):
+
+| Call | Gives |
+|---|---|
+| `GET /api/releases?limit=` | `{"releases": [{"tag","prerelease","commit","date","summary","notes"}]}`, newest first. Dev builds are pre-releases. `limit` is optional |
+
+```sh
+curl -s -H "Authorization: Bearer $HOMELAB_TOKEN" "$HOMELAB_API_URL/api/releases?limit=5"
+```
+
+```ts
+// TypeScript
+const homelab = new Homelab();
+console.log(homelab.version());                  // "v0.4.0", or null
+const releases = await homelab.releases.list({ limit: 5 });
+```
+
+```python
+# Python
+homelab = Homelab()
+print(homelab.version())                         # "v0.4.0", or None
+releases = homelab.releases.list(limit=5)
+```
+
+```rust
+// Rust
+let homelab = Homelab::from_env()?;
+println!("{:?}", homelab.version());             // Some("v0.4.0"), or None
+let releases = homelab.releases().list(Some(5)).await?;
+```
+
+Homelab keeps the GitHub token to itself: the app never sees it. Homelab adds the app's repo and the token when it forwards the call to homelab-services, which makes the GitHub calls and never logs or returns the token. Homelab itself uses two internal routes (`/internal/releases/publish` and `/internal/releases/list`) that only it can call.
 
 Example GitHub Actions step (a job on `main` with `contents: write`):
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appAddress, appInitial, bytes, countdown, promotionHelp, deployedLabel, healthLabel, healthSentence, isProblemAction, relativeTime, uptime } from './format';
+import { appAddress, appInitial, bytes, countdown, promotionHelp, deployedLabel, healthLabel, healthSentence, isProblemAction, noteLines, promoteTitle, relativeTime, releaseName, uptime } from './format';
 
 const now = Date.parse('2026-10-14T12:00:00Z');
 const ago = (ms: number) => new Date(now - ms).toISOString();
@@ -100,5 +100,27 @@ describe('appAddress', () => {
 	});
 	it('leaves other addresses alone', () => {
 		expect(appAddress('https://movies.example.test', '192.168.1.183')).toBe('https://movies.example.test');
+	});
+});
+
+describe('release versions', () => {
+	it('names a release by its version, else its commit', () => {
+		expect(releaseName({ version: 'v0.4.0-dev.2', short: '9f3c2ab' })).toBe('v0.4.0-dev.2');
+		expect(releaseName({ short: '9f3c2ab' })).toBe('9f3c2ab');
+		expect(releaseName({ version: '', short: '9f3c2ab' })).toBe('9f3c2ab');
+		expect(releaseName(null)).toBe('');
+	});
+	it('titles the promote sheet with both versions when it can', () => {
+		expect(promoteTitle('v0.4.0-dev.2', 'v0.4.0')).toBe('Promote v0.4.0-dev.2 to prod as v0.4.0');
+		expect(promoteTitle(undefined, 'v0.4.0')).toBe('Promote to prod as v0.4.0');
+		expect(promoteTitle('v0.4.0-dev.2', '')).toBe('Promote to prod');
+		expect(promoteTitle(undefined, undefined)).toBe('Promote to prod');
+	});
+	it('turns release notes into a plain list', () => {
+		const notes = '## Breaking\n\n- drop the old login (#9)\n\n## New\n\n- add x (#5)\n- add y (#6)\n\n## Fixes\n\n- z (#7)\n';
+		expect(noteLines(notes)).toEqual(['Breaking: drop the old login (#9)', 'add x (#5)', 'add y (#6)', 'z (#7)']);
+		expect(noteLines('')).toEqual([]);
+		expect(noteLines(undefined)).toEqual([]);
+		expect(noteLines('Just words\n-\n- ')).toEqual([]);
 	});
 });

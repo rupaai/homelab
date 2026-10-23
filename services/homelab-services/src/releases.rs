@@ -369,6 +369,30 @@ pub fn summary(changes: &[Change]) -> String {
     parts.join(", ")
 }
 
+/// The same line as `summary`, read back from release notes written by `notes`.
+pub fn summary_of_notes(text: &str) -> String {
+    let mut kind = None;
+    let mut changes = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(heading) = line.strip_prefix("## ") {
+            kind = match heading.trim() {
+                "Breaking" => Some(Kind::Breaking),
+                "New" => Some(Kind::New),
+                "Fixes" => Some(Kind::Fix),
+                _ => None,
+            };
+        } else if let (Some(kind), true) = (kind, line.starts_with("- ")) {
+            changes.push(Change {
+                kind,
+                text: line[2..].to_string(),
+                pr: None,
+            });
+        }
+    }
+    summary(&changes)
+}
+
 // ---------------------------------------------------------------------------------------
 // Start version
 

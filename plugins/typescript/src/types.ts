@@ -195,3 +195,23 @@ export interface DbQueryResult extends DbRows {
   /** How long the query took, in milliseconds. */
   ms: number;
 }
+
+/** One release of the app. Dev builds are pre-releases. */
+export interface Release {
+  /** For example "v0.4.0" or "v0.4.0-dev.2". */
+  tag: string;
+  prerelease: boolean;
+  /** The full commit it was made from. */
+  commit: string;
+  /** An ISO 8601 time. */
+  date: string;
+  /** A short line such as "2 new, 1 fix". Empty when there are no notes. */
+  summary: string;
+  /** The release notes as markdown. */
+  notes: string;
+}
+
+export interface ReleasesOptions {
+  /** How many releases at most (1 or more). Default: all that Homelab gives (up to 100). */
+  limit?: number;
+}

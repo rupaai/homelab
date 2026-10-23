@@ -111,6 +111,9 @@ func New(o Options) (*Services, error) {
 			pr.Out.Host = target.Host
 			strip(pr.Out.Header)
 			c, _ := pr.In.Context().Value(callerKey{}).(core.ServiceCaller)
+			for name, values := range core.ServiceHeadersFrom(pr.In.Context()) {
+				pr.Out.Header[name] = values
+			}
 			s.sign(pr.Out, c)
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {

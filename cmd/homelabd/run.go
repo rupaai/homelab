@@ -221,7 +221,7 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 		Addresses: addrs, Health: httphealth.New(nil), Secrets: secrets,
 		Smoke: deployer, Mirror: mirror, Identity: idp, Email: mailer,
 		Notifier: notifier, Resources: resources, System: sysinfo.New(sysinfo.Options{}), Updater: updater,
-		Services: svc, Databases: svc.Databases(),
+		Services: svc, Databases: svc.Databases(), Versions: svc.Versions(),
 	})
 
 	oidcConfig := api.NewOIDCConfig("", "", "")

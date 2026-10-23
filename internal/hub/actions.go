@@ -82,6 +82,7 @@ func (h *Hub) CheckBuilds(ctx context.Context) {
 		if err != nil {
 			continue
 		}
+		h.bootstrapVersions(ctx, a)
 		b, err := h.ad.Builder.LatestBuild(ctx, a.Repo, m.Build.Branch, m.Build.Workflow)
 		if err != nil {
 			if !errors.Is(err, core.ErrNotFound) {
@@ -129,6 +130,7 @@ func (h *Hub) CheckBuilds(ctx context.Context) {
 			}
 			continue
 		}
+		h.stampVersion(ctx, a, &rel, core.Dev)
 		if err := h.setWantAndApply(ctx, a, core.Dev, rel, "deploy", core.Viewer{}, "New build"); err != nil {
 			h.log.Warn("new build", "app", a.ID, "err", err)
 			continue
@@ -194,6 +196,7 @@ func (h *Hub) DeployDev(ctx context.Context, appID, commit string, by core.Viewe
 	if err != nil {
 		return err
 	}
+	h.stampVersion(ctx, a, &rel, core.Dev)
 	return h.setWantAndApply(ctx, a, core.Dev, rel, "deploy", by, "Deploy")
 }
 
@@ -213,8 +216,8 @@ func (h *Hub) setWantAndApply(ctx context.Context, a state.App, env string, rel 
 		return err
 	}
 	h.logEvent(ctx, state.Event{Actor: actor, App: a.ID, Env: env, Action: kind + ".started",
-		Detail: fmt.Sprintf("%s %s (%s) to %s", verb, rel.Short(), firstLine(rel.Message), env)})
-	h.setBusy(a.ID, env, "Deploying "+rel.Short())
+		Detail: fmt.Sprintf("%s %s (%s) to %s", verb, rel.Label(), firstLine(rel.Message), env)})
+	h.setBusy(a.ID, env, "Deploying "+rel.Label())
 	go func() {
 		defer h.Kick() // runs last, once the app is unlocked, so the reconciler picks up any leftovers
 		defer lock.Unlock()
@@ -228,19 +231,19 @@ func (h *Hub) setWantAndApply(ctx context.Context, a state.App, env string, rel 
 func (h *Hub) applyAndWait(ctx context.Context, a state.App, env string, rel core.Release, kind, actor string) bool {
 	if err := h.deploy(ctx, a, env, rel); err != nil {
 		h.deployFailed(ctx, a.ID, env, err, false)
-		h.logEvent(ctx, state.Event{Actor: actor, App: a.ID, Env: env, Action: kind + ".failed", Detail: "Couldn't start " + rel.Short() + ": " + err.Error()})
+		h.logEvent(ctx, state.Event{Actor: actor, App: a.ID, Env: env, Action: kind + ".failed", Detail: "Couldn't start " + rel.Label() + ": " + err.Error()})
 		return false
 	}
 	h.deployOK(a.ID, env)
 	h.ensureAddress(ctx, manifest.AddressName(a.ID, env), h.hostPort(a.Slot, env), a.ID, a.Name, env)
 	ok, detail := h.waitHealthy(ctx, a, env, &rel)
 	if ok {
-		h.logEvent(ctx, state.Event{Actor: actor, App: a.ID, Env: env, Action: kind + ".done", Detail: rel.Short() + " is running and healthy"})
+		h.logEvent(ctx, state.Event{Actor: actor, App: a.ID, Env: env, Action: kind + ".done", Detail: rel.Label() + " is running and healthy"})
 		h.removeOldImages(ctx, a.ID, rel.Image)
 		return true
 	}
 	h.logEvent(ctx, state.Event{Actor: actor, App: a.ID, Env: env, Action: kind + ".unhealthy",
-		Detail: rel.Short() + " started but isn't healthy: " + detail})
+		Detail: rel.Label() + " started but isn't healthy: " + detail})
 	return false
 }
 
@@ -305,6 +308,11 @@ type PromotePreview struct {
 	MissingSecrets []string      `json:"missingSecrets"`
 	DevHealth      string        `json:"devHealth"`
 	Blockers       []string      `json:"blockers"` // promote is refused while any are listed
+	// NextVersion is the version prod gets (v0.4.0), with the Summary ("2 new, 1 fix") and
+	// Notes of what changed. Empty when versions aren't made for this app.
+	NextVersion string `json:"nextVersion"`
+	Summary     string `json:"summary"`
+	Notes       string `json:"notes"`
 }
 
 // PreviewPromote returns what promoting dev to prod would do.
@@ -350,6 +358,9 @@ func (h *Hub) PreviewPromote(ctx context.Context, appID string) (PromotePreview,
 	if prodBusy != "" {
 		p.Blockers = append(p.Blockers, "Prod is busy: "+prodBusy+".")
 	}
+	if prod.Want == nil || prod.Want.Digest != dev.Want.Digest {
+		h.previewVersion(ctx, a, dev.Want, prod.Want, &p)
+	}
 	if m, err := h.parse(dev.Want.Manifest, a.Repo); err == nil {
 		missing, err := h.ad.Secrets.Missing(appID, core.Prod, m.Secrets)
 		if err != nil {
@@ -391,9 +402,9 @@ func (h *Hub) promoteAs(ctx context.Context, appID, actor, verb string) error {
 		return ErrBusy
 	}
 	rel := *dev.Want
-	h.setBusy(appID, core.Prod, "Promoting "+rel.Short())
+	h.setBusy(appID, core.Prod, "Promoting "+rel.Label())
 	h.logEvent(ctx, state.Event{Actor: actor, App: appID, Env: core.Prod, Action: "promote.started",
-		Detail: fmt.Sprintf("%s %s (%s) from dev to prod", verb, rel.Short(), firstLine(rel.Message))})
+		Detail: fmt.Sprintf("%s %s (%s) from dev to prod", verb, rel.Label(), firstLine(rel.Message))})
 	go func() {
 		defer h.Kick() // runs last: if the promote stopped prod and failed, the old version starts again
 		defer lock.Unlock()
@@ -407,6 +418,8 @@ func (h *Hub) promoteAs(ctx context.Context, appID, actor, verb string) error {
 }
 
 func (h *Hub) promote(ctx context.Context, a state.App, rel core.Release, actor string) error {
+	// Prod gets its own version of the same commit (v0.4.0 for dev's v0.4.0-dev.2), or none.
+	h.stampVersion(ctx, a, &rel, core.Prod)
 	spec, err := h.spec(ctx, a, core.Prod, rel)
 	if err != nil {
 		return fmt.Errorf("Nothing changed: %w", err)
@@ -415,7 +428,7 @@ func (h *Hub) promote(ctx context.Context, a state.App, rel core.Release, actor 
 	if err != nil {
 		return fmt.Errorf("Nothing changed: %w", err)
 	}
-	h.setBusy(a.ID, core.Prod, "Downloading "+rel.Short())
+	h.setBusy(a.ID, core.Prod, "Downloading "+rel.Label())
 	if err := h.ad.Deployer.Prepare(ctx, spec); err != nil {
 		return fmt.Errorf("Nothing changed, the download failed: %w", err)
 	}
@@ -459,7 +472,7 @@ func (h *Hub) promote(ctx context.Context, a state.App, rel core.Release, actor 
 	if backup != "" {
 		h.logEvent(ctx, state.Event{Actor: actor, App: a.ID, Env: core.Prod, Action: "data.copied", Detail: "Copied prod's data to " + backup})
 	}
-	h.setBusy(a.ID, core.Prod, "Starting "+rel.Short())
+	h.setBusy(a.ID, core.Prod, "Starting "+rel.Label())
 	if h.applyAndWait(ctx, a, core.Prod, rel, "promote", actor) {
 		h.startWatch(a.ID, rel, before.Want)
 		return nil
@@ -473,16 +486,16 @@ func (h *Hub) promote(ctx context.Context, a state.App, rel core.Release, actor 
 // kept next to the other copies.
 func (h *Hub) undoPromote(ctx context.Context, a state.App, prev *core.Release, failed core.Release, backup string) error {
 	if prev == nil {
-		return fmt.Errorf("%s isn't healthy, and there's no earlier prod version to go back to", failed.Short())
+		return fmt.Errorf("%s isn't healthy, and there's no earlier prod version to go back to", failed.Label())
 	}
 	if err := h.store.AddHold(ctx, a.ID, failed.Commit, "It wasn't healthy right after it was promoted."); err != nil {
 		h.log.Error("hold", "app", a.ID, "err", err)
 	}
-	h.setBusy(a.ID, core.Prod, "Going back to "+prev.Short())
+	h.setBusy(a.ID, core.Prod, "Going back to "+prev.Label())
 	h.logEvent(ctx, state.Event{Actor: core.ActorHomelab, App: a.ID, Env: core.Prod, Action: "promote.reverting",
-		Detail: fmt.Sprintf("%s isn't healthy, so prod is going back to %s with its data from before the promote", failed.Short(), prev.Short())})
+		Detail: fmt.Sprintf("%s isn't healthy, so prod is going back to %s with its data from before the promote", failed.Label(), prev.Label())})
 	if err := h.ad.Deployer.StopApp(ctx, a.ID, core.Prod); err != nil {
-		return fmt.Errorf("Couldn't stop %s to go back: %w", failed.Short(), err)
+		return fmt.Errorf("Couldn't stop %s to go back: %w", failed.Label(), err)
 	}
 	if backup != "" {
 		kept, err := h.restoreData(ctx, a.ID, core.Prod, backup, failed.Short())
@@ -508,9 +521,9 @@ func (h *Hub) undoPromote(ctx context.Context, a state.App, prev *core.Release, 
 		return err
 	}
 	if !h.applyAndWait(ctx, a, core.Prod, *prev, "rollback", core.ActorHomelab) {
-		return fmt.Errorf("%s isn't healthy, and %s didn't come back healthy either", failed.Short(), prev.Short())
+		return fmt.Errorf("%s isn't healthy, and %s didn't come back healthy either", failed.Label(), prev.Label())
 	}
-	return fmt.Errorf("%s isn't healthy, so prod went back to %s", failed.Short(), prev.Short())
+	return fmt.Errorf("%s isn't healthy, so prod went back to %s", failed.Label(), prev.Label())
 }
 
 // ---- Rollback ----

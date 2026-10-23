@@ -271,10 +271,10 @@ func TestAppKeyScopesFollowSecretsAPIInTheManifest(t *testing.T) {
 		line string
 		want []string
 	}{
-		{"", []string{ScopeUsersRead, ScopeSecretsRead}},
-		{"secrets_api: read\n", []string{ScopeUsersRead, ScopeSecretsRead}},
-		{"secrets_api: write\n", []string{ScopeUsersRead, ScopeSecretsRead, ScopeSecretsWrite}},
-		{"secrets_api: none\n", []string{ScopeUsersRead}},
+		{"", []string{ScopeUsersRead, ScopeReleasesRead, ScopeSecretsRead}},
+		{"secrets_api: read\n", []string{ScopeUsersRead, ScopeReleasesRead, ScopeSecretsRead}},
+		{"secrets_api: write\n", []string{ScopeUsersRead, ScopeReleasesRead, ScopeSecretsRead, ScopeSecretsWrite}},
+		{"secrets_api: none\n", []string{ScopeUsersRead, ScopeReleasesRead}},
 	} {
 		doc := secretsDoc + tc.line
 		r := secretsRig(t, doc)
@@ -299,10 +299,10 @@ func TestChangingSecretsAPIChangesTheScopesOfTheSameKey(t *testing.T) {
 		line string
 		want []string
 	}{
-		{"", []string{ScopeUsersRead, ScopeSecretsRead}},
-		{"secrets_api: write\n", []string{ScopeUsersRead, ScopeSecretsRead, ScopeSecretsWrite}},
-		{"secrets_api: none\n", []string{ScopeUsersRead}},
-		{"secrets_api: write\n", []string{ScopeUsersRead, ScopeSecretsRead, ScopeSecretsWrite}},
+		{"", []string{ScopeUsersRead, ScopeReleasesRead, ScopeSecretsRead}},
+		{"secrets_api: write\n", []string{ScopeUsersRead, ScopeReleasesRead, ScopeSecretsRead, ScopeSecretsWrite}},
+		{"secrets_api: none\n", []string{ScopeUsersRead, ScopeReleasesRead}},
+		{"secrets_api: write\n", []string{ScopeUsersRead, ScopeReleasesRead, ScopeSecretsRead, ScopeSecretsWrite}},
 	} {
 		doc := secretsDoc + step.line
 		got := secretSpec(t, r, doc, core.Prod).Vars[AppTokenSecret]

@@ -13,11 +13,13 @@ import (
 type fakeServices struct {
 	calls []core.ServiceCaller
 	paths []string
+	extra []http.Header // what Homelab asked to add to each call
 }
 
 func (f *fakeServices) Forward(w http.ResponseWriter, r *http.Request, c core.ServiceCaller) {
 	f.calls = append(f.calls, c)
 	f.paths = append(f.paths, r.Method+" "+r.URL.RequestURI())
+	f.extra = append(f.extra, core.ServiceHeadersFrom(r.Context()))
 	w.WriteHeader(http.StatusTeapot)
 }
 

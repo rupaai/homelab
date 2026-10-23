@@ -144,6 +144,11 @@ pub struct TestEnv {
 }
 
 pub fn test_env(max_upload: u64) -> TestEnv {
+    test_env_github(max_upload, "http://127.0.0.1:9")
+}
+
+/// Like `test_env`, with the release routes pointed at a (fake) GitHub.
+pub fn test_env_github(max_upload: u64, github_api: &str) -> TestEnv {
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("data");
     let disk = dir.path().join("disk");
@@ -165,6 +170,7 @@ pub fn test_env(max_upload: u64) -> TestEnv {
         secrets: Some(secrets.clone()),
         secrets_problem: String::new(),
         dbs: dbs.clone(),
+        github_api: github_api.to_string(),
     });
     TestEnv {
         dir,

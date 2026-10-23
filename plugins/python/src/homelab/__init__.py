@@ -1,11 +1,12 @@
-"""Python client for Homelab's Files, Secrets and Databases services. Standard library only."""
+"""Python client for Homelab's Files, Secrets, Databases and Releases services. Standard library only."""
 
 from .client import Homelab
 from .errors import HomelabError
 from .db import Db
 from .files import Files
+from .releases import Releases, version
 from .secrets import Secrets
-from .types import DbInfo, DbQueryResult, DbRows, DbTable, File, FileList, Folder, Gps, Meta, SecretInfo, SecretSaved, SecretVersion, UploadResult
+from .types import DbInfo, DbQueryResult, DbRows, DbTable, File, FileList, Folder, Gps, Meta, Release, SecretInfo, SecretSaved, SecretVersion, UploadResult
 
 __version__ = "0.1.0"
 
@@ -23,10 +24,13 @@ __all__ = [
     "Homelab",
     "HomelabError",
     "Meta",
+    "Release",
+    "Releases",
     "SecretInfo",
     "SecretSaved",
     "SecretVersion",
     "Secrets",
     "UploadResult",
     "__version__",
+    "version",
 ]

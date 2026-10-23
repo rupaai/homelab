@@ -1,6 +1,6 @@
 # homelab-sdk (Rust)
 
-A thin async client for [Homelab](../../README.md)'s Files, Secrets and Databases services. It builds the
+A thin async client for [Homelab](../../README.md)'s Files, Secrets, Databases and Releases services. It builds the
 request, reads the answer and turns errors into one `Error` type. Nothing else.
 
 The crate is named `homelab-sdk`; you use it as `homelab`.
@@ -292,6 +292,32 @@ Read-only SQL: `columns, rows, row_count, truncated, command, ms`.
 
 ```rust
 let r = db.query(None, None, "select count(*) from orders").await?;
+```
+
+## Releases
+
+Homelab gives every build of your app a version, with no change in your repo: `v0.4.0-dev.2` on
+dev, `v0.4.0` on prod. It sets `HOMELAB_VERSION` for the app, and `homelab.releases()` lists the
+app's own versions (the key's `releases:read` scope is there by default).
+
+### version
+`homelab::version() -> Option<String>`: the app's own version from `HOMELAB_VERSION`, or `None`
+when there is none (for example when GitHub didn't let Homelab make one). It needs no key;
+`homelab.version()` does the same.
+
+```rust
+println!("Movie Night {}", homelab::version().unwrap_or_else(|| "(no version)".into()));
+```
+
+### releases().list
+`list(limit: Option<u32>) -> Result<Vec<Release>>`: the app's releases, newest first. A
+`Release` has `tag, prerelease, commit, date, summary, notes`. Dev builds are pre-releases.
+`summary` is a line like `2 new, 1 fix`; `notes` is markdown.
+
+```rust
+for r in homelab.releases().list(Some(10)).await? {
+    println!("{} {}", r.tag, r.summary);
+}
 ```
 
 ## Types

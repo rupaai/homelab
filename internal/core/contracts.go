@@ -278,6 +278,56 @@ type Services interface {
 	Problem() string
 }
 
+// Versions makes the release versions of an app's commits on GitHub, and lists them
+// (homelab-services does the work). token is a GitHub token that can write releases.
+type Versions interface {
+	// Publish picks the version of commit on a channel (dev or prod) and makes the GitHub
+	// release for it. With dryRun it only says what the version would be. Asking again for a
+	// commit that has its version gives the same one (Existing).
+	Publish(ctx context.Context, repo, commit, channel, token string, dryRun bool) (VersionResult, error)
+	// List gives the repo's releases, newest first.
+	List(ctx context.Context, repo, token string) ([]ReleaseInfo, error)
+}
+
+// ErrGitHubRefused means GitHub said no to the token (it can't read or write the repo's
+// releases). The error's text says what GitHub answered.
+var ErrGitHubRefused = errors.New("GitHub refused the token")
+
+// VersionResult is the version of one commit.
+type VersionResult struct {
+	Version  string `json:"version"` // "" when nothing needs a release
+	Released bool   `json:"released"`
+	Existing bool   `json:"existing"` // the commit already had this version
+	Previous string `json:"previous"` // the last prod version before it
+	Summary  string `json:"summary"`
+	Notes    string `json:"notes"`
+}
+
+// ReleaseInfo is one release of a repo.
+type ReleaseInfo struct {
+	Tag        string `json:"tag"`
+	Prerelease bool   `json:"prerelease"`
+	Commit     string `json:"commit"`
+	Date       string `json:"date"`
+	Summary    string `json:"summary"`
+	Notes      string `json:"notes"`
+}
+
+type serviceHeadersKey struct{}
+
+// WithServiceHeaders returns ctx asking Services.Forward to add h to the call it forwards.
+// Only Homelab's own code sets these (the app's repo and the GitHub token for the releases
+// API); anything a caller sent as an X-Homelab-* header is dropped before they are added.
+func WithServiceHeaders(ctx context.Context, h http.Header) context.Context {
+	return context.WithValue(ctx, serviceHeadersKey{}, h)
+}
+
+// ServiceHeadersFrom returns the headers set by WithServiceHeaders.
+func ServiceHeadersFrom(ctx context.Context) http.Header {
+	h, _ := ctx.Value(serviceHeadersKey{}).(http.Header)
+	return h
+}
+
 // Databases is how homelabd tells homelab-services about the databases it runs (database:
 // in homelab.yaml). homelab-services does everything that talks to a database.
 type Databases interface {

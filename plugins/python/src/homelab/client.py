@@ -11,6 +11,7 @@ from ._http import Transport, _origin
 from .db import Db
 from .errors import HomelabError
 from .files import Files
+from .releases import Releases, version as _version
 from .secrets import DEFAULT_SECRETS_DIR, PathLike, Secrets
 
 # Layout: every service is one module with one class that takes the Transport
@@ -30,6 +31,7 @@ class Homelab:
 
     db: Db
     files: Files
+    releases: Releases
     secrets: Secrets
 
     def __init__(
@@ -55,6 +57,11 @@ class Homelab:
         self.files = Files(self._transport)
         self.secrets = Secrets(self._transport, secrets_dir)
         self.db = Db(self._transport)
+        self.releases = Releases(self._transport)
+
+    def version(self) -> Optional[str]:
+        """This app's version (``HOMELAB_VERSION``), or ``None`` when Homelab has not given it one."""
+        return _version()
 
     @property
     def url(self) -> str:

@@ -5,7 +5,7 @@ import type { ActivityEvent, Api, DbChange, DbCopy, DbInfo, DbTable, AppView, Sa
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 const delay = <T>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
 
-function rel(sha: string, message: string, author: string, minutesAgo: number): ReleaseView {
+function rel(sha: string, message: string, author: string, minutesAgo: number, version?: string, summary?: string, notes?: string): ReleaseView {
 	return {
 		commit: sha.padEnd(40, '0'),
 		short: sha.slice(0, 7),
@@ -16,13 +16,17 @@ function rel(sha: string, message: string, author: string, minutesAgo: number): 
 		message,
 		author,
 		when: ago(minutesAgo),
-		buildUrl: 'https://github.com/rupaai/movie-night/actions/runs/1'
+		buildUrl: 'https://github.com/rupaai/movie-night/actions/runs/1',
+		...(version ? { version, summary, notes } : {})
 	};
 }
 
-const newer = rel('9f3c2ab', 'Show who is watching on the poster', 'Rupa', 42);
-const older = rel('4be81d7', 'Add the family watch list', 'Rupa', 60 * 26);
-const oldest = rel('1a77c0e', 'First version', 'Rupa', 60 * 24 * 6);
+const newNotes = '## New\n\n- Show who is watching on the poster (#31)\n- Remember the last film you picked (#30)\n\n## Fixes\n\n- Fix the search box on small screens (#29)\n';
+const newer = rel('9f3c2ab', 'Show who is watching on the poster', 'Rupa', 42, 'v0.4.0-dev.2', '2 new, 1 fix', newNotes);
+const older = rel('4be81d7', 'Add the family watch list', 'Rupa', 60 * 26, 'v0.3.0', '1 new', '## New\n\n- Add the family watch list (#27)\n');
+const oldest = rel('1a77c0e', 'First version', 'Rupa', 60 * 24 * 6, 'v0.2.1', '1 fix', '## Fixes\n\n- First version (#20)\n');
+/** The prod version of a dev one: v0.4.0-dev.2 becomes v0.4.0. */
+const prodVersion = (v?: string) => (v ?? '').replace(/-dev\.\d+$/, '');
 
 function env(app: string, name: EnvName, o: Partial<EnvView>): EnvView {
 	return {
@@ -59,6 +63,7 @@ const apps: AppView[] = [
 		autoPromote: { state: 'waiting', at: new Date(Date.now() + 12 * 60_000).toISOString(), detail: 'Promotes 9f3c2ab in 12 min if dev stays healthy' },
 		held: [{ commit: 'bad1dea'.padEnd(40, '0'), short: 'bad1dea', reason: 'Its smoke test failed', at: ago(60 * 7) }],
 		mirror: { path: '/home/rupaai/.homelab/mirrors/movie-night.git', lastSync: ago(4) },
+		versionProblem: '',
 		latestBuild: { commit: newer.commit, short: newer.short, status: 'passed', url: 'https://github.com/rupaai/movie-night/actions/runs/1', deployed: true },
 		envs: [
 			env('movie-night', 'dev', { version: newer, deployedBy: 'homelab', deployedAt: ago(38), deployKind: 'deploy', canRollback: true }),
@@ -76,6 +81,7 @@ const apps: AppView[] = [
 		autoPromote: null,
 		held: [],
 		mirror: { path: '/home/rupaai/.homelab/mirrors/recipe-box.git', lastSync: ago(60 * 3), error: "The last copy didn't work: GitHub said no" },
+		versionProblem: '',
 		latestBuild: { commit: 'c0ffee1'.padEnd(40, '0'), short: 'c0ffee1', status: 'passed', url: 'https://github.com/rupaai/recipe-box/actions/runs/2', deployed: false },
 		envs: [
 			env('recipe-box', 'dev', { version: rel('7d2e9aa', 'Scale recipes up and down', 'Rupa', 60 * 5), deployedBy: 'rupaai', deployedAt: ago(60 * 5), deployKind: 'deploy' }),
@@ -93,6 +99,7 @@ const apps: AppView[] = [
 		autoPromote: null,
 		held: [],
 		mirror: null,
+		versionProblem: "Can't make versions on GitHub: the token needs Contents: read and write.",
 		latestBuild: { commit: 'badc0de'.padEnd(40, '0'), short: 'badc0de', status: 'failed', url: 'https://github.com/rupaai/garden-log/actions/runs/3', deployed: false },
 		envs: [
 			env('garden-log', 'dev', { version: rel('55aa11f', 'Track watering', 'Rupa', 60 * 30), health: 'degraded', healthDetail: 'Slow to answer: 4 seconds', lastError: '' }),
@@ -109,14 +116,14 @@ const apps: AppView[] = [
 
 let eventId = 40;
 const events: ActivityEvent[] = [
-	{ id: 39, at: ago(38), actor: 'homelab', app: 'movie-night', env: 'dev', action: 'deploy.done', detail: '9f3c2ab is running and healthy' },
-	{ id: 38, at: ago(40), actor: 'homelab', app: 'movie-night', env: 'dev', action: 'deploy.started', detail: 'New build 9f3c2ab (Show who is watching on the poster) to dev' },
+	{ id: 39, at: ago(38), actor: 'homelab', app: 'movie-night', env: 'dev', action: 'deploy.done', detail: 'v0.4.0-dev.2 is running and healthy' },
+	{ id: 38, at: ago(40), actor: 'homelab', app: 'movie-night', env: 'dev', action: 'deploy.started', detail: 'New build v0.4.0-dev.2 (Show who is watching on the poster) to dev' },
 	{ id: 37, at: ago(95), actor: 'homelab', app: 'garden-log', action: 'build.failed', detail: 'The build of badc0de failed, so it won\'t be deployed: https://github.com/rupaai/garden-log/actions/runs/3' },
 	{ id: 36, at: ago(60 * 4), actor: 'rupaai', app: 'recipe-box', env: 'prod', action: 'promote.done', detail: '7d2e9aa is running and healthy' },
 	{ id: 35, at: ago(60 * 4 + 1), actor: 'rupaai', app: 'recipe-box', env: 'prod', action: 'data.copied', detail: "Copied prod's data to /var/lib/homelab/backups/recipe-box-7d2e9aa" },
 	{ id: 34, at: ago(60 * 4 + 2), actor: 'rupaai', app: 'recipe-box', env: 'prod', action: 'promote.started', detail: 'Promote 7d2e9aa (Scale recipes up and down) from dev to prod' },
-	{ id: 33, at: ago(60 * 26), actor: 'rupaai', app: 'movie-night', env: 'prod', action: 'promote.done', detail: '4be81d7 is running and healthy' },
-	{ id: 32, at: ago(60 * 26 + 3), actor: 'rupaai', app: 'movie-night', env: 'prod', action: 'promote.started', detail: 'Promote 4be81d7 (Add the family watch list) from dev to prod' },
+	{ id: 33, at: ago(60 * 26), actor: 'rupaai', app: 'movie-night', env: 'prod', action: 'promote.done', detail: 'v0.3.0 is running and healthy' },
+	{ id: 32, at: ago(60 * 26 + 3), actor: 'rupaai', app: 'movie-night', env: 'prod', action: 'promote.started', detail: 'Promote v0.3.0 (Add the family watch list) from dev to prod' },
 	{ id: 31, at: ago(60 * 30), actor: 'homelab', app: 'garden-log', env: 'prod', action: 'promote.unhealthy', detail: "3e3e3e3 started but isn't healthy: it didn't answer in time" },
 	{ id: 30, at: ago(60 * 24 * 6), actor: 'rupaai', app: 'movie-night', action: 'app.added', detail: 'Added Movie Night from rupaai/movie-night' }
 ];
@@ -248,7 +255,7 @@ const log = (actor: string, app: string, e: EnvName, action: string, detail: str
 function work(a: AppView, e: EnvName, busy: string, kind: 'deploy' | 'promote' | 'rollback', to: ReleaseView, verb: string) {
 	const ev = envOf(a, e);
 	ev.busy = busy;
-	log('rupaai', a.id, e, `${kind}.started`, `${verb} ${to.short} (${to.message}) to ${e}`);
+	log('rupaai', a.id, e, `${kind}.started`, `${verb} ${to.version || to.short} (${to.message}) to ${e}`);
 	setTimeout(() => {
 		const before = ev.version;
 		ev.version = to;
@@ -261,7 +268,7 @@ function work(a: AppView, e: EnvName, busy: string, kind: 'deploy' | 'promote' |
 		ev.deployKind = kind;
 		ev.canRollback = before?.commit !== to.commit;
 		if (a.latestBuild) a.latestBuild.deployed = envOf(a, 'dev').version?.commit === a.latestBuild.commit;
-		log('rupaai', a.id, e, `${kind}.done`, `${to.short} is running and healthy`);
+		log('rupaai', a.id, e, `${kind}.done`, `${to.version || to.short} is running and healthy`);
 	}, 5000);
 }
 
@@ -337,7 +344,9 @@ export const mockApi: Api = {
 		const a = find(id);
 		const b = a.latestBuild;
 		if (!b || b.status !== 'passed') throw new ApiError("There's no passing build to deploy yet.", 400);
-		work(a, 'dev', `Deploying ${b.short}`, 'deploy', rel(b.short, 'Latest build', 'Rupa', 1), 'Deploy');
+		const dev = envOf(a, 'dev').version?.version;
+		const next = dev ? dev.replace(/\.(\d+)$/, (_, n) => `.${Number(n) + 1}`) : undefined;
+		work(a, 'dev', `Deploying ${next ?? b.short}`, 'deploy', rel(b.short, 'Latest build', 'Rupa', 1, next, '1 fix', '## Fixes\n\n- Latest build (#32)\n'), 'Deploy');
 		await delay(null);
 	},
 	async promotePreview(id) {
@@ -362,13 +371,16 @@ export const mockApi: Api = {
 			dataCopy: !!prod.version,
 			missingSecrets: [],
 			devHealth: dev.health,
-			blockers
+			blockers,
+			nextVersion: dev.version?.version ? prodVersion(dev.version.version) : '',
+			summary: dev.version?.version ? (dev.version.summary ?? '') : '',
+			notes: dev.version?.version ? (dev.version.notes ?? '') : ''
 		});
 	},
 	async promote(id) {
 		const a = find(id);
 		const dev = envOf(a, 'dev');
-		if (dev.version) work(a, 'prod', `Copying prod's data`, 'promote', dev.version, 'Promote');
+		if (dev.version) work(a, 'prod', `Copying prod's data`, 'promote', { ...dev.version, ...(dev.version.version ? { version: prodVersion(dev.version.version) } : {}) }, 'Promote');
 		await delay(null);
 	},
 	async rollbackPreview(id, e) {
@@ -384,7 +396,7 @@ export const mockApi: Api = {
 	},
 	async rollback(id, e) {
 		const a = find(id);
-		work(a, e, 'Deploying ' + older.short, 'rollback', e === 'prod' ? oldest : older, 'Roll back to');
+		work(a, e, 'Deploying ' + (e === 'prod' ? oldest : older).version, 'rollback', e === 'prod' ? oldest : older, 'Roll back to');
 		await delay(null);
 	},
 	logs: async (id, e, lines) => {

@@ -600,3 +600,357 @@ async fn the_command_prints_nothing_when_there_is_nothing_to_release() {
         .contains("Nothing to release since v0.3.0"));
     assert!(shared.lock().unwrap().posted.is_empty());
 }
+
+// ---------------------------------------------------------------------------------------
+// The HTTP routes
+
+mod routes {
+    use super::*;
+    use crate::releases_api::{REPO_HEADER, SCOPE_READ, TOKEN_HEADER};
+    use crate::testutil::{admin, app_scoped, person, request, system, test_env_github};
+    use axum::http::Method;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    /// Sends one signed request and gives the status and the JSON body.
+    async fn call(
+        github: &GitHub,
+        who: &Value,
+        method: Method,
+        target: &str,
+        body: Value,
+        extra: &[(&str, &str)],
+    ) -> (StatusCode, Value) {
+        let env = test_env_github(1024, github.base());
+        let mut headers = vec![("content-type", "application/json")];
+        headers.extend_from_slice(extra);
+        let bytes = if body.is_null() {
+            vec![]
+        } else {
+            serde_json::to_vec(&body).unwrap()
+        };
+        let req = request(who, method.as_str(), target, bytes, &headers);
+        let res = env.router.clone().oneshot(req).await.unwrap();
+        let status = res.status();
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    fn publish_body(channel: &str) -> Value {
+        json!({"repo": "rupaai/demo", "commit": "main", "channel": channel, "token": TOKEN, "always": true})
+    }
+
+    #[tokio::test]
+    async fn publish_makes_a_dev_pre_release_and_answers_with_the_notes() {
+        let (gh, shared) = start(released(
+            "v0.3.0",
+            &["feat: add x (#5)", "feat: add y (#6)", "fix: z (#7)"],
+        ))
+        .await;
+        let (status, out) = call(
+            &gh,
+            &system(),
+            Method::POST,
+            "/internal/releases/publish",
+            publish_body("dev"),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+        assert_eq!(out["version"], "v0.4.0-dev.1");
+        assert_eq!(out["summary"], "2 new, 1 fix");
+        assert_eq!(out["existing"], false);
+        assert_eq!(out["released"], true);
+        assert_eq!(out["previous"], "v0.3.0");
+        assert!(out["notes"].as_str().unwrap().contains("## New"));
+        let posted = shared.lock().unwrap().posted.clone();
+        assert_eq!(posted.len(), 1);
+        assert_eq!(posted[0]["tag_name"], "v0.4.0-dev.1");
+        assert_eq!(posted[0]["prerelease"], true);
+    }
+
+    #[tokio::test]
+    async fn publish_prod_after_dev_is_the_same_commit_and_existing_on_the_second_call() {
+        let (gh, shared) = start(released("v0.3.0", &["feat: add x (#5)"])).await;
+        for existing in [false, true] {
+            let (status, out) = call(
+                &gh,
+                &system(),
+                Method::POST,
+                "/internal/releases/publish",
+                publish_body("prod"),
+                &[],
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{out}");
+            assert_eq!(out["version"], "v0.4.0");
+            assert_eq!(out["existing"], existing);
+        }
+        let posted = shared.lock().unwrap().posted.clone();
+        assert_eq!(posted.len(), 1);
+        assert_eq!(posted[0]["target_commitish"], sha(2));
+        assert_eq!(posted[0]["prerelease"], false);
+    }
+
+    #[tokio::test]
+    async fn publish_dry_run_makes_nothing() {
+        let (gh, shared) = start(released("v0.3.0", &["fix: a (#5)"])).await;
+        let mut body = publish_body("prod");
+        body["dry_run"] = json!(true);
+        let (status, out) = call(
+            &gh,
+            &system(),
+            Method::POST,
+            "/internal/releases/publish",
+            body,
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(out["version"], "v0.3.1");
+        assert!(shared.lock().unwrap().posted.is_empty());
+    }
+
+    #[tokio::test]
+    async fn publish_bootstraps_the_first_release_from_the_manifest() {
+        let mut fake = unreleased();
+        fake.files.insert(
+            "pyproject.toml".into(),
+            "[project]\nversion = \"0.3.0\"\n".into(),
+        );
+        let (gh, _) = start(fake).await;
+        let (status, out) = call(
+            &gh,
+            &system(),
+            Method::POST,
+            "/internal/releases/publish",
+            publish_body("prod"),
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(out["version"], "v0.3.0");
+        assert_eq!(out["previous"], "");
+    }
+
+    #[tokio::test]
+    async fn publish_checks_its_input() {
+        let (gh, _) = start(unreleased()).await;
+        for (field, value) in [
+            ("channel", json!("test")),
+            ("repo", json!("not a repo")),
+            ("token", json!("  ")),
+        ] {
+            let mut body = publish_body("dev");
+            body[field] = value;
+            let (status, _) = call(
+                &gh,
+                &system(),
+                Method::POST,
+                "/internal/releases/publish",
+                body,
+                &[],
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{field}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_token_github_refuses_is_a_403_without_the_token_in_the_answer() {
+        let (gh, shared) = start(released("v0.3.0", &["fix: a (#5)"])).await;
+        let mut body = publish_body("dev");
+        body["token"] = json!("ghp_wrong_token_value");
+        let (status, out) = call(
+            &gh,
+            &system(),
+            Method::POST,
+            "/internal/releases/publish",
+            body,
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(out["error"].as_str().unwrap().contains("401"));
+        assert!(!out.to_string().contains("ghp_wrong_token_value"));
+        assert!(shared.lock().unwrap().posted.is_empty());
+    }
+
+    #[tokio::test]
+    async fn other_github_problems_are_424() {
+        let (gh, _) = start(unreleased()).await;
+        let mut body = publish_body("dev");
+        body["commit"] = json!("nope");
+        let (status, out) = call(
+            &gh,
+            &system(),
+            Method::POST,
+            "/internal/releases/publish",
+            body,
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::FAILED_DEPENDENCY, "{out}");
+        assert!(out["error"].as_str().unwrap().contains("no commit"));
+    }
+
+    fn with_releases() -> Fake {
+        let mut fake = Fake::default();
+        fake.tags.push(("v0.3.0".into(), sha(1)));
+        fake.tags.push(("v0.4.0-dev.1".into(), sha(2)));
+        fake.releases.push(json!({
+            "tag_name": "v0.4.0-dev.1", "prerelease": true, "published_at": "2026-02-01T00:00:00Z",
+            "body": "## New\n\n- add x (#5)\n- add y (#6)\n\n## Fixes\n\n- z (#7)\n",
+        }));
+        fake.releases.push(json!({
+            "tag_name": "v0.3.0", "prerelease": false, "published_at": "2026-01-01T00:00:00Z",
+            "body": "",
+        }));
+        fake
+    }
+
+    #[tokio::test]
+    async fn the_list_has_tag_commit_date_summary_and_notes() {
+        let (gh, _) = start(with_releases()).await;
+        let body = json!({"repo": "rupaai/demo", "token": TOKEN});
+        let (status, out) = call(
+            &gh,
+            &system(),
+            Method::POST,
+            "/internal/releases/list",
+            body,
+            &[],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+        let list = out["releases"].as_array().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0]["tag"], "v0.4.0-dev.1");
+        assert_eq!(list[0]["prerelease"], true);
+        assert_eq!(list[0]["commit"], sha(2));
+        assert_eq!(list[0]["date"], "2026-02-01T00:00:00Z");
+        assert_eq!(list[0]["summary"], "2 new, 1 fix");
+        assert!(list[0]["notes"].as_str().unwrap().contains("add x"));
+        assert_eq!(list[1]["summary"], "");
+        assert!(!out.to_string().contains(TOKEN));
+    }
+
+    #[tokio::test]
+    async fn an_app_lists_its_own_releases_with_its_key() {
+        let (gh, _) = start(with_releases()).await;
+        let who = app_scoped("demo", "prod", &[SCOPE_READ]);
+        let extra = [(REPO_HEADER, "rupaai/demo"), (TOKEN_HEADER, TOKEN)];
+        let (status, out) =
+            call(&gh, &who, Method::GET, "/api/releases", Value::Null, &extra).await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+        assert_eq!(out["releases"].as_array().unwrap().len(), 2);
+        assert!(!out.to_string().contains(TOKEN));
+
+        let (status, out) = call(
+            &gh,
+            &who,
+            Method::GET,
+            "/api/releases?limit=1",
+            Value::Null,
+            &extra,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(out["releases"].as_array().unwrap().len(), 1);
+        let (status, _) = call(
+            &gh,
+            &who,
+            Method::GET,
+            "/api/releases?limit=0",
+            Value::Null,
+            &extra,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn an_app_needs_the_scope_and_the_repo_homelabd_adds() {
+        let (gh, _) = start(with_releases()).await;
+        let extra = [(REPO_HEADER, "rupaai/demo"), (TOKEN_HEADER, TOKEN)];
+        let no_scope = app_scoped("demo", "prod", &["users:read"]);
+        let (status, _) = call(
+            &gh,
+            &no_scope,
+            Method::GET,
+            "/api/releases",
+            Value::Null,
+            &extra,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        let who = app_scoped("demo", "prod", &[SCOPE_READ]);
+        let (status, _) = call(&gh, &who, Method::GET, "/api/releases", Value::Null, &[]).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn people_admin_keys_and_apps_are_kept_out_of_the_wrong_routes() {
+        let (gh, _) = start(with_releases()).await;
+        let extra = [(REPO_HEADER, "rupaai/demo"), (TOKEN_HEADER, TOKEN)];
+        for who in [person(), admin(&[SCOPE_READ])] {
+            let (status, _) =
+                call(&gh, &who, Method::GET, "/api/releases", Value::Null, &extra).await;
+            assert_eq!(status, StatusCode::FORBIDDEN);
+        }
+        let app = app_scoped("demo", "prod", &[SCOPE_READ]);
+        for who in [person(), admin(&[SCOPE_READ]), app] {
+            for path in [
+                "/internal/releases/publish",
+                "/internal/releases/list",
+                "/internal/releases/other",
+            ] {
+                let (status, _) =
+                    call(&gh, &who, Method::POST, path, publish_body("dev"), &[]).await;
+                assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
+            }
+        }
+        // homelabd itself is not an app.
+        let (status, _) = call(
+            &gh,
+            &system(),
+            Method::GET,
+            "/api/releases",
+            Value::Null,
+            &extra,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+}
+
+#[test]
+fn a_summary_can_be_read_back_from_notes() {
+    use crate::releases::{notes, summary, summary_of_notes, Change};
+    let changes: Vec<Change> = [
+        (Kind::Breaking, "gone"),
+        (Kind::New, "a"),
+        (Kind::New, "b"),
+        (Kind::Fix, "c"),
+        (Kind::Fix, "d"),
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, (kind, text))| Change {
+        kind: *kind,
+        text: text.to_string(),
+        pr: Some(i as u64 + 1),
+    })
+    .collect();
+    assert_eq!(summary_of_notes(&notes(&changes)), summary(&changes));
+    assert_eq!(
+        summary_of_notes(&notes(&changes)),
+        "1 breaking, 2 new, 2 fixes"
+    );
+    assert_eq!(summary_of_notes(""), "");
+    assert_eq!(summary_of_notes("Just some words\n- not a change"), "");
+}

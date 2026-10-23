@@ -28,6 +28,8 @@ type AppView struct {
 	AutoPromote  *autoState         `json:"autoPromote"`  // only for apps on auto
 	Held         []HoldView         `json:"held"`         // commits auto-promote leaves alone
 	Mirror       *core.MirrorStatus `json:"mirror"`       // nil when there's no mirror
+	// VersionProblem is why release versions can't be made now, e.g. the token can't write.
+	VersionProblem string `json:"versionProblem"`
 }
 
 // HoldView is a commit auto-promote leaves alone.
@@ -112,6 +114,7 @@ func (h *Hub) App(ctx context.Context, id string) (AppView, error) {
 
 func (h *Hub) appView(ctx context.Context, a state.App, addrs map[string]core.Address) (AppView, error) {
 	v := AppView{ID: a.ID, Name: a.Name, Repo: a.Repo, RepoURL: h.ad.Source.WebURL(a.Repo, "", ""), Promotion: a.Promotion, Held: []HoldView{}}
+	v.VersionProblem = h.versionsProblem(a.ID)
 	var declared []string
 	if m, err := h.parse(a.Manifest, a.Repo); err == nil {
 		v.Icon = m.Icon
