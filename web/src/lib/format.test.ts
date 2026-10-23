@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appAddress, appInitial, bytes, countdown, promotionHelp, deployedLabel, healthLabel, healthSentence, isProblemAction, relativeTime, uptime } from './format';
+import { changesSummary, noteSections, appAddress, appInitial, bytes, countdown, promotionHelp, deployedLabel, healthLabel, healthSentence, isProblemAction, relativeTime, uptime } from './format';
 
 const now = Date.parse('2026-10-14T12:00:00Z');
 const ago = (ms: number) => new Date(now - ms).toISOString();
@@ -101,4 +101,23 @@ describe('appAddress', () => {
 	it('leaves other addresses alone', () => {
 		expect(appAddress('https://movies.example.test', '192.168.1.183')).toBe('https://movies.example.test');
 	});
+});
+
+describe('changesSummary', () => {
+	it('counts each kind', () => expect(changesSummary({ breaking: 1, new: 2, fixes: 3 })).toBe('1 breaking, 2 new, 3 fixes'));
+	it('says 1 fix', () => expect(changesSummary({ breaking: 0, new: 2, fixes: 1 })).toBe('2 new, 1 fix'));
+	it('is empty without changes', () => {
+		expect(changesSummary(undefined)).toBe('');
+		expect(changesSummary({ breaking: 0, new: 0, fixes: 0 })).toBe('');
+	});
+});
+
+describe('noteSections', () => {
+	it('splits notes into headings and lines', () => {
+		expect(noteSections('## New\n\n- add y (#2)\n- add w\n\n## Fixes\n\n- mend x (#3)')).toEqual([
+			{ title: 'New', items: ['add y (#2)', 'add w'] },
+			{ title: 'Fixes', items: ['mend x (#3)'] }
+		]);
+	});
+	it('is empty without notes', () => expect(noteSections(undefined)).toEqual([]));
 });
