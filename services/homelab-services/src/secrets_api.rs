@@ -800,6 +800,7 @@ mod tests {
             files: env.files.clone(),
             secrets: None,
             secrets_problem: "broken".into(),
+            dbs: env.dbs.clone(),
         };
         let router = crate::app::app(state);
         for caller in [person(), admin(&[SCOPE_READ])] {
