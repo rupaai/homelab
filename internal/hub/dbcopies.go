@@ -23,14 +23,18 @@ import (
 //
 // A copy lives with the data copies made before a promote, in
 // <Homelab folder>/backups/<app>/<env>/<time>-<label>/. For postgres it holds the file
-// homelab-db.dump; for sqlite the folder homelab-db with app.db in it.
+// homelab-db.dump; for sqlite the folder homelab-db with app.db in it, whatever the file
+// is called in the app (an app can keep its sqlite file in a data folder of its own, see
+// database: {engine: sqlite, path: ...}).
 
 // What a copy was made for. Copies made before a promote are named after the commit.
 const (
-	copyManual     = "manual"
-	copyPromote    = "promote"
-	copyBeforeRest = "before-restore"
-	copyBeforeProd = "before-copy-from-prod"
+	copyManual       = "manual"
+	copyPromote      = "promote"
+	copyBeforeRest   = "before-restore"
+	copyBeforeProd   = "before-copy-from-prod"
+	copyBeforeImport = "before-import"
+	copyBeforeChange = "before-change" // before a write made from the companion's SQL box
 )
 
 // DBCopyView is one copy of an environment's database.
@@ -38,7 +42,7 @@ type DBCopyView struct {
 	Name      string    `json:"name"`
 	Made      time.Time `json:"made"`
 	SizeBytes int64     `json:"size_bytes"`
-	Kind      string    `json:"kind"` // manual | promote | before-restore | before-copy-from-prod
+	Kind      string    `json:"kind"` // manual | promote | before-restore | before-copy-from-prod | before-import | before-change
 }
 
 // DBEnvView is one environment's database and its copies. Port, User and Database are what
@@ -60,8 +64,9 @@ type DBView struct {
 var copyNameRe = regexp.MustCompile(`^(\d{8}-\d{6})-([a-z0-9][a-z0-9-]*)$`)
 
 // sqlitePath is the sqlite file of an environment, on this computer.
-func (h *Hub) sqlitePath(app, env string) string {
-	return filepath.Join(h.dataDir(app, env), core.DatabaseFolder, core.DatabaseSQLiteFile)
+func (h *Hub) sqlitePath(app, env string, m *manifest.Manifest) string {
+	_, folder, rel, _ := m.SQLiteFile()
+	return filepath.Join(h.dataDir(app, env), folder, filepath.FromSlash(rel))
 }
 
 // register tells homelab-services where the environment's database is.
@@ -71,7 +76,7 @@ func (h *Hub) register(a state.App, env string, m *manifest.Manifest) error {
 	}
 	reg := core.DatabaseRegistration{Engine: m.Database, Port: h.dbPort(a.Slot, env)}
 	if m.Database == core.DatabaseSQLite {
-		reg = core.DatabaseRegistration{Engine: m.Database, Path: h.sqlitePath(a.ID, env)}
+		reg = core.DatabaseRegistration{Engine: m.Database, Path: h.sqlitePath(a.ID, env, m)}
 	}
 	return h.ad.Databases.Register(a.ID, env, reg)
 }
@@ -90,7 +95,7 @@ func copyKind(name string) (kind string, ok bool) {
 		return "", false
 	}
 	switch g[2] {
-	case copyManual, copyBeforeRest, copyBeforeProd:
+	case copyManual, copyBeforeRest, copyBeforeProd, copyBeforeImport, copyBeforeChange:
 		return g[2], true
 	}
 	return copyPromote, true
@@ -202,7 +207,7 @@ func copyFailed(what string, err error) error {
 // the copy's folder. spare is a copy that must not be pruned. sqlite with no file yet has
 // nothing to copy: the folder is "" then.
 func (h *Hub) copyNow(ctx context.Context, a state.App, m *manifest.Manifest, env, label, spare string) (string, error) {
-	file := h.sqlitePath(a.ID, env)
+	file := h.sqlitePath(a.ID, env, m)
 	if m.Database == core.DatabaseSQLite {
 		if _, err := os.Stat(file); err != nil {
 			return "", nil
@@ -233,6 +238,22 @@ func (h *Hub) copyNow(ctx context.Context, a state.App, m *manifest.Manifest, en
 
 // MakeDBCopy copies an environment's database now. The app keeps running.
 func (h *Hub) MakeDBCopy(ctx context.Context, appID, env string, by core.Viewer) (DBCopyView, error) {
+	return h.makeDBCopy(ctx, appID, env, copyManual, "Copied the database in %s to %s", by)
+}
+
+// CopyBeforeChange copies prod's database before the companion writes to it. It returns
+// the copy's name, which is "" when a sqlite database has no file yet, so there is nothing
+// to lose.
+func (h *Hub) CopyBeforeChange(ctx context.Context, appID string, by core.Viewer) (string, error) {
+	c, err := h.makeDBCopy(ctx, appID, core.Prod, copyBeforeChange, "Copied the database in %s to %s before a change", by)
+	var ue *UserError
+	if errors.As(err, &ue) && strings.HasSuffix(ue.Msg, "so there is nothing to copy.") {
+		return "", nil
+	}
+	return c.Name, err
+}
+
+func (h *Hub) makeDBCopy(ctx context.Context, appID, env, label, done string, by core.Viewer) (DBCopyView, error) {
 	a, m, err := h.dbTarget(ctx, appID, env)
 	if err != nil {
 		return DBCopyView{}, err
@@ -242,7 +263,7 @@ func (h *Hub) MakeDBCopy(ctx context.Context, appID, env string, by core.Viewer)
 		return DBCopyView{}, ErrBusy
 	}
 	defer lock.Unlock()
-	dst, err := h.copyNow(ctx, a, m, env, copyManual, "")
+	dst, err := h.copyNow(ctx, a, m, env, label, "")
 	if err == nil && dst == "" {
 		return DBCopyView{}, userErr("The database in %s has no data yet, so there is nothing to copy.", env)
 	}
@@ -250,14 +271,13 @@ func (h *Hub) MakeDBCopy(ctx context.Context, appID, env string, by core.Viewer)
 		h.logEvent(ctx, state.Event{Actor: by.Label(), App: appID, Env: env, Action: "db.failed", Detail: "Couldn't copy the database: " + firstLine(err.Error())})
 		return DBCopyView{}, copyFailed("Couldn't copy the database", err)
 	}
-	h.logEvent(ctx, state.Event{Actor: by.Label(), App: appID, Env: env, Action: "db.copied",
-		Detail: fmt.Sprintf("Copied the database in %s to %s", env, filepath.Base(dst))})
+	h.logEvent(ctx, state.Event{Actor: by.Label(), App: appID, Env: env, Action: "db.copied", Detail: fmt.Sprintf(done, env, filepath.Base(dst))})
 	for _, c := range h.dbCopies(appID, env) {
 		if c.Name == filepath.Base(dst) {
 			return c, nil
 		}
 	}
-	return DBCopyView{Name: filepath.Base(dst), Kind: copyManual}, nil
+	return DBCopyView{Name: filepath.Base(dst), Kind: label}, nil
 }
 
 // RestoreDBCopy puts a copy back as the environment's database. It makes a copy of what
@@ -298,15 +318,25 @@ func (h *Hub) RestoreDBCopy(ctx context.Context, appID, env, name string, by cor
 }
 
 func (h *Hub) restoreDBCopy(ctx context.Context, a state.App, m *manifest.Manifest, env, from string) error {
+	return h.replaceDatabase(ctx, a, m, env, "restore", copyBeforeRest, filepath.Base(from), func() error {
+		return h.putCopy(ctx, a, m, env, from)
+	})
+}
+
+// replaceDatabase changes an environment's database with load while its app is stopped.
+// It copies what is there first (label), and if load fails puts that copy back. The app
+// starts again whatever happens. what ("restore" or "import") is for the messages, and
+// spare is a copy that must not be pruned.
+func (h *Hub) replaceDatabase(ctx context.Context, a state.App, m *manifest.Manifest, env, what, label, spare string, load func() error) error {
 	if err := h.ad.Deployer.CheckFiles(ctx); err != nil && m.Database == core.DatabaseSQLite {
 		return fmt.Errorf("Nothing changed, the database can't be copied: %w", err)
 	}
-	safety, err := h.copyNow(ctx, a, m, env, copyBeforeRest, filepath.Base(from))
+	safety, err := h.copyNow(ctx, a, m, env, label, spare)
 	if err != nil {
 		return fmt.Errorf("Nothing changed, the database couldn't be copied first: %w", err)
 	}
 	if err := h.ad.Deployer.StopApp(ctx, a.ID, env); err != nil {
-		return fmt.Errorf("Couldn't stop the app to restore its database: %w", err)
+		return fmt.Errorf("Couldn't stop the app to %s its database: %w", what, err)
 	}
 	// The app starts again whatever happens, with the database as it is then.
 	defer func() {
@@ -314,22 +344,35 @@ func (h *Hub) restoreDBCopy(ctx context.Context, a state.App, m *manifest.Manife
 			h.log.Error("database: start the app again", "app", a.ID, "env", env, "err", err)
 		}
 	}()
-	if err := h.putCopy(ctx, a, m, env, from); err != nil {
-		if safety != "" {
-			if back := h.putCopy(ctx, a, m, env, safety); back != nil {
-				return fmt.Errorf("The restore failed (%w), and putting the database back from %s failed too (%v)", err, filepath.Base(safety), back)
-			}
-			return fmt.Errorf("The restore failed (%w), so the database was put back as it was", err)
-		}
-		return fmt.Errorf("The restore failed: %w", err)
+	err = load()
+	if err == nil {
+		return nil
 	}
-	return nil
+	switch {
+	case safety != "":
+		if back := h.putCopy(ctx, a, m, env, safety); back != nil {
+			return fmt.Errorf("The %s failed (%w), and putting the database back from %s failed too (%v)", what, err, filepath.Base(safety), back)
+		}
+	case m.Database == core.DatabaseSQLite:
+		// There was no file before, so none is the way it was.
+		if back := h.removeSQLite(ctx, a, m, env); back != nil {
+			return fmt.Errorf("The %s failed (%w), and removing the half-made database failed too (%v)", what, err, back)
+		}
+	default:
+		return fmt.Errorf("The %s failed: %w", what, err)
+	}
+	return fmt.Errorf("The %s failed (%w), so the database was put back as it was", what, err)
 }
 
 // putCopy makes the environment's database what a copy holds. The app must be stopped.
 func (h *Hub) putCopy(ctx context.Context, a state.App, m *manifest.Manifest, env, from string) error {
 	if m.Database == core.DatabasePostgres {
 		return h.ad.Deployer.RestoreDatabase(ctx, a.ID, env, filepath.Join(from, dbDumpFile))
+	}
+	if !m.OwnsDatabaseFolder() {
+		// The file sits in the app's own data folder with its other data, so only the file
+		// is put back.
+		return h.putSQLite(ctx, a, m, env, filepath.Join(from, core.DatabaseFolder, core.DatabaseSQLiteFile))
 	}
 	dir := filepath.Join(h.dataDir(a.ID, env), core.DatabaseFolder)
 	if err := h.ad.Deployer.Remove(ctx, dir); err != nil {
@@ -339,6 +382,40 @@ func (h *Hub) putCopy(ctx context.Context, a state.App, m *manifest.Manifest, en
 		return err
 	}
 	return sharedir.Open(dir)
+}
+
+// removeSQLite removes an environment's sqlite file and its journal files, which belong to
+// the file. Whatever else is in the folder stays.
+func (h *Hub) removeSQLite(ctx context.Context, a state.App, m *manifest.Manifest, env string) error {
+	file := h.sqlitePath(a.ID, env, m)
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := h.ad.Deployer.Remove(ctx, file+suffix); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// putSQLite makes the environment's sqlite file a copy of the file src. The app must be
+// stopped.
+func (h *Hub) putSQLite(ctx context.Context, a state.App, m *manifest.Manifest, env, src string) error {
+	if err := h.removeSQLite(ctx, a, m, env); err != nil {
+		return err
+	}
+	file := h.sqlitePath(a.ID, env, m)
+	// Let containers write what Homelab made: the folder when it is small and ours, the file
+	// alone when the app's data folder may hold a lot.
+	open, dir := file, filepath.Dir(file)
+	if _, err := os.Stat(dir); err != nil || m.OwnsDatabaseFolder() {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		open = dir
+	}
+	if err := h.ad.Deployer.Copy(ctx, src, file); err != nil {
+		return err
+	}
+	return sharedir.Open(open)
 }
 
 // CopyProdToDev replaces dev's database with a copy of prod's. Prod keeps running. Dev gets
@@ -390,7 +467,7 @@ func (h *Hub) copyProdToDev(ctx context.Context, a state.App, m *manifest.Manife
 	if m.Database == core.DatabasePostgres {
 		err = h.ad.Deployer.DumpDatabase(ctx, a.ID, core.Prod, filepath.Join(tmp, dbDumpFile))
 	} else {
-		if _, serr := os.Stat(h.sqlitePath(a.ID, core.Prod)); serr != nil {
+		if _, serr := os.Stat(h.sqlitePath(a.ID, core.Prod, m)); serr != nil {
 			return errors.New("Nothing changed, prod's database has no data yet")
 		}
 		if err = h.register(a, core.Prod, m); err == nil {
@@ -435,14 +512,5 @@ func (h *Hub) putProd(ctx context.Context, a state.App, m *manifest.Manifest, fr
 	}
 	// Only the file is replaced; whatever else the folder holds stays. The old file's
 	// journal files go too, because they belong to the old file.
-	dir := filepath.Join(h.dataDir(a.ID, core.Dev), core.DatabaseFolder)
-	for _, f := range []string{core.DatabaseSQLiteFile, core.DatabaseSQLiteFile + "-wal", core.DatabaseSQLiteFile + "-shm"} {
-		if err := h.ad.Deployer.Remove(ctx, filepath.Join(dir, f)); err != nil {
-			return err
-		}
-	}
-	if err := h.ad.Deployer.Copy(ctx, filepath.Join(from, core.DatabaseFolder, core.DatabaseSQLiteFile), filepath.Join(dir, core.DatabaseSQLiteFile)); err != nil {
-		return err
-	}
-	return sharedir.Open(dir)
+	return h.putSQLite(ctx, a, m, core.Dev, filepath.Join(from, core.DatabaseFolder, core.DatabaseSQLiteFile))
 }

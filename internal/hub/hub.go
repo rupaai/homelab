@@ -516,7 +516,7 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 		}
 		secrets[core.DatabaseURL] = fmt.Sprintf("postgres://%s:%s@%s:5432/%s", core.DatabaseUser, secrets[core.DatabasePassword], core.DatabaseService, core.DatabaseName)
 	case core.DatabaseSQLite:
-		file := core.DatabaseSQLiteDir + "/" + core.DatabaseSQLiteFile
+		file, _, _, _ := m.SQLiteFile()
 		vars[core.DatabaseURL], vars[core.DatabasePath] = "sqlite:///"+file, file
 	}
 	if m.SecretsAs != manifest.SecretsAsFiles {
@@ -538,7 +538,7 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 		vars[identity.EnvPublicKey] = h.cfg.Identity.PublicKey()
 	}
 	data := m.Data
-	if m.Database == core.DatabaseSQLite {
+	if m.OwnsDatabaseFolder() {
 		data = append(slices.Clone(data), manifest.Data{Name: core.DatabaseFolder, Path: core.DatabaseSQLiteDir})
 	}
 	mounts, err := h.mounts(a.ID, env, data, m.Folders)

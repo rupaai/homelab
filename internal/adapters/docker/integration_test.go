@@ -445,6 +445,33 @@ func TestIntegrationPostgres(t *testing.T) {
 	if got := psql(t, dep, app, env, "select coalesce(to_regclass('later')::text, '') || coalesce(to_regclass('extra.t')::text, '')"); got != "" {
 		t.Errorf("what the dump doesn't hold is still there: %q", got)
 	}
+	// A plain SQL script replaces everything, and one that fails keeps nothing of itself.
+	script := filepath.Join(t.TempDir(), "import.sql")
+	if err := os.WriteFile(script, []byte("create table imported (id int);\ninsert into imported values (7), (8), (9);\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := dep.ImportSQL(ctx, app, env, script); err != nil {
+		t.Fatal("import sql:", err)
+	}
+	if got := psql(t, dep, app, env, "select count(*) from imported"); got != "3" {
+		t.Errorf("imported has %s rows, want 3", got)
+	}
+	if got := psql(t, dep, app, env, "select coalesce(to_regclass('notes')::text, '')"); got != "" {
+		t.Errorf("what the script doesn't hold is still there: %q", got)
+	}
+	if err := os.WriteFile(script, []byte("create table half (id int);\ninsert into nope values (1);\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := dep.ImportSQL(ctx, app, env, script); err == nil {
+		t.Error("a script with an error should fail")
+	}
+	if got := psql(t, dep, app, env, "select coalesce(to_regclass('half')::text, '')"); got != "" {
+		t.Errorf("a failed script left a table behind: %q", got)
+	}
+	// Put the dump back for the rest of the test.
+	if err := dep.RestoreDatabase(ctx, app, env, file); err != nil {
+		t.Fatal("restore:", err)
+	}
 	if err := dep.StartApp(ctx, app, env); err != nil {
 		t.Fatal("start app:", err)
 	}

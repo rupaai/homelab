@@ -65,6 +65,10 @@ type Deployer interface {
 	// RestoreDatabase makes the environment's postgres database hold exactly what a dump
 	// made by DumpDatabase holds. Stop the app first.
 	RestoreDatabase(ctx context.Context, app, env, file string) error
+	// ImportSQL empties the environment's postgres database and runs the plain SQL script in
+	// file in it, all in one transaction: on an error nothing of it is kept. Stop the app
+	// first.
+	ImportSQL(ctx context.Context, app, env, file string) error
 	// Observe reports every environment Homelab runs, including stopped ones.
 	Observe(ctx context.Context) ([]Running, error)
 	// Logs returns the last lines of an environment's logs, oldest first.

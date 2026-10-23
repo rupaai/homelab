@@ -264,6 +264,19 @@ Dev and prod never share one. The app reads `DATABASE_URL` with any normal drive
 - With `sqlite`, an app data entry called `homelab-db` or with the path `/homelab/db` is not allowed.
 - Postgres is only reachable from the device itself (`127.0.0.1`), never from the home network. To use it from another computer, see "Connect from your Mac".
 
+### Use a SQLite file you already have
+
+If the app already keeps a SQLite file in one of its own `data:` folders, point at it instead of getting `/homelab/db`:
+
+```yaml
+data: [{name: data, path: /data}]
+database: {engine: sqlite, path: /data/catalogue_full.db}
+```
+
+- `path` is only for `sqlite`. It must be an absolute path inside one of the app's own `data:` mounts (not `folders:`, not a service's).
+- The app gets `DATABASE_URL=sqlite:////data/catalogue_full.db` and `DATABASE_PATH=/data/catalogue_full.db`. Homelab adds no folder and no mount. The app may set `DATABASE_PATH` itself (older Homelab versions need it), but only to this same path.
+- Copies, **Copy prod to dev**, **Restore** and import work on that one file (and its `-wal` and `-shm` files). The rest of the data folder is not touched. A copy is stored as `homelab-db/app.db` whatever the file is called. The data folder is copied before a promote as always.
+
 ### Copies
 
 A copy is a snapshot of one environment's database. They are kept with the other copies of the app's data, and old ones are removed the same way.
@@ -274,6 +287,22 @@ A copy is a snapshot of one environment's database. They are kept with the other
 - **Restore**: puts a copy back. The app stops for a moment. A copy of the current data is made first.
 
 Copying and restoring are for admins, and every one goes in the activity log. They answer at once and finish in the background.
+
+### Import a database
+
+On the database screen, **Import** sends a file from your computer into dev or prod. It replaces what is there. Admins only, and the file goes straight to disk (up to 50 GB), never into memory.
+
+| The file starts with | It is | For |
+|---|---|---|
+| `SQLite format 3` | a SQLite database file | `sqlite` |
+| `PGDMP` | a `pg_dump -Fc` dump | `postgres` |
+| anything else (text) | a plain `.sql` script | `postgres` |
+
+A file that doesn't fit the app's database is refused with a plain message. Otherwise Homelab copies the current database (`before-import`), stops the app, loads the file, and starts the app. A plain `.sql` script runs in one transaction after the old tables are dropped: the first error stops it. If the load fails, the copy is put back and the activity log says why (`db.import_started`, `db.imported`, `db.failed`). Import is only in the companion; API keys can't do it.
+
+### Safe changes to prod
+
+When you run SQL that changes prod from the companion, Homelab first makes a copy of prod's database (`before-change`, the same as **Copy now**) and then runs the SQL. If the copy fails, nothing runs ("Couldn't make a copy first, so nothing was changed."). Changes to dev make no copy, and neither does reading. The copy's name is passed on to the change history, so you can see which copy to restore.
 
 ### Connect from your Mac
 
@@ -309,4 +338,4 @@ A signed-in person can do everything. An admin key needs the `db:read` scope. An
 
 The plugins (TypeScript, Python, Rust) wrap these calls as `db.list`, `db.info`, `db.tables`, `db.rows` and `db.query`; they never write. See [plugins](../plugins/README.md).
 
-The companion's own calls (admins only): `GET /api/apps/{id}/db` (engine, port and copies), `POST /api/apps/{id}/envs/{env}/db/copies` (copy now), `POST /api/apps/{id}/envs/{env}/db/copies/{name}/restore`, `POST /api/apps/{id}/db/copy-prod-to-dev`.
+The companion's own calls (admins only): `GET /api/apps/{id}/db` (engine, port and copies), `POST /api/apps/{id}/envs/{env}/db/copies` (copy now), `POST /api/apps/{id}/envs/{env}/db/copies/{name}/restore`, `POST /api/apps/{id}/db/copy-prod-to-dev`, and `POST /api/apps/{id}/envs/{env}/db/import` (the raw file as the body, `Content-Type: application/octet-stream`, with the companion's `X-Homelab-Request: 1` header; answers 202 `{"ok":true,"kind":"sqlite|pg_dump|sql"}` and loads in the background).

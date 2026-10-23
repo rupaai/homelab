@@ -81,16 +81,28 @@ func (d *Deployer) DumpDatabase(ctx context.Context, app, env, file string) erro
 
 // RestoreDatabase empties the environment's database and loads the dump into it.
 func (d *Deployer) RestoreDatabase(ctx context.Context, app, env, file string) error {
+	return d.load(ctx, app, env, file, "pg_restore", "-U", core.DatabaseUser, "-d", core.DatabaseName, "--clean", "--if-exists", "--no-owner")
+}
+
+// ImportSQL empties the environment's database and runs the plain SQL script in file in it,
+// all or nothing: the first error stops it and nothing it did is kept.
+func (d *Deployer) ImportSQL(ctx context.Context, app, env, file string) error {
+	return d.load(ctx, app, env, file, "psql", "-U", core.DatabaseUser, "-d", core.DatabaseName, "-v", "ON_ERROR_STOP=1", "-1")
+}
+
+// load empties the database, then runs a command in the database container with file as
+// its input.
+func (d *Deployer) load(ctx context.Context, app, env, file string, cmd ...string) error {
 	f, err := os.Open(file)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
-		return errors.New(filepath.Base(file) + " isn't a dump file")
+		return errors.New(filepath.Base(file) + " isn't a file to load")
 	}
 	if err := d.dbExec(ctx, app, env, nil, nil, "psql", "-U", core.DatabaseUser, "-d", core.DatabaseName, "-v", "ON_ERROR_STOP=1", "-c", resetSchemas); err != nil {
 		return err
 	}
-	return d.dbExec(ctx, app, env, f, nil, "pg_restore", "-U", core.DatabaseUser, "-d", core.DatabaseName, "--clean", "--if-exists", "--no-owner")
+	return d.dbExec(ctx, app, env, f, nil, cmd...)
 }

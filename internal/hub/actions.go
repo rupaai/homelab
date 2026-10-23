@@ -437,13 +437,14 @@ func (h *Hub) promote(ctx context.Context, a state.App, rel core.Release, actor 
 	// sqlite file is copied with the app's other data. Both are looked for in the version
 	// prod runs now, because that is the database there is.
 	names, dump := dataNames(m.Data), false
-	if m.Database == core.DatabaseSQLite {
+	// A sqlite file the app keeps in its own data folder is copied with that folder.
+	if m.OwnsDatabaseFolder() {
 		names = append(names, core.DatabaseFolder)
 	}
 	if before.Want != nil {
 		if pm, err := h.parse(before.Want.Manifest, a.Repo); err == nil {
 			dump = pm.Database == core.DatabasePostgres
-			if pm.Database == core.DatabaseSQLite && m.Database != core.DatabaseSQLite {
+			if pm.OwnsDatabaseFolder() && !m.OwnsDatabaseFolder() {
 				names = append(names, core.DatabaseFolder)
 			}
 		}

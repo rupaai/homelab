@@ -148,12 +148,15 @@ type Deployer struct {
 	Calls    []string
 	LogTail  string // added to every Logs answer
 	FilesErr error  // what CheckFiles returns
+	// CopyErr, when set, is asked before each Copy; an error it returns fails the copy.
+	CopyErr func(from, to string) error
 
 	// DB is what each environment's postgres database holds ("app/env"), as text: a dump is
 	// that text in a file, and a restore sets it from a file.
 	DB          map[string]string
 	DumpErr     error   // what DumpDatabase returns, when set
 	RestoreErrs []error // what the next calls of RestoreDatabase return, one each; later calls work
+	ImportErr   error   // what ImportSQL returns, when set; the database is then left half loaded
 }
 
 func NewDeployer() *Deployer {
@@ -257,6 +260,23 @@ func (d *Deployer) RestoreDatabase(_ context.Context, app, env, file string) err
 		if err != nil {
 			return err
 		}
+	}
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	d.DB[app+"/"+env] = string(b)
+	return nil
+}
+
+// ImportSQL sets what the environment's database holds to the script's text.
+func (d *Deployer) ImportSQL(_ context.Context, app, env, file string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.Calls = append(d.Calls, "import-sql "+app+"/"+env)
+	if d.ImportErr != nil {
+		d.DB[app+"/"+env] = "half loaded"
+		return d.ImportErr
 	}
 	b, err := os.ReadFile(file)
 	if err != nil {

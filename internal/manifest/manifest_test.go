@@ -238,3 +238,97 @@ func TestDatabase(t *testing.T) {
 		t.Errorf("no database: %v", err)
 	}
 }
+
+func TestDatabaseMapForms(t *testing.T) {
+	ok := map[string]struct{ doc, engine, path string }{
+		"map postgres":  {"database: {engine: postgres}\n", "postgres", ""},
+		"map sqlite":    {"database: {engine: sqlite}\n", "sqlite", ""},
+		"adopt a file":  {"database: {engine: sqlite, path: /data/catalogue_full.db}\n", "sqlite", "/data/catalogue_full.db"},
+		"adopt deeper":  {"database: {engine: sqlite, path: /data/db/app.sqlite}\n", "sqlite", "/data/db/app.sqlite"},
+		"block form":    {"database:\n  engine: sqlite\n  path: /data/x.db\n", "sqlite", "/data/x.db"},
+		"empty is none": {"database:\n", "", ""},
+	}
+	for name, c := range ok {
+		m, err := Parse([]byte(movies+c.doc), Defaults{})
+		if err != nil || m.Database != c.engine || m.DatabasePath != c.path {
+			t.Errorf("%s: %q %q %v", name, m.Database, m.DatabasePath, err)
+		}
+	}
+	m, _ := Parse([]byte(movies+"database: {engine: sqlite, path: /data/db/app.sqlite}\n"), Defaults{})
+	if in, folder, rel, found := m.SQLiteFile(); !found || in != "/data/db/app.sqlite" || folder != "data" || rel != "db/app.sqlite" || m.OwnsDatabaseFolder() {
+		t.Errorf("adopted: %q %q %q %v", in, folder, rel, found)
+	}
+	m, _ = Parse([]byte(movies+"database: sqlite\n"), Defaults{})
+	if in, folder, rel, found := m.SQLiteFile(); !found || in != "/homelab/db/app.db" || folder != "homelab-db" || rel != "app.db" || !m.OwnsDatabaseFolder() {
+		t.Errorf("own folder: %q %q %q %v", in, folder, rel, found)
+	}
+	// The deepest data mount wins when they nest.
+	nested := strings.Replace(movies, "- {name: data, path: /data}", "- {name: data, path: /data}\n  - {name: big, path: /data/big}", 1)
+	m, err := Parse([]byte(nested+"database: {engine: sqlite, path: /data/big/x.db}\n"), Defaults{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, folder, rel, _ := m.SQLiteFile(); folder != "big" || rel != "x.db" {
+		t.Errorf("nested: %q %q", folder, rel)
+	}
+}
+
+func TestDatabaseMapErrors(t *testing.T) {
+	svcData := "services:\n  - {name: jelly, image: \"j:1\", data: [{name: jd, path: /jd}]}\n"
+	folders := strings.Replace(movies, "data:\n", "folders:\n  - {name: media, path: /media}\ndata:\n", 1)
+	cases := map[string]struct{ doc, want string }{
+		"no engine":          {movies + "database: {path: /data/x.db}\n", "database.engine must be postgres or sqlite"},
+		"unknown engine":     {movies + "database: {engine: mysql}\n", "database must be postgres or sqlite"},
+		"unknown key":        {movies + "database: {engine: sqlite, file: /data/x.db}\n", `"file" isn't known`},
+		"path for postgres":  {movies + "database: {engine: postgres, path: /data/x.db}\n", "only for sqlite"},
+		"relative path":      {movies + "database: {engine: sqlite, path: data/x.db}\n", "absolute"},
+		"dotdot":             {movies + "database: {engine: sqlite, path: /data/../etc/x.db}\n", "no .."},
+		"outside data":       {movies + "database: {engine: sqlite, path: /elsewhere/x.db}\n", "inside one of the app's data folders"},
+		"the mount itself":   {movies + "database: {engine: sqlite, path: /data}\n", "inside one of the app's data folders"},
+		"similar prefix":     {movies + "database: {engine: sqlite, path: /database/x.db}\n", "inside one of the app's data folders"},
+		"in a shared folder": {folders + "database: {engine: sqlite, path: /media/x.db}\n", "inside one of the app's data folders"},
+		"in a service":       {movies + svcData + "database: {engine: sqlite, path: /jd/x.db}\n", "inside one of the app's data folders"},
+		"list":               {movies + "database: [sqlite]\n", "database must be postgres or sqlite"},
+	}
+	for name, c := range cases {
+		_, err := Parse([]byte(c.doc), Defaults{})
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: got %v, want an error with %q", name, err, c.want)
+		}
+	}
+}
+
+func TestDatabasePathSetting(t *testing.T) {
+	adopt := "database: {engine: sqlite, path: /data/catalogue_full.db}\n"
+	with := func(env string) string { return strings.Replace(movies, "env: {", env, 1) + adopt }
+	// The same path is fine, in env and in env_for.
+	same := with("env: {DATABASE_PATH: /data/catalogue_full.db, ")
+	if _, err := Parse([]byte(same), Defaults{}); err != nil {
+		t.Errorf("same path in env: %v", err)
+	}
+	sameFor := strings.Replace(movies, "dev: {LOG_LEVEL: debug}", "dev: {DATABASE_PATH: /data/catalogue_full.db}", 1) + adopt
+	if _, err := Parse([]byte(sameFor), Defaults{}); err != nil {
+		t.Errorf("same path in env_for: %v", err)
+	}
+	// A different path is an error that says which one to use.
+	for name, doc := range map[string]string{
+		"env":     with("env: {DATABASE_PATH: /data/other.db, "),
+		"env_for": strings.Replace(movies, "dev: {LOG_LEVEL: debug}", "dev: {DATABASE_PATH: /data/other.db}", 1) + adopt,
+	} {
+		_, err := Parse([]byte(doc), Defaults{})
+		if err == nil || !strings.Contains(err.Error(), "must be /data/catalogue_full.db") {
+			t.Errorf("different path in %s: %v", name, err)
+		}
+	}
+	// DATABASE_URL and the secrets lists stay refused.
+	if _, err := Parse([]byte(with("env: {DATABASE_URL: x, ")), Defaults{}); err == nil || !strings.Contains(err.Error(), "DATABASE_URL") {
+		t.Errorf("url: %v", err)
+	}
+	if _, err := Parse([]byte(strings.Replace(movies, "[TMDB_API_KEY]", "[TMDB_API_KEY, DATABASE_PATH]", 1)+adopt), Defaults{}); err == nil || !strings.Contains(err.Error(), "remove it from secrets") {
+		t.Errorf("DATABASE_PATH as a secret: %v", err)
+	}
+	// Without a path of its own, the app may not set DATABASE_PATH at all.
+	if _, err := Parse([]byte(strings.Replace(movies, "env: {", "env: {DATABASE_PATH: /homelab/db/app.db, ", 1)+"database: sqlite\n"), Defaults{}); err == nil {
+		t.Error("DATABASE_PATH with the default sqlite folder was accepted")
+	}
+}
