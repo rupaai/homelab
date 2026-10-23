@@ -1036,22 +1036,31 @@ func (h *Hub) newCopyDir(app, env, label string) (dst, root string, err error) {
 	return dst, root, nil
 }
 
-// pruneCopies keeps the newest KeepBackups copies in root. The copy named spare is never
-// removed, because the caller is about to use it.
+// pruneCopies keeps the newest KeepBackups copies in root. Copies made before changes from
+// the SQL box are counted on their own, so many small changes never push out the copies made
+// before promotes or by hand. The copy named spare is never removed, because the caller is
+// about to use it.
 func (h *Hub) pruneCopies(ctx context.Context, root, spare string) {
 	entries, _ := os.ReadDir(root)
-	var dirs []string
+	var changes, others []string
 	for _, e := range entries {
-		if e.IsDir() {
-			dirs = append(dirs, e.Name())
+		if !e.IsDir() {
+			continue
+		}
+		if strings.HasSuffix(e.Name(), "-"+copyBeforeChange) {
+			changes = append(changes, e.Name())
+		} else {
+			others = append(others, e.Name())
 		}
 	}
-	sort.Strings(dirs)
-	for len(dirs) > h.cfg.KeepBackups {
-		if dirs[0] != spare {
-			h.ad.Deployer.Remove(ctx, filepath.Join(root, dirs[0]))
+	for _, dirs := range [][]string{changes, others} {
+		sort.Strings(dirs)
+		for len(dirs) > h.cfg.KeepBackups {
+			if dirs[0] != spare {
+				h.ad.Deployer.Remove(ctx, filepath.Join(root, dirs[0]))
+			}
+			dirs = dirs[1:]
 		}
-		dirs = dirs[1:]
 	}
 }
 

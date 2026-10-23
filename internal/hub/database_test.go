@@ -768,3 +768,41 @@ func TestCopyKind(t *testing.T) {
 		}
 	}
 }
+
+// Many changes from the SQL box keep their own copies; they never push out a copy made by hand.
+func TestCopiesBeforeChangesDontPushOutOtherCopies(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	r.dbApp(postgresDoc)
+	r.promoteDB()
+	r.advance(2 * time.Second)
+	manual, err := r.hub.MakeDBCopy(ctx, "movies", core.Prod, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < r.hub.cfg.KeepBackups+3; i++ {
+		r.advance(2 * time.Second)
+		if _, err := r.hub.CopyBeforeChange(ctx, "movies", owner); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db, err := r.hub.Database(ctx, "movies")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes, kept := 0, false
+	for _, e := range db.Envs {
+		if e.Env != core.Prod {
+			continue
+		}
+		for _, c := range e.Copies {
+			if c.Kind == "before-change" {
+				changes++
+			}
+			kept = kept || c.Name == manual.Name
+		}
+	}
+	if !kept || changes != r.hub.cfg.KeepBackups {
+		t.Fatalf("manual copy kept: %v, copies before changes: %d", kept, changes)
+	}
+}
