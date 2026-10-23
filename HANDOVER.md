@@ -74,7 +74,9 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
   activity. Done.
 - **On the device** (milestone 6): `homelabd setup` installs it; it updates itself from the
   companion (Settings → Resources: Update, or try a test version then Keep) and goes back on
-  its own if a new version doesn't stay up. Done.
+  its own if a new version doesn't stay up. Done. Versions: `build-N` or `vX.Y.Z` (any `v` is
+  newer than any `build`); test versions `pr-N-<commit>` or `vX.Y.Z-pr.N[.<commit>]`
+  (`internal/adapters/selfupdate/version.go`). Releases are still named `build-N`.
 - **API keys and users API**: every app environment gets `HOMELAB_TOKEN` and
   `HOMELAB_API_URL` automatically; admins make keys for outside servers. Done. See
   [docs/platform-services.md](docs/platform-services.md).

@@ -28,10 +28,23 @@ func TestSetupRefusesAnOlderProgram(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "--force") {
 		t.Fatalf("older program accepted: %v", err)
 	}
-	for _, v := range []string{"build-12", "build-13", "dev"} {
+	for _, v := range []string{"build-12", "build-13", "v0.20.0", "dev", "pr-5-abc1234", "v0.20.0-pr.5"} {
 		if err := checkNotOlder(bin, v); err != nil {
 			t.Errorf("%s refused: %v", v, err)
 		}
+	}
+}
+
+func TestSetupRefusesAnOlderProgramThanAVersion(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "bin")
+	install(t, bin, "v0.20.0")
+	for _, v := range []string{"build-25", "v0.9.0"} {
+		if err := checkNotOlder(bin, v); err == nil {
+			t.Errorf("%s accepted over v0.20.0", v)
+		}
+	}
+	if err := checkNotOlder(bin, "v0.20.1"); err != nil {
+		t.Errorf("v0.20.1 refused: %v", err)
 	}
 }
 
