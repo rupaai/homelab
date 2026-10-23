@@ -21,7 +21,8 @@ use serde_json::{json, Value};
 
 use crate::app::{error_response, not_found, AppState};
 use crate::caller::{Caller, Kind};
-use crate::dbs::{Engine, Error, Info, Output, Reg};
+use crate::dbs::{Change, Engine, Error, Info, Output, Reg, MAX_SQL};
+use crate::dbs_sql;
 use crate::disk::valid_name;
 
 /// The scope an admin key needs.
@@ -59,6 +60,10 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/api/db/{app}/{env}/query", post(query).fallback(not_found))
         .route(
+            "/api/db/{app}/{env}/changes",
+            get(changes).fallback(not_found),
+        )
+        .route(
             "/internal/db/{app}/{env}",
             put(sys_register).fallback(not_found),
         )
@@ -80,6 +85,18 @@ fn err(status: StatusCode, message: impl Into<String>) -> ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         error_response(self.0, &self.1)
+    }
+}
+
+impl ApiError {
+    /// The message a database error shows.
+    fn from_ref(e: &Error) -> String {
+        match e {
+            Error::Invalid(m) | Error::Missing(m) | Error::Conflict(m) | Error::Down(m) => {
+                m.clone()
+            }
+            Error::Internal => "Something went wrong.".to_string(),
+        }
     }
 }
 
@@ -250,13 +267,24 @@ struct QueryBody {
     sql: String,
     #[serde(default)]
     write: bool,
+    /// The env's name, typed by the person, for risky statements.
+    #[serde(default)]
+    confirm: String,
 }
 
-/// POST /api/db/{app}/{env}/query
+/// The longest error we keep in a change record.
+const MAX_ERROR: usize = 300;
+
+/// The longest copy name we accept.
+const MAX_COPY: usize = 100;
+
+/// POST /api/db/{app}/{env}/query. In write mode, `?copy=<name>` says which copy homelabd
+/// made just before; it is only written down in the changes.
 async fn query(
     State(s): State<AppState>,
     caller: Caller,
     Path((app, env)): Path<(String, String)>,
+    Query(params): Query<HashMap<String, String>>,
     body: Result<Json<QueryBody>, axum::extract::rejection::JsonRejection>,
 ) -> Reply {
     let reg = find(&s, &caller, &app, &env).await?;
@@ -273,24 +301,135 @@ async fn query(
             ));
         }
     }
+    if body.write {
+        if body.sql.trim().is_empty() {
+            return Err(err(StatusCode::BAD_REQUEST, "Write some SQL first."));
+        }
+        if body.sql.len() > MAX_SQL {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "That SQL is too long (100 KB at most).",
+            ));
+        }
+        if dbs_sql::has_transaction_control(&body.sql) {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "Leave out BEGIN and COMMIT; Homelab runs it all in one go.",
+            ));
+        }
+        if dbs_sql::is_risky(&body.sql) && body.confirm.trim() != reg.env {
+            return Ok((
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": format!("This can't be undone easily. Type {} to run it.", reg.env),
+                    "needs_confirm": true,
+                })),
+            )
+                .into_response());
+        }
+    }
     let started = Instant::now();
     let result = s.dbs.query(&s.secrets, &reg, &body.sql, body.write).await;
     log_use(&caller, &reg, started, body.write, "query");
+    if body.write {
+        let (ok, rows, error) = match &result {
+            Ok(out) => (true, row_count(out), String::new()),
+            Err(e) => (false, 0, ApiError::from_ref(e)),
+        };
+        let copy = params
+            .get("copy")
+            .filter(|c| valid_copy(c))
+            .cloned()
+            .unwrap_or_default();
+        let change = Change {
+            id: 0,
+            app: reg.app.clone(),
+            env: reg.env.clone(),
+            person: caller.person.clone(),
+            at: crate::app::unix_now(),
+            sql: body.sql.clone(),
+            ok,
+            rows: rows as i64,
+            ms: started.elapsed().as_millis() as i64,
+            error: error.chars().take(MAX_ERROR).collect(),
+            copy,
+        };
+        // The write already happened; if we can't write it down, say so in the log only.
+        if s.dbs.record_change(change).await.is_err() {
+            tracing::error!(app = %reg.app, env = %reg.env, "cannot record a database change");
+        }
+    }
     let out: Output = result?;
-    let row_count = if out.columns.is_empty() {
-        out.affected as usize
-    } else {
-        out.rows.len()
-    };
     Ok(Json(json!({
         "columns": out.columns,
         "rows": out.rows,
-        "row_count": row_count,
+        "row_count": row_count(&out),
         "truncated": out.truncated,
         "command": out.command,
         "ms": started.elapsed().as_millis() as u64,
     }))
     .into_response())
+}
+
+fn row_count(out: &Output) -> usize {
+    if out.columns.is_empty() {
+        out.affected as usize
+    } else {
+        out.rows.len()
+    }
+}
+
+/// A copy name is letters, digits, dots, dashes and underscores.
+fn valid_copy(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_COPY
+        && name
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'-' | b'_'))
+}
+
+#[derive(Deserialize)]
+struct ChangesQuery {
+    limit: Option<usize>,
+    before: Option<i64>,
+}
+
+/// GET /api/db/{app}/{env}/changes. People only: the SQL may hold private values.
+async fn changes(
+    State(s): State<AppState>,
+    caller: Caller,
+    Path((app, env)): Path<(String, String)>,
+    Query(q): Query<ChangesQuery>,
+) -> Reply {
+    if caller.kind != Kind::Person {
+        return Err(forbidden(
+            &caller,
+            "Only a signed-in person can see changes.",
+        ));
+    }
+    let reg = find(&s, &caller, &app, &env).await?;
+    let limit = q.limit.unwrap_or(50);
+    if !(1..=200).contains(&limit) {
+        return Err(err(StatusCode::BAD_REQUEST, "limit must be 1 to 200."));
+    }
+    let found = s.dbs.changes(&reg.app, &reg.env, limit, q.before).await?;
+    let changes: Vec<Value> = found
+        .into_iter()
+        .map(|c| {
+            json!({
+                "id": c.id,
+                "person": c.person,
+                "at": c.at,
+                "sql": c.sql,
+                "ok": c.ok,
+                "rows": c.rows,
+                "ms": c.ms,
+                "error": c.error,
+                "copy": if c.copy.is_empty() { Value::Null } else { c.copy.into() },
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "changes": changes })).into_response())
 }
 
 /// One log line per use. Never the SQL or any value.
@@ -1398,5 +1537,504 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         assert!(!String::from_utf8_lossy(&bytes).contains("broken"));
+    }
+
+    // ---- safe writes: confirm, no BEGIN, the changes list ----
+
+    /// A router with a Postgres entry that nothing listens on. Checks that happen before
+    /// the database is reached can be tested with it.
+    async fn nowhere() -> TestEnv {
+        let env = test_env(1024);
+        env.dbs
+            .register(Reg {
+                app: "notes".into(),
+                env: "prod".into(),
+                engine: Engine::Postgres(1),
+            })
+            .await
+            .unwrap();
+        env
+    }
+
+    async fn qp(env: &TestEnv, sql: &str, confirm: &str) -> (StatusCode, Value) {
+        send(
+            env,
+            &person(),
+            "POST",
+            "/api/db/notes/prod/query?copy=c1",
+            json!({ "sql": sql, "write": true, "confirm": confirm }),
+        )
+        .await
+    }
+
+    async fn changes_of(env: &TestEnv, target: &str) -> Vec<Value> {
+        let (status, body) = send(env, &person(), "GET", target, Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body["changes"].as_array().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn risky_statements_need_the_env_name() {
+        let env = nowhere().await;
+        for sql in [
+            "drop table a",
+            "truncate a",
+            "alter table a add c int",
+            "grant select on a to u",
+            "revoke select on a from u",
+            "delete from a",
+            "update a set x = 1",
+            "select 1; /* hi */ -- there\n DROP TABLE a",
+        ] {
+            for confirm in ["", "dev", "PROD", "prod2"] {
+                let (status, body) = qp(&env, sql, confirm).await;
+                assert_eq!(status, StatusCode::CONFLICT, "{sql} / {confirm}: {body}");
+                assert_eq!(
+                    body,
+                    json!({
+                        "error": "This can't be undone easily. Type prod to run it.",
+                        "needs_confirm": true,
+                    })
+                );
+            }
+            // The right word gets past the check (and then finds no database).
+            let (status, _) = qp(&env, sql, "prod").await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{sql}");
+        }
+        // Reads never need it.
+        let (status, _) = send(
+            &env,
+            &person(),
+            "POST",
+            "/api/db/notes/prod/query",
+            json!({ "sql": "drop table a" }),
+        )
+        .await;
+        assert_ne!(status, StatusCode::CONFLICT);
+        // A confirm that was refused is not a write attempt; one that got through is.
+        assert_eq!(
+            changes_of(&env, "/api/db/notes/prod/changes").await.len(),
+            8
+        );
+    }
+
+    #[tokio::test]
+    async fn statements_with_a_where_need_no_confirm() {
+        let env = nowhere().await;
+        for sql in [
+            "delete from a where id = 1",
+            "update a set x = 1 where id = 1",
+            "insert into a values (1)",
+            "select 1",
+            "delete from a where id in (select id from b where x); select 2",
+        ] {
+            let (status, body) = qp(&env, sql, "").await;
+            // Past the check, then no database is there.
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{sql}: {body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn transaction_statements_are_refused() {
+        let env = nowhere().await;
+        for sql in [
+            "begin",
+            "BEGIN; delete from a where id = 1; COMMIT",
+            "insert into a values (1); commit",
+            "rollback",
+            "end",
+            "start transaction",
+            "-- hi\n begin",
+        ] {
+            let (status, body) = qp(&env, sql, "prod").await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{sql}");
+            assert_eq!(
+                body["error"],
+                "Leave out BEGIN and COMMIT; Homelab runs it all in one go."
+            );
+        }
+        // Refused SQL was not tried, so nothing is recorded.
+        assert!(changes_of(&env, "/api/db/notes/prod/changes")
+            .await
+            .is_empty());
+        // Empty SQL isn't an attempt either.
+        let (status, _) = qp(&env, "  ", "").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(changes_of(&env, "/api/db/notes/prod/changes")
+            .await
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn changes_are_for_people_only() {
+        let env = nowhere().await;
+        let target = "/api/db/notes/prod/changes";
+        for who in [
+            admin(&["db:read"]),
+            admin(&[]),
+            app_key("notes", "prod"),
+            system(),
+        ] {
+            let (status, body) = send(&env, &who, "GET", target, Value::Null).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{who}");
+            assert!(body["error"].is_string());
+        }
+        let (status, body) = send(&env, &person(), "GET", target, Value::Null).await;
+        assert_eq!((status, body), (StatusCode::OK, json!({ "changes": [] })));
+        let (status, _) = send(
+            &env,
+            &person(),
+            "GET",
+            "/api/db/nope/prod/changes",
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        for bad in ["limit=0", "limit=201", "limit=x", "before=x"] {
+            let (status, _) = send(
+                &env,
+                &person(),
+                "GET",
+                &format!("{target}?{bad}"),
+                Value::Null,
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+        }
+        // Only the exact route; other methods don't reach it.
+        let (status, _) = send(&env, &person(), "POST", target, json!({})).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    fn change(i: i64, env: &str) -> crate::dbs::Change {
+        crate::dbs::Change {
+            id: 0,
+            app: "notes".into(),
+            env: env.into(),
+            person: "p1".into(),
+            at: i,
+            sql: format!("insert into a values ({i})"),
+            ok: true,
+            rows: 1,
+            ms: 2,
+            error: String::new(),
+            copy: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn changes_keep_the_newest_thousand_per_database() {
+        let env = nowhere().await;
+        for i in 1..=1005 {
+            env.dbs.record_change(change(i, "prod")).await.unwrap();
+        }
+        for i in 1..=3 {
+            env.dbs.record_change(change(i, "dev")).await.unwrap();
+        }
+        let all = env.dbs.changes("notes", "prod", 5000, None).await.unwrap();
+        assert_eq!(all.len(), 1000);
+        // Newest first; the five oldest are gone.
+        assert_eq!(all[0].at, 1005);
+        assert_eq!(all[999].at, 6);
+        assert_eq!(
+            env.dbs
+                .changes("notes", "dev", 50, None)
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+
+        // Paging through the route with limit and before.
+        let target = "/api/db/notes/prod/changes";
+        let first = changes_of(&env, &format!("{target}?limit=200")).await;
+        assert_eq!(first.len(), 200);
+        assert_eq!(first[0]["sql"], "insert into a values (1005)");
+        assert_eq!(first[0]["copy"], Value::Null);
+        let last = first[199]["id"].as_i64().unwrap();
+        let next = changes_of(&env, &format!("{target}?limit=2&before={last}")).await;
+        assert_eq!(next.len(), 2);
+        assert_eq!(next[0]["id"].as_i64().unwrap(), last - 1);
+        assert_eq!(changes_of(&env, target).await.len(), 50);
+
+        // Forgetting the app forgets its changes too.
+        env.dbs.forget_app("notes").await.unwrap();
+        assert!(env
+            .dbs
+            .changes("notes", "dev", 50, None)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_adopted_sqlite_file_can_have_any_name() {
+        let env = test_env(1024);
+        let file = sqlite_file(&env, "catalogue_full.sqlite3");
+        register_sqlite(&env, "shop", "prod", &file).await;
+        let (status, body) = send(&env, &person(), "GET", "/api/db/shop/prod", Value::Null).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            (&body["engine"], &body["status"], &body["tables"]),
+            (&json!("sqlite"), &json!("ok"), &json!(1))
+        );
+        let (_, body) = send(
+            &env,
+            &person(),
+            "GET",
+            "/api/db/shop/prod/tables",
+            Value::Null,
+        )
+        .await;
+        assert_eq!(body["tables"][0]["rows"], 2);
+        let (status, body) = send(
+            &env,
+            &person(),
+            "POST",
+            "/api/db/shop/prod/query",
+            json!({ "sql": "select title from notes order by id" }),
+        )
+        .await;
+        assert_eq!(
+            (status, &body["rows"]),
+            (StatusCode::OK, &json!([["Dune"], [null]]))
+        );
+        // Still read only, and writing is still for Postgres.
+        let (status, body) = send(
+            &env,
+            &person(),
+            "POST",
+            "/api/db/shop/prod/query",
+            json!({ "sql": "delete from notes", "write": true, "confirm": "prod" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "Writing is only for Postgres databases.");
+        assert!(changes_of(&env, "/api/db/shop/prod/changes")
+            .await
+            .is_empty());
+        // The online copy works whatever the file is called.
+        let to = env.dir.path().join("copy.db");
+        let (status, _) = send(
+            &env,
+            &system(),
+            "POST",
+            "/internal/db/shop/prod/snapshot",
+            json!({ "to": to }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let copy = rusqlite::Connection::open(&to).unwrap();
+        let n: i64 = copy
+            .query_row("select count(*) from notes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 2);
+    }
+
+    /// Writes to notes/dev (the pg() database) as a person.
+    async fn w(env: &TestEnv, sql: &str, confirm: &str, copy: &str) -> (StatusCode, Value) {
+        let target = if copy.is_empty() {
+            "/api/db/notes/dev/query".to_string()
+        } else {
+            format!("/api/db/notes/dev/query?copy={copy}")
+        };
+        send(
+            env,
+            &person(),
+            "POST",
+            &target,
+            json!({ "sql": sql, "write": true, "confirm": confirm }),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn postgres_risky_kinds_need_the_right_confirm() {
+        let Some(pg) = pg().await else { return };
+        let e = &pg.env;
+        // The risky statement, and a query that shows whether it ran: (before, after).
+        let kinds = [
+            ("drop table a", "select to_regclass('a')::text", "a", "NULL"),
+            ("truncate a", "select count(*)::text from a", "2", "0"),
+            ("alter table a add column y int", "select count(*)::text from information_schema.columns where table_name = 'a'", "1", "2"),
+            ("grant select on a to public", "select count(*)::text from information_schema.role_table_grants where table_name = 'a' and grantee = 'PUBLIC'", "0", "1"),
+            ("delete from a", "select count(*)::text from a", "2", "0"),
+            ("update a set x = 9", "select sum(x)::text from a", "3", "18"),
+            ("/* c */ DELETE FROM a -- where x = 1", "select count(*)::text from a", "2", "0"),
+        ];
+        for (risky, probe, before, after) in kinds {
+            let (status, body) = w(
+                e,
+                "drop table if exists a; create table a(x int); insert into a values (1), (2)",
+                "dev",
+                "",
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            let shows = |body: &Value| match &body["rows"][0][0] {
+                Value::Null => "NULL".to_string(),
+                v => v.as_str().unwrap().to_string(),
+            };
+            let (_, body) = w(e, probe, "", "").await;
+            let start = shows(&body);
+            // `drop`'s probe is a table name before and NULL after.
+            assert!(start == before || before == "a", "{risky}: {start}");
+            // Wrong words: asked again, nothing ran.
+            for confirm in ["", "prod", "DEV", "d", "dev dev"] {
+                let (status, body) = w(e, risky, confirm, "").await;
+                assert_eq!(status, StatusCode::CONFLICT, "{risky} / {confirm}: {body}");
+                assert_eq!(body["needs_confirm"], true);
+                assert_eq!(
+                    body["error"],
+                    "This can't be undone easily. Type dev to run it."
+                );
+            }
+            let (_, body) = w(e, probe, "", "").await;
+            assert_eq!(shows(&body), start, "{risky} ran without confirm");
+            // The right word runs it.
+            let (status, body) = w(e, risky, "dev", "").await;
+            assert_eq!(status, StatusCode::OK, "{risky}: {body}");
+            let (_, body) = w(e, probe, "", "").await;
+            assert_eq!(shows(&body), after, "{risky}");
+        }
+        // A DELETE or UPDATE with a WHERE runs with no confirm.
+        w(
+            e,
+            "drop table if exists a; create table a(x int); insert into a values (1), (2)",
+            "dev",
+            "",
+        )
+        .await;
+        let (status, _) = w(e, "delete from a where x = 2", "", "").await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = w(e, "update a set x = 3 where x = 1", "", "").await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, body) = w(e, "select x from a", "", "").await;
+        assert_eq!(body["rows"], json!([["3"]]));
+    }
+
+    #[tokio::test]
+    async fn postgres_writes_are_all_or_nothing() {
+        let Some(pg) = pg().await else { return };
+        let e = &pg.env;
+        w(e, "create table a(x int primary key)", "", "").await;
+        let (status, body) = w(
+            e,
+            "insert into a values (1); insert into a values (1)",
+            "",
+            "",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"].as_str().unwrap().contains("duplicate key"));
+        let (_, rows) = w(e, "select count(*) from a", "", "").await;
+        assert_eq!(rows["rows"], json!([["0"]]));
+        // Also when the second statement is a syntax error, or the first is a change of shape.
+        let (status, _) = w(e, "insert into a values (2); selec 1", "", "").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = w(
+            e,
+            "create table z(x int); insert into nope values (1)",
+            "",
+            "",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (_, rows) = w(
+            e,
+            "select (select count(*) from a)::text, to_regclass('z')::text",
+            "",
+            "",
+        )
+        .await;
+        assert_eq!(rows["rows"], json!([["0", null]]));
+        // A COMMIT in the middle can't split it: it is refused before anything runs.
+        let (status, _) = w(
+            e,
+            "insert into a values (3); commit; insert into nope values (1)",
+            "",
+            "",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (_, rows) = w(e, "select count(*) from a", "", "").await;
+        assert_eq!(rows["rows"], json!([["0"]]));
+        // All good: all of it.
+        let (status, _) = w(
+            e,
+            "insert into a values (4); insert into a values (5)",
+            "",
+            "",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, rows) = w(e, "select count(*) from a", "", "").await;
+        assert_eq!(rows["rows"], json!([["2"]]));
+    }
+
+    #[tokio::test]
+    async fn postgres_writes_are_recorded() {
+        let Some(pg) = pg().await else { return };
+        let e = &pg.env;
+        let (status, _) = w(e, "create table a(x int primary key)", "", "").await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = w(
+            e,
+            "insert into a values (1), (2), (3)",
+            "",
+            "20261023-120000-before-change",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = w(
+            e,
+            "insert into a values (1)",
+            "",
+            "20261023-120001-before-change",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        // A copy name with odd characters is not written down.
+        w(e, "select 1", "", "a%20b").await;
+        // Reads and refused SQL leave nothing.
+        q(e, &person(), "select 1", false).await;
+        w(e, "drop table a", "", "").await;
+        w(e, "begin", "dev", "").await;
+
+        let list = changes_of(e, "/api/db/notes/dev/changes").await;
+        assert_eq!(list.len(), 4);
+        // Newest first.
+        assert_eq!(list[0]["sql"], "select 1");
+        assert_eq!(list[0]["copy"], Value::Null);
+        assert_eq!(list[1]["ok"], false);
+        assert_eq!(list[1]["rows"], 0);
+        assert_eq!(list[1]["copy"], "20261023-120001-before-change");
+        assert!(list[1]["error"].as_str().unwrap().contains("duplicate key"));
+        assert_eq!(list[2]["ok"], true);
+        assert_eq!(list[2]["rows"], 3);
+        assert_eq!(list[2]["error"], "");
+        assert_eq!(list[2]["copy"], "20261023-120000-before-change");
+        assert_eq!(list[2]["person"], "p1");
+        assert_eq!(list[2]["sql"], "insert into a values (1), (2), (3)");
+        assert!(list[2]["at"].as_i64().unwrap() > 1_700_000_000);
+        assert!(list[2]["ms"].is_i64());
+        assert!(list[3]["id"].as_i64().unwrap() < list[2]["id"].as_i64().unwrap());
+        assert_eq!(list[3]["copy"], Value::Null);
+        // Only that database's list.
+        assert!(
+            changes_of(e, "/api/db/notes/dev/changes?limit=1")
+                .await
+                .len()
+                == 1
+        );
+        let (status, _) = send(
+            e,
+            &person(),
+            "GET",
+            "/api/db/notes/prod/changes",
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 }

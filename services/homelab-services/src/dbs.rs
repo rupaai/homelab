@@ -147,7 +147,20 @@ impl Dbs {
                port INTEGER NOT NULL DEFAULT 0,
                path TEXT NOT NULL DEFAULT '',
                ro_password TEXT NOT NULL DEFAULT '',
-               PRIMARY KEY(app, env));",
+               PRIMARY KEY(app, env));
+             CREATE TABLE IF NOT EXISTS changes(
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               app TEXT NOT NULL,
+               env TEXT NOT NULL,
+               person TEXT NOT NULL,
+               at INTEGER NOT NULL,
+               sql TEXT NOT NULL,
+               ok INTEGER NOT NULL,
+               rows INTEGER NOT NULL,
+               ms INTEGER NOT NULL,
+               error TEXT NOT NULL DEFAULT '',
+               copy TEXT NOT NULL DEFAULT '');
+             CREATE INDEX IF NOT EXISTS changes_by_db ON changes(app, env, id);",
         )
         .map_err(|e| why(&e))?;
         Ok(Dbs {
@@ -198,8 +211,11 @@ impl Dbs {
     /// Forgets every environment of an app. Returns how many.
     pub async fn forget_app(&self, app: &str) -> Result<usize, Error> {
         let app = app.to_string();
-        self.run(move |c| c.execute("DELETE FROM dbs WHERE app = ?", [app]))
-            .await
+        self.run(move |c| {
+            c.execute("DELETE FROM changes WHERE app = ?", [&app])?;
+            c.execute("DELETE FROM dbs WHERE app = ?", [&app])
+        })
+        .await
     }
 
     pub async fn get(&self, app: &str, env: &str) -> Result<Option<Reg>, Error> {
@@ -248,6 +264,99 @@ impl Dbs {
                 [password, app, env],
             )?;
             Ok(())
+        })
+        .await
+    }
+}
+
+/// The most changes kept for one database.
+pub const KEEP_CHANGES: i64 = 1000;
+
+/// One write attempt, as recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Change {
+    /// Chosen when recorded; ignored on the way in.
+    pub id: i64,
+    pub app: String,
+    pub env: String,
+    pub person: String,
+    /// Unix seconds.
+    pub at: i64,
+    pub sql: String,
+    pub ok: bool,
+    pub rows: i64,
+    pub ms: i64,
+    /// A short reason when it failed, else empty.
+    pub error: String,
+    /// The copy made just before, or empty.
+    pub copy: String,
+}
+
+impl Dbs {
+    /// Records a write attempt and drops the oldest ones beyond the newest
+    /// `KEEP_CHANGES` of that database.
+    pub async fn record_change(&self, change: Change) -> Result<(), Error> {
+        self.run(move |c| {
+            c.execute(
+                "INSERT INTO changes(app, env, person, at, sql, ok, rows, ms, error, copy)
+                 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    change.app,
+                    change.env,
+                    change.person,
+                    change.at,
+                    change.sql,
+                    change.ok,
+                    change.rows,
+                    change.ms,
+                    change.error,
+                    change.copy
+                ],
+            )?;
+            c.execute(
+                "DELETE FROM changes WHERE app = ?1 AND env = ?2 AND id <= (
+                   SELECT id FROM changes WHERE app = ?1 AND env = ?2
+                   ORDER BY id DESC LIMIT 1 OFFSET ?3)",
+                params![change.app, change.env, KEEP_CHANGES],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// The newest changes of a database first, those with an id below `before` if given.
+    pub async fn changes(
+        &self,
+        app: &str,
+        env: &str,
+        limit: usize,
+        before: Option<i64>,
+    ) -> Result<Vec<Change>, Error> {
+        let (app, env) = (app.to_string(), env.to_string());
+        self.run(move |c| {
+            let mut stmt = c.prepare(
+                "SELECT id, app, env, person, at, sql, ok, rows, ms, error, copy FROM changes
+                 WHERE app = ?1 AND env = ?2 AND id < ?3 ORDER BY id DESC LIMIT ?4",
+            )?;
+            let rows = stmt.query_map(
+                params![app, env, before.unwrap_or(i64::MAX), limit as i64],
+                |r| {
+                    Ok(Change {
+                        id: r.get(0)?,
+                        app: r.get(1)?,
+                        env: r.get(2)?,
+                        person: r.get(3)?,
+                        at: r.get(4)?,
+                        sql: r.get(5)?,
+                        ok: r.get(6)?,
+                        rows: r.get(7)?,
+                        ms: r.get(8)?,
+                        error: r.get(9)?,
+                        copy: r.get(10)?,
+                    })
+                },
+            )?;
+            rows.collect()
         })
         .await
     }

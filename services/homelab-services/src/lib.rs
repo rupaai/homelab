@@ -9,6 +9,7 @@ pub mod config;
 pub mod db;
 pub mod dbs;
 pub mod dbs_api;
+pub mod dbs_sql;
 pub mod disk;
 pub mod files;
 pub mod meta;
