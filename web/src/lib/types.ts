@@ -231,7 +231,8 @@ export interface Api {
 	unsubscribePush(endpoint: string): Promise<void>;
 	testPush(): Promise<number>;
 	resources(): Promise<ResourcesView>;
-	device(): Promise<DeviceView>;
+	/** check: ask GitHub for the newest Homelab now (the Refresh button). */
+	device(check?: boolean): Promise<DeviceView>;
 	updateHomelab(): Promise<string>;
 	testVersions(): Promise<TestVersion[]>;
 	tryTestVersion(version: string): Promise<TestVersion>;

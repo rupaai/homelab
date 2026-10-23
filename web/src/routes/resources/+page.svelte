@@ -16,10 +16,10 @@
 	let testsError = $state('');
 	let loadingTests = $state(false);
 
-	async function load() {
+	async function load(check = false) {
 		busy = true;
 		try {
-			const [r, d] = await Promise.all([api.resources(), api.device()]);
+			const [r, d] = await Promise.all([api.resources(), api.device(check)]);
 			view = r; device = d; error = '';
 		}
 		catch (e) { error = messageOf(e); }
@@ -83,7 +83,7 @@
 <div class="page">
 	<div class="page-head">
 		<div><h1>Resources</h1><p class="muted">What this computer and each app use right now, and how the device is doing.</p></div>
-		<button class="btn small" type="button" disabled={busy} onclick={load}>{busy ? 'Checking…' : 'Refresh'}</button>
+		<button class="btn small" type="button" disabled={busy} onclick={() => load(true)}>{busy ? 'Checking…' : 'Refresh'}</button>
 	</div>
 	{#if error}<p class="notice bad" role="alert">{error}</p>{/if}
 	{#if !view && !error}<p class="muted loading"><Spinner /> Checking…</p>{/if}

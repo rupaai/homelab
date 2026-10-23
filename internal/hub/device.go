@@ -18,8 +18,8 @@ type DeviceView struct {
 }
 
 // Device describes the device and whether a newer Homelab is out. A part that can't be read
-// is left out and explained.
-func (h *Hub) Device(ctx context.Context) (DeviceView, error) {
+// is left out and explained. fresh asks GitHub for the newest Homelab now.
+func (h *Hub) Device(ctx context.Context, fresh bool) (DeviceView, error) {
 	var v DeviceView
 	if h.ad.System != nil {
 		if s, err := h.ad.System.Info(ctx); err == nil {
@@ -29,7 +29,7 @@ func (h *Hub) Device(ctx context.Context) (DeviceView, error) {
 		}
 	}
 	if h.ad.Updater != nil {
-		if u, err := h.ad.Updater.Status(ctx); err == nil {
+		if u, err := h.ad.Updater.Status(ctx, fresh); err == nil {
 			v.Update = &u
 		} else {
 			v.Problems = append(v.Problems, "Couldn't check Homelab's version: "+err.Error())

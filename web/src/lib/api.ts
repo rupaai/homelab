@@ -141,8 +141,8 @@ const realApi: Api = {
 		const r = await request<ResourcesView>('GET', '/api/resources');
 		return { ...r, apps: list(r.apps), problems: list(r.problems) };
 	},
-	device: async () => {
-		const d = await request<DeviceView>('GET', '/api/device');
+	device: async (check) => {
+		const d = await request<DeviceView>('GET', check ? '/api/device?check=1' : '/api/device');
 		return { ...d, problems: list(d.problems), system: d.system ? { ...d.system, disks: list(d.system.disks) } : undefined };
 	},
 	updateHomelab: async () => (await request<{ version: string }>('POST', '/api/device/update')).version,

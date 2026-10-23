@@ -1025,7 +1025,8 @@ func (s *server) resources(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) device(w http.ResponseWriter, r *http.Request) {
-	v, err := s.hub.Device(r.Context())
+	// ?check=1 is the companion's Refresh: ask GitHub for the newest Homelab now.
+	v, err := s.hub.Device(r.Context(), r.URL.Query().Get("check") == "1")
 	if err != nil {
 		s.fail(w, r, err)
 		return

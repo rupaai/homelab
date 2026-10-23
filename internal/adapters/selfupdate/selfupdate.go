@@ -26,7 +26,7 @@ const (
 	defaultRepo = "rupaai/homelab"
 	defaultAPI  = "https://api.github.com"
 	// checkEvery is how long an answer about the newest release is trusted.
-	checkEvery = 6 * time.Hour
+	checkEvery = time.Hour
 	// maxProgram is the largest program Homelab downloads.
 	maxProgram = 300 << 20
 	checksums  = "checksums.txt"
@@ -115,8 +115,9 @@ func (r release) asset(name string) (asset, bool) {
 	return asset{}, false
 }
 
-// Status reports the running and newest versions.
-func (u *Updater) Status(ctx context.Context) (core.UpdateStatus, error) {
+// Status reports the running and newest versions. fresh asks GitHub now instead of
+// trusting the last answer.
+func (u *Updater) Status(ctx context.Context, fresh bool) (core.UpdateStatus, error) {
 	s := core.UpdateStatus{Current: u.o.Version, Managed: Managed(u.o.Home)}
 	bin := BinDir(u.o.Home)
 	if r, ok := LastResult(bin); ok {
@@ -133,7 +134,7 @@ func (u *Updater) Status(ctx context.Context) (core.UpdateStatus, error) {
 		s.Testing = &core.TestRun{TestVersion: core.TestVersion{Version: t.Version, PR: t.PR, Title: t.Title}, From: t.From, At: t.At}
 	}
 	u.mu.Lock()
-	stale := u.o.Now().Sub(u.checkedAt) > checkEvery
+	stale := fresh || u.o.Now().Sub(u.checkedAt) > checkEvery
 	u.mu.Unlock()
 	if stale {
 		if _, err := u.check(ctx); err != nil {

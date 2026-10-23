@@ -97,7 +97,7 @@ type Updater struct {
 	TestList []core.TestVersion
 }
 
-func (u *Updater) Status(context.Context) (core.UpdateStatus, error) {
+func (u *Updater) Status(context.Context, bool) (core.UpdateStatus, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	return u.State, nil

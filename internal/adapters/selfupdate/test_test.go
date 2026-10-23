@@ -113,7 +113,7 @@ func TestTryAndGoBackPutsDataBack(t *testing.T) {
 	if r, _ := Running(bin); r != tag {
 		t.Fatalf("running %q", r)
 	}
-	s, _ := u.Status(context.Background())
+	s, _ := u.Status(context.Background(), false)
 	if s.Testing == nil || s.Testing.From != "build-2" || s.Testing.PR != 7 {
 		t.Fatalf("status testing = %+v", s.Testing)
 	}

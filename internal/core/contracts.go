@@ -254,8 +254,8 @@ type System interface {
 // `homelabd setup` updates itself; elsewhere Status says so and Apply refuses.
 type Updater interface {
 	// Status reports the running version and the newest one, checking GitHub when its
-	// last answer is old.
-	Status(ctx context.Context) (UpdateStatus, error)
+	// last answer is old, or now when fresh is set.
+	Status(ctx context.Context, fresh bool) (UpdateStatus, error)
 	// Apply installs the newest version and restarts Homelab on it. If the new version
 	// doesn't stay up, the previous one comes back on its own.
 	Apply(ctx context.Context) (string, error)
