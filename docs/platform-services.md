@@ -72,6 +72,35 @@ Files, databases and data are served by a second program, `homelab-services`, wr
 
 Checks: `make check-services` (format, lint, tests).
 
+## Release versions
+
+`homelab-services release` picks the next version of a repo, writes the release notes and makes the GitHub release. It does not need Homelab, so you can run it in any repo's CI.
+
+```sh
+homelab-services release <prod|dev|test> --repo owner/name --commit <sha> \
+  [--pr N --title "..."] [--first vX.Y.Z] [--always] [--dry-run]
+```
+
+- It needs `GITHUB_TOKEN` (a token that can write releases). `GITHUB_API_URL` is optional (default `https://api.github.com`). The token is never printed.
+- It prints the version on stdout (one line) and the notes on stderr. With `--dry-run` it creates nothing.
+- If nothing needs a release, it prints nothing, says so on stderr and exits 0.
+- `prod` makes `vX.Y.Z`. `dev` makes `vX.Y.Z-dev.N`. `test` makes `vX.Y.Z-pr.N` for pull request N (it needs `--pr` and `--title`). Dev and test are GitHub pre-releases.
+- The version comes from the PR titles since the last `vX.Y.Z` release: `feat:` raises the middle number, `fix:` (or a title with no prefix) the last one. `feat!:`, any `type!:`, or `BREAKING CHANGE` in the body is breaking: it raises the first number, or the middle one while the version is below 1.0. `docs:`, `chore:`, `test:`, `ci:`, `style:`, `refactor:` and `build:` need no release, unless you pass `--always` (then the last number goes up).
+- The first release is `--first`, else the version in `pyproject.toml`, `package.json` or `Cargo.toml` at that commit, else `v0.1.0`.
+- Running it twice for the same commit gives the same release. If the tag is on another commit, it stops with an error. A test version is tied to its pull request number, so a second test release of the same pull request on a newer commit stops with that error.
+
+Example GitHub Actions step (a job on `main` with `contents: write`):
+
+```yaml
+- uses: actions/checkout@v4
+- name: Release
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  run: |
+    VERSION=$(homelab-services release prod --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA")
+    echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+```
+
 ## Files
 
 Apps, keys and admins keep files on the device's disks. Each folder belongs to one app environment (like `movies` `prod`), or to the admins.
