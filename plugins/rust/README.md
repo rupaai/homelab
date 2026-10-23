@@ -1,6 +1,6 @@
 # homelab-sdk (Rust)
 
-A thin async client for [Homelab](../../README.md)'s Files and Secrets services. It builds the
+A thin async client for [Homelab](../../README.md)'s Files, Secrets and Databases services. It builds the
 request, reads the answer and turns errors into one `Error` type. Nothing else.
 
 The crate is named `homelab-sdk`; you use it as `homelab`.
@@ -246,9 +246,57 @@ The last 5 versions, newest first (`version`, `set_at`). 404 if the secret does 
 for v in secrets.versions("google_token:user42").await? { println!("{} {}", v.version, v.set_at); }
 ```
 
+## Databases
+
+Apps connect with `DATABASE_URL` and any normal driver. `homelab.db()` is for looking inside:
+list databases, tables, rows and read-only SQL. It never writes (writing is for people in the
+companion). Wherever a call takes `app` and `env`, `None` means `HOMELAB_APP` and `HOMELAB_ENV`,
+which Homelab sets in every app. An app key sees only its own database.
+
+```rust
+let db = homelab.db();
+```
+
+### list
+
+`app, env, engine, status, size_bytes, connections, tables` for each database.
+
+```rust
+for d in db.list().await? { println!("{} {} {} {}", d.app, d.env, d.engine, d.status); }
+```
+
+### info
+
+```rust
+let me = db.info(None, None).await?; // this app, this env
+```
+
+### tables
+
+```rust
+for t in db.tables(None, None).await? { println!("{}.{} ~{} rows", t.schema, t.name, t.rows); }
+```
+
+### rows
+
+One page of a table: `columns`, `rows` (each a list in column order) and `truncated`.
+`limit` is 1-200 (default 50), `offset` from 0, `schema` defaults to `public`.
+
+```rust
+let page = db.rows(None, None, "orders", RowsOptions::default().limit(20).offset(40)).await?;
+```
+
+### query
+
+Read-only SQL: `columns, rows, row_count, truncated, command, ms`.
+
+```rust
+let r = db.query(None, None, "select count(*) from orders").await?;
+```
+
 ## Types
 
-`Folder`, `File` and `Meta` (with `Gps`), `SecretInfo`, `SecretVersion` and `SecretSaved` mirror the API. Every field has a default, and
+`Folder`, `File` and `Meta` (with `Gps`), `SecretInfo`, `SecretVersion`, `SecretSaved`, `DbInfo`, `DbTable`, `DbRows` and `DbQueryResult` mirror the API. Every field has a default, and
 anything the server adds later lands in the `extra` map of each type, so decoding never
 breaks when the server grows. `File.info` is a `serde_json::Map`; `Meta` fields are
 `Option`s, `None` when the server did not find them.

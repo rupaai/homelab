@@ -288,3 +288,86 @@ impl GetSecretOptions {
         self
     }
 }
+
+/// One database. Unknown fields from the server end up in `extra`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DbInfo {
+    pub app: String,
+    /// `dev` or `prod`.
+    pub env: String,
+    /// `postgres` or `sqlite`.
+    pub engine: String,
+    /// For example `up` or `down`.
+    pub status: String,
+    pub size_bytes: u64,
+    pub connections: u64,
+    pub tables: u64,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// One table. `rows` is an estimate.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DbTable {
+    pub schema: String,
+    pub name: String,
+    pub rows: u64,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// One page of a table. Each row is a list in the order of `columns`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DbRows {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<Value>>,
+    /// True when more rows were left out.
+    pub truncated: bool,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// The answer to `Db::query` (read-only SQL).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DbQueryResult {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<Value>>,
+    pub truncated: bool,
+    pub row_count: u64,
+    /// The SQL command, for example `SELECT`.
+    pub command: String,
+    /// How long the query took, in milliseconds.
+    pub ms: u64,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// Options for `Db::rows`.
+#[derive(Debug, Clone, Default)]
+pub struct RowsOptions {
+    /// The server uses `public` when this is left out.
+    pub schema: Option<String>,
+    /// 1 to 200 (the server uses 50 when left out).
+    pub limit: Option<u32>,
+    /// From 0.
+    pub offset: Option<u64>,
+}
+
+impl RowsOptions {
+    pub fn schema(mut self, schema: impl Into<String>) -> Self {
+        self.schema = Some(schema.into());
+        self
+    }
+    pub fn limit(mut self, limit: u32) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+    pub fn offset(mut self, offset: u64) -> Self {
+        self.offset = Some(offset);
+        self
+    }
+}

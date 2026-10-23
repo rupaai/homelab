@@ -25,7 +25,7 @@ export interface RequestOptions {
   noTimeout?: boolean;
 }
 
-function env(name: string): string | undefined {
+export function env(name: string): string | undefined {
   const p = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
   const v = p?.env?.[name];
   return v ? v : undefined;

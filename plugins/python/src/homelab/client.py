@@ -8,12 +8,13 @@ import urllib.parse
 from typing import Optional
 
 from ._http import Transport, _origin
+from .db import Db
 from .errors import HomelabError
 from .files import Files
 from .secrets import DEFAULT_SECRETS_DIR, PathLike, Secrets
 
 # Layout: every service is one module with one class that takes the Transport
-# (files.py -> Files). `homelab.db` and `homelab.data` will be added the same way.
+# (files.py -> Files). `homelab.data` will be added the same way.
 
 
 class Homelab:
@@ -27,6 +28,7 @@ class Homelab:
     ``secrets.get`` looks for a secret's file first.
     """
 
+    db: Db
     files: Files
     secrets: Secrets
 
@@ -52,6 +54,7 @@ class Homelab:
         self._transport = Transport(self._url, token, timeout)
         self.files = Files(self._transport)
         self.secrets = Secrets(self._transport, secrets_dir)
+        self.db = Db(self._transport)
 
     @property
     def url(self) -> str:

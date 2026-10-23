@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use reqwest::{RequestBuilder, Response};
 
+use crate::db::Db;
 use crate::error::{Error, Result};
 use crate::files::Files;
 use crate::secrets::{Secrets, DEFAULT_SECRETS_DIR};
@@ -133,7 +134,11 @@ impl Homelab {
     pub fn secrets(&self) -> Secrets {
         Secrets::new(self.inner.clone())
     }
-    // Room for `db()` and `data()` later: each will be a small handle like
+    /// The Databases service (read-only).
+    pub fn db(&self) -> Db {
+        Db::new(self.inner.clone())
+    }
+    // Room for `data()` later: each will be a small handle like
     // `Files` that shares `Inner`.
 }
 
