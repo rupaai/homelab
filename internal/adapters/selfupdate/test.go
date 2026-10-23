@@ -18,8 +18,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -28,7 +26,7 @@ import (
 const (
 	testFile  = "test.json"
 	testSaved = "test-saved"
-	// testPrefix starts the version of every test build: pr-<number>-<commit>.
+	// testPrefix starts the version of every test build: pr-<number>-<commit> (or v<x.y.z>-pr.<number>[.<commit>]).
 	testPrefix = "pr-"
 )
 
@@ -45,19 +43,9 @@ type Test struct {
 	At      time.Time `json:"at"`
 }
 
-// TestPR reads the pull request number from a test version such as "pr-12-1a2b3c4".
-func TestPR(v string) (int, bool) {
-	s, ok := strings.CutPrefix(v, testPrefix)
-	if !ok {
-		return 0, false
-	}
-	num, commit, ok := strings.Cut(s, "-")
-	if !ok || commit == "" {
-		return 0, false
-	}
-	n, err := strconv.Atoi(num)
-	return n, err == nil && n > 0
-}
+// TestPR reads the pull request number from a test version such as "pr-12-1a2b3c4" or
+// "v0.20.0-pr.12.1a2b3c4".
+func TestPR(v string) (int, bool) { return testPR(v) }
 
 // ReadTest is the test that runs now, if there is one.
 func ReadTest(binDir string) (Test, bool) {

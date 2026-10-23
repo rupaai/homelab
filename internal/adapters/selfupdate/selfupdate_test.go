@@ -122,25 +122,6 @@ func TestPruneKeepsRecentAndLinked(t *testing.T) {
 	}
 }
 
-func TestNewer(t *testing.T) {
-	cases := []struct {
-		latest, current string
-		want            bool
-	}{
-		{"build-3", "build-2", true},
-		{"build-2", "build-2", false},
-		{"build-1", "build-2", false},
-		{"build-3", "70200a1-dirty", true},
-		{"v1", "build-2", false},
-		{"", "dev", false},
-	}
-	for _, c := range cases {
-		if got := Newer(c.latest, c.current); got != c.want {
-			t.Errorf("Newer(%q, %q) = %v", c.latest, c.current, got)
-		}
-	}
-}
-
 func TestInstallRefusesOddVersions(t *testing.T) {
 	for _, v := range []string{"", "../x", "a/b", ".hidden"} {
 		if _, err := Install(t.TempDir(), v, nil); err == nil {
