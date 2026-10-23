@@ -10,14 +10,11 @@ what is still open. Update "Open work" too. Don't add PR logs, dated changelogs 
 those belong in the PR. Keep the section numbers, other docs point to them.
 
 ## Open work
-- **Databases** (PR #27, being built): `database: postgres` or `sqlite` in `homelab.yaml` gives
-  the app `DATABASE_URL`, one database per environment, copied before promote. Also copy prod to
-  dev, open a database from the Mac with one command, and a read-only SQL box in the companion.
-  Next after it: rewind a database to an earlier time.
+- **Databases, next:** rewind a database to an earlier time (point-in-time restore).
 - **Contributor docs and AI reviewer** (being built): `CONTRIBUTING.md`, `AGENTS.md`,
   `docs/getting-started.md`, `docs/how-it-works.md`, and a Claude review on every PR.
 - **Files, next:** expiring and one-time upload links, resumable uploads, image versions.
-- **Data API:** save and read records with plain web calls. Planned after databases.
+- **Data API:** save and read records with plain web calls. Planned next.
 - **Ideas, not agreed:** logs with search, alerts to phones from apps, scheduled jobs, closing
   ports that aren't needed. Milestones 7 to 11 (home automation, backups, domain, leaving
   GitHub, appliance) are not started. Backups are deferred.
@@ -51,7 +48,7 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
   `sysres`, `webpush`, `secretstore` (old secrets store, only imported now), `fake` (for tests).
 - `internal/manifest/`: reads an app's `homelab.yaml`. `internal/identity/`: signed headers
   that tell an app who is using it. `internal/sharedir/`: lets containers write to their folders.
-- `services/homelab-services/`: the Rust program for platform services (files, secrets, next
+- `services/homelab-services/`: the Rust program for platform services (files, secrets,
   databases). homelabd starts it next to itself.
 - `web/`: the companion (SvelteKit, built to static files and embedded in homelabd).
 - `plugins/`: thin libraries for apps in TypeScript, Python and Rust.
@@ -87,10 +84,14 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
   never read secrets. Views are logged, 5 versions kept, hidden in logs. Apps get them as files
   in `/run/secrets` (and as environment variables unless `secrets_as: files`).
   `generate_secrets` makes them automatically. Apps can save their own through the API. Done.
-- **Plugins**: files and secrets in TypeScript, Python and Rust, e.g.
+- **Plugins**: files, secrets and databases (read only) in TypeScript, Python and Rust, e.g.
   `Homelab().secrets.get("X")`. Not published to package registries yet. See
   [plugins/README.md](plugins/README.md).
-- **Databases**: in progress (Open work).
+- **Databases**: `database: postgres` or `sqlite` in `homelab.yaml` gives each environment its
+  own database and `DATABASE_URL` (or point at a SQLite file the app already has). Copied before
+  every promote and before SQL changes to prod. Copy now, Copy prod to dev, Restore, Import.
+  Connect from the Mac over ssh. Databases screen with tables, rows and a read-only SQL box
+  (changes only for Postgres, when switched on). Done. OpenAPI: `docs/db.openapi.yaml`.
 
 ## 4. Ports and files on the device
 - `7080` companion and API. `7081` Pocket ID (container on `7082`). `7085` app door (apps reach
