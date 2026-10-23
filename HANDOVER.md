@@ -10,7 +10,9 @@ what is still open. Update "Open work" too. Don't add PR logs, dated changelogs 
 those belong in the PR. Keep the section numbers, other docs point to them.
 
 ## Open work
-- **Databases, next:** rewind a database to an earlier time (point-in-time restore).
+- **Databases, next (proposed):** a PIN before any change, and Edit / Delete / Add row buttons
+  instead of typing SQL, with the SQL box read only. Rewind (point-in-time restore) is a later
+  idea, since copies are already made often.
 - **Contributor docs and AI reviewer** (being built): `CONTRIBUTING.md`, `AGENTS.md`,
   `docs/getting-started.md`, `docs/how-it-works.md`, and a Claude review on every PR.
 - **Files, next:** expiring and one-time upload links, resumable uploads, image versions.
