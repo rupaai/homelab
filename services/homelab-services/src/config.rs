@@ -9,6 +9,7 @@ use ed25519_dalek::VerifyingKey;
 use serde::Deserialize;
 
 use crate::disk::valid_name;
+use crate::logs::Settings;
 
 /// Everything the server needs to start.
 #[derive(Debug)]
@@ -27,6 +28,8 @@ pub struct Config {
     pub secrets_key: Option<PathBuf>,
     /// The old secrets database made by homelabd, imported once on first start.
     pub secrets_import: Option<PathBuf>,
+    /// The logs service settings.
+    pub logs: Settings,
 }
 
 /// One storage disk.
@@ -56,11 +59,13 @@ impl Config {
             std::env::var("HOMELAB_SERVICES_SECRETS_IMPORT")
                 .ok()
                 .as_deref(),
+            std::env::var("HOMELAB_SERVICES_LOGS").ok().as_deref(),
         )
     }
 
     /// Checks the raw values and builds a Config.
     /// This does not touch the disk; see `prepare_data_dir` and `prepare_storage`.
+    #[allow(clippy::too_many_arguments)]
     pub fn parse(
         listen: &str,
         data_dir: &str,
@@ -69,6 +74,7 @@ impl Config {
         max_upload: Option<&str>,
         secrets_key: Option<&str>,
         secrets_import: Option<&str>,
+        logs: Option<&str>,
     ) -> Result<Config, String> {
         let listen: SocketAddr = listen.trim().parse().map_err(|_| {
             "HOMELAB_SERVICES_LISTEN must look like 127.0.0.1:8080 (an IP and a port)".to_string()
@@ -88,6 +94,7 @@ impl Config {
         let max_upload = parse_max_upload(max_upload)?;
         let secrets_key = parse_path("HOMELAB_SERVICES_SECRETS_KEY", secrets_key)?;
         let secrets_import = parse_path("HOMELAB_SERVICES_SECRETS_IMPORT", secrets_import)?;
+        let logs = Settings::parse(logs)?;
         Ok(Config {
             listen,
             data_dir: PathBuf::from(data_dir),
@@ -96,6 +103,7 @@ impl Config {
             max_upload,
             secrets_key,
             secrets_import,
+            logs,
         })
     }
 }
@@ -227,7 +235,7 @@ mod tests {
     const DISKS: &str = r#"[{"name":"main","path":"/mnt/storage"}]"#;
 
     fn ok(listen: &str, key: &str) -> Result<Config, String> {
-        Config::parse(listen, "/tmp/x", key, DISKS, None, None, None)
+        Config::parse(listen, "/tmp/x", key, DISKS, None, None, None, None)
     }
 
     fn storage(text: &str) -> Result<Vec<Disk>, String> {
@@ -323,6 +331,7 @@ mod tests {
                 None,
                 key,
                 import,
+                None,
             )
         };
         let c = parse(None, None).unwrap();
@@ -334,6 +343,32 @@ mod tests {
         assert!(err.contains("HOMELAB_SERVICES_SECRETS_KEY"), "{err}");
         let err = parse(None, Some("relative/secrets.db")).unwrap_err();
         assert!(err.contains("HOMELAB_SERVICES_SECRETS_IMPORT"), "{err}");
+    }
+
+    #[test]
+    fn log_settings_are_optional_and_checked() {
+        let parse = |logs: Option<&str>| {
+            Config::parse(
+                "127.0.0.1:8080",
+                "/tmp/x",
+                &test_key_text(),
+                DISKS,
+                None,
+                None,
+                None,
+                logs,
+            )
+        };
+        assert_eq!(parse(None).unwrap().logs, Settings::default());
+        let c = parse(Some(
+            r#"{"min_level":"warn","services":{"files":"debug"},"max_mb":10}"#,
+        ))
+        .unwrap();
+        assert_eq!(c.logs.max_mb, 10);
+        for bad in ["{", r#"{"min_level":"loud"}"#, r#"{"max_mb":0}"#] {
+            let err = parse(Some(bad)).unwrap_err();
+            assert!(err.contains("HOMELAB_SERVICES_LOGS"), "{bad}: {err}");
+        }
     }
 
     #[test]

@@ -5,7 +5,8 @@ export const KEY_SCOPES: { scope: string; words: string }[] = [
 	{ scope: 'users:read', words: 'Read people' },
 	{ scope: 'files:read', words: 'Read files' },
 	{ scope: 'files:write', words: 'Save and delete files' },
-	{ scope: 'db:read', words: 'Look inside databases (read only)' }
+	{ scope: 'db:read', words: 'Look inside databases (read only)' },
+	{ scope: 'logs:read', words: 'Read logs' }
 ];
 
 /** Scopes in plain words. Unknown ones stay as they are. */

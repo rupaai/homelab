@@ -17,7 +17,7 @@ import (
 //
 // /api/secrets and /api/releases are for an app's own key only. Homelab refuses everyone else
 // before forwarding, and homelab-services refuses them again.
-var servicePaths = []string{"/api/files", "/api/db", "/api/data", "/api/secrets", "/api/releases"}
+var servicePaths = []string{"/api/files", "/api/db", "/api/data", "/api/secrets", "/api/releases", "/api/logs"}
 
 // secretsPath is the part of the API that apps use for their secrets.
 const secretsPath = "/api/secrets"

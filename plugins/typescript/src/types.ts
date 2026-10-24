@@ -215,3 +215,53 @@ export interface ReleasesOptions {
   /** How many releases at most (1 or more). Default: all that Homelab gives (up to 100). */
   limit?: number;
 }
+
+/** How loud a log line is, from quiet to loud. `unknown` lines have no level Homelab could read. */
+export type LogLevel = "unknown" | "debug" | "info" | "warn" | "error" | "fatal";
+
+/** One log line. */
+export interface LogLine {
+  id: number;
+  /** An RFC 3339 time. */
+  time: string;
+  level: LogLevel;
+  msg: string;
+  app: string;
+  env: string;
+  service: string;
+  /** "stdout", "stderr" or "event". */
+  stream: string;
+  /** Extra fields of a JSON log line. */
+  extra: Record<string, unknown>;
+}
+
+/** The answer to `logs.search`: newest lines first. */
+export interface LogSearchResult {
+  lines: LogLine[];
+  /** How many lines each level has under the same search, ignoring `level` and `minLevel`. */
+  counts: Record<LogLevel, number>;
+  /** Pass as `before` to get the next older page, or `null` when there is none. */
+  next: string | null;
+}
+
+export interface LogSearchOptions {
+  /** Words to look for in the message and extra fields. */
+  q?: string;
+  /** One level, or several, exactly. */
+  level?: LogLevel | LogLevel[];
+  /** This level and louder. Lines with an unknown level are always kept. */
+  minLevel?: LogLevel;
+  /** Only an admin key may set these three. An app key sees its own app and env only. */
+  app?: string;
+  env?: string;
+  service?: string;
+  /** A Date, an RFC 3339 text or unix milliseconds. */
+  since?: Date | string | number;
+  until?: Date | string | number;
+  /** A line id: only older lines. Use `next` from the last answer. */
+  before?: number | string;
+  /** A line id: only newer lines (to follow along). */
+  after?: number | string;
+  /** 1 to 500. Default 100. */
+  limit?: number;
+}

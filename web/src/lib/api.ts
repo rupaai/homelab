@@ -1,7 +1,8 @@
 import { ApiError, NETWORK_MESSAGE, errorMessage, wantsConfirm } from './errors';
 import { SIGN_IN_MESSAGE, sessionLost } from './session';
+import { fixLogPage, logsParams } from './logs';
 import { clearToken, getToken, setToken } from './token';
-import type { Api, AppDatabase, AppView, DbChange, DbInfo, DbResult, DbRows, DbTable, FileFolder, FilePage, FileQuery, StorageDisk, StoredFile, UploadResult, FileMeta, BootstrapView, CreatedKey, KeysView, DeviceView, EnvSecrets, Invitation, KeyView, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult, TestVersion, AppSecretsView, SecretVersion } from './types';
+import type { Api, AppDatabase, AppView, DbChange, DbInfo, DbResult, DbRows, DbTable, FileFolder, FilePage, FileQuery, StorageDisk, StoredFile, UploadResult, FileMeta, BootstrapView, CreatedKey, KeysView, DeviceView, EnvSecrets, Invitation, KeyView, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult, TestVersion, AppSecretsView, SecretVersion, LogPage } from './types';
 
 /** Mock mode: `?mock` in the URL or VITE_MOCK=1 gives fake data, no server needed. Dev builds only, so the mock data is dropped from the real companion. */
 export const useMock: boolean =
@@ -210,6 +211,7 @@ const realApi: Api = {
 	},
 	fileBlob: (folder, id) => download(`/api/files/${enc(folder)}/${enc(id)}`),
 	deleteFile: (folder, id) => request('DELETE', `/api/files/${enc(folder)}/${enc(id)}`),
+	searchLogs: async (q) => fixLogPage(await request<LogPage>('GET', `/api/logs?${logsParams(q)}`)),
 	databases: async () => list((await request<{ databases: DbInfo[] | null }>('GET', '/api/db')).databases),
 	database: (app, env) => request<DbInfo>('GET', `/api/db/${enc(app)}/${enc(env)}`),
 	dbTables: async (app, env) => list((await request<{ tables: DbTable[] | null }>('GET', `/api/db/${enc(app)}/${enc(env)}/tables`)).tables),

@@ -253,6 +253,19 @@ async fn table_rows(
         .await;
     log_use(&caller, &reg, started, false, "browse");
     let out = result?;
+    s.logs.event(
+        "databases",
+        crate::logs::Level::Debug,
+        &format!("table rows read in {}/{}", reg.app, reg.env),
+        json!({
+            "table": table,
+            "rows": out.rows.len(),
+            "ms": started.elapsed().as_millis() as u64,
+            "by": crate::logs::who(&caller),
+        }),
+        &reg.app,
+        &reg.env,
+    );
     Ok(Json(json!({
         "columns": out.columns,
         "rows": out.rows,
@@ -360,6 +373,19 @@ async fn query(
         }
     }
     let out: Output = result?;
+    s.logs.event(
+        "databases",
+        crate::logs::Level::Info,
+        &format!("query run on {}/{}", reg.app, reg.env),
+        json!({
+            "ms": started.elapsed().as_millis() as u64,
+            "rows": row_count(&out),
+            "write": body.write,
+            "by": crate::logs::who(&caller),
+        }),
+        &reg.app,
+        &reg.env,
+    );
     Ok(Json(json!({
         "columns": out.columns,
         "rows": out.rows,
@@ -1524,6 +1550,7 @@ mod tests {
             secrets: None,
             secrets_problem: "broken".into(),
             dbs,
+            logs: pg.env.logs.clone(),
             github_api: String::new(),
         });
         let req = request(

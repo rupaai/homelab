@@ -21,7 +21,8 @@ There are three levels. Read as far as you need.
 - **Plugins**: small libraries so app code can use Homelab in one line.
 - **Self-update**: Homelab on the device updates itself from GitHub releases.
 - **Alerts and resources**: push notifications and a screen for CPU, memory and disks.
-- **Services program (`homelab-services`)**: a second program, in Rust, that does the files, databases and secrets work.
+- **Services program (`homelab-services`)**: a second program, in Rust, that does the files, databases, secrets and logs work.
+- **Logs**: the output of each app's containers and Homelab's own events, kept 14 days and searchable.
 
 ## Level 2, the parts and how they connect
 
@@ -47,6 +48,8 @@ There are three levels. Read as far as you need.
 
 **Alerts and resources.** Homelab sends web push notifications (app down, app back, rolled back, disk nearly full). The Resources screen shows the device (CPU, memory, disks, updates) and each app environment.
 
+**Logs.** `homelabd` follows the output of each app's containers (read only) and sends the lines to `homelab-services`. Homelab's own events (files, databases, secrets, deploys) go there too. The Rust program keeps them in one file for 14 days, and searches them. People and apps search with `GET /api/logs`. See [platform-services.md](platform-services.md#logs).
+
 **Services program.** `homelabd` starts `homelab-services` next to itself and restarts it if it stops. It listens only on `127.0.0.1`. Nothing calls it directly. `homelabd` checks who is calling, signs the call, and passes it on.
 
 **API keys and the app door.** Apps call Homelab on a separate address (`HOMELAB_API_URL`), using an app key. Admin keys are for servers outside Homelab. See [platform-services.md](platform-services.md).
@@ -69,6 +72,7 @@ The commands are in the [Makefile](../Makefile). `make test` runs the Go and Rus
 | Plugins | `plugins/typescript`, `plugins/python`, `plugins/rust` | each folder's `src/` and README | TypeScript: `cd plugins/typescript && npm ci && npm run check && npm test`. Python: `pip install -e "plugins/python[dev]"`, then `pytest plugins/python`. Rust: `cd plugins/rust && cargo test --locked` |
 | Self-update and releases | `internal/adapters/selfupdate`, `cmd/homelabd/setup.go`, `scripts/`, `.github/workflows/` | `selfupdate/selfupdate.go`, `selfupdate/test.go` (PR test versions), `scripts/build-release.sh`, `release.yml`, `test-build.yml` | `go test ./internal/adapters/selfupdate/... ./cmd/...` |
 | Alerts and resources | `internal/adapters/webpush`, `internal/adapters/sysres`, `internal/adapters/sysinfo`, `internal/hub`, `web/src/service-worker.ts` | `webpush/webpush.go`, `sysres/sysres.go`, `sysinfo/sysinfo.go`, `internal/hub/alerts.go`, `internal/hub/device.go` | `go test ./internal/hub/... ./internal/adapters/sysres/... ./internal/adapters/sysinfo/...` |
+| Logs | `internal/adapters/docker` (follower), `internal/hub`, `services/homelab-services/src/logs` | `internal/adapters/docker/logs.go` (follows the containers), `internal/hub/logs.go` (hides secrets, sends events), `services/homelab-services/src/logs/mod.rs` (store and search), `logs/api.rs` (routes), `logs/parse.rs` (reads one line), `web/src/routes/logs/+page.svelte` (the screen) | `make check-services`, `go test ./internal/adapters/docker/... ./internal/hub/...`, and `cd web && npm test` |
 | Services program | `services/` (the crate is `services/homelab-services`) | `src/main.rs`, `src/app.rs`, `src/caller.rs` (checks signed calls), `src/config.rs`; `internal/adapters/services/services.go` starts it | `make check-services`, and the `services` job in `ci.yml` for the end-to-end test |
 
 The old milestone docs are history. Trust the code when they differ.

@@ -26,8 +26,8 @@ logs or dated changelogs. Keep the section numbers, other docs point to them.
 <!-- open:data-api -->
 - **Data API:** save and read records with plain web calls. Planned next.
 <!-- /open:data-api -->
-- **Ideas, not agreed:** logs with search, alerts to phones from apps, scheduled jobs, closing
 <!-- new-open-work -->
+- **Ideas, not agreed:** alerts to phones from apps, scheduled jobs, closing
   ports that aren't needed. Milestones 7 to 11 (home automation, backups, domain, leaving
   GitHub, appliance) are not started. Backups are deferred.
 - Workflow: one branch and one PR per piece of work. Labiba merges. A merge to `main` becomes
@@ -62,7 +62,7 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
 - `internal/manifest/`: reads an app's `homelab.yaml`. `internal/identity/`: signed headers
   that tell an app who is using it. `internal/sharedir/`: lets containers write to their folders.
 - `services/homelab-services/`: the Rust program for platform services (files, secrets,
-  databases). homelabd starts it next to itself.
+  databases, logs). homelabd starts it next to itself.
 - `web/`: the companion (SvelteKit, built to static files and embedded in homelabd).
 - `plugins/`: thin libraries for apps in TypeScript, Python and Rust.
 - `docs/`: guides for app developers. `docs/history/`: one doc per milestone.
@@ -119,7 +119,7 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
   `generate_secrets` makes them automatically. Apps can save their own through the API. Done.
 <!-- /feature:secrets -->
 <!-- feature:plugins -->
-- **Plugins**: files, secrets, databases (read only) and releases in TypeScript, Python and Rust, e.g.
+- **Plugins**: files, secrets, databases (read only), releases and logs (search) in TypeScript, Python and Rust, e.g.
   `Homelab().secrets.get("X")`. Not published to package registries yet. See
   [plugins/README.md](plugins/README.md).
 <!-- /feature:plugins -->
@@ -130,6 +130,9 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
   Connect from the Mac over ssh. Databases screen with tables, rows and a read-only SQL box
   (changes only for Postgres, when switched on). Done. OpenAPI: `docs/db.openapi.yaml`.
 <!-- /feature:databases -->
+<!-- feature:logs -->
+- **Logs**: the output of app containers and Homelab's own events, kept 14 days and searchable (Logs screen, `GET /api/logs`, plugins). Built, PR open. OpenAPI: `docs/logs.openapi.yaml`.
+<!-- /feature:logs -->
 <!-- feature:release-versions -->
 - **Release versions**: `homelab-services release <prod|dev|test>` picks the next `vX.Y.Z` (or `-dev.N` / `-pr.N`) from PR titles and makes the GitHub release; works in any repo's CI. Every app gets versions with no repo change (dev `v0.4.0-dev.1`, prod `v0.4.0`), shown in the companion and set as `HOMELAB_VERSION`; GitHub refusing never blocks a deploy. Apps list theirs with `releases:read`. See [docs/platform-services.md](docs/platform-services.md).
 <!-- /feature:release-versions -->

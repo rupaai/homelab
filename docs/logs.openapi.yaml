@@ -1,0 +1,196 @@
+openapi: 3.1.0
+info:
+  title: Homelab Logs API
+  version: "1.0"
+  summary: Search the log lines of apps and Homelab's own events.
+  description: |
+    Search the logs. One call: `GET /api/logs`. Lines are newest first.
+
+    **Who can call it.**
+    - An app key with `logs:read`, at the app door (`HOMELAB_API_URL`). Every app key has
+      `logs:read`. It sees only its own app and environment, and Homelab's events about it.
+      Another app or environment gives 404.
+    - An admin key with `logs:read`, at the companion's address. It sees every line. An admin
+      key with no `logs:read` gets 403. The companion's key form does not offer this scope yet.
+
+    **Searching `q`.** Only the first 200 characters and the first 10 words are used. Every
+    word must match, and a word matches whole words only (`err` does not find `error`). The
+    search covers the message and the extra fields.
+
+    **Counts.** `counts` is for the same search without `level`, `min_level`, `before` and
+    `after`. Every level is there, even at 0.
+
+    **Paging.** `next` is the `before` value for the next older page, or null when there is
+    none. To follow new lines, pass `after` with the newest `id` you have. Then the oldest new
+    lines come first, up to `limit`, and `next` is null. If you get `limit` lines back, ask
+    again, so that a backlog is not skipped.
+
+    **Times** are RFC 3339 text in UTC (`2026-10-23T22:00:00.123Z`). `since` and `until` take
+    that or unix milliseconds.
+
+    **Errors.** A failed call answers with a status and `{"error": "A sentence."}`.
+servers:
+  - url: "{HOMELAB_API_URL}"
+    description: The app door, for an app key. An admin key uses the companion's address, for example `http://192.168.1.183:7080`.
+    variables:
+      HOMELAB_API_URL:
+        default: "http://host.docker.internal:7085"
+security:
+  - apiKey: []
+tags:
+  - name: Logs
+paths:
+  /api/logs:
+    get:
+      tags: [Logs]
+      operationId: searchLogs
+      summary: Search the logs
+      description: Needs `logs:read`. Newest lines first, unless you follow new lines with `after`.
+      parameters:
+        - name: q
+          in: query
+          required: false
+          description: Words to find in the message and the extra fields. Every word must match.
+          schema: { type: string }
+        - name: app
+          in: query
+          required: false
+          description: Only this app. `homelab` gives Homelab's own lines. An app key may only name its own app.
+          schema: { type: string }
+        - name: env
+          in: query
+          required: false
+          description: Only this environment. An app key may only name its own environment.
+          schema: { type: string, enum: [dev, prod] }
+        - name: service
+          in: query
+          required: false
+          description: Only this service, for example `app`, `files` or `deploys`.
+          schema: { type: string }
+        - name: level
+          in: query
+          required: false
+          description: Exactly these levels, as a comma list, for example `error,fatal`.
+          schema: { type: string, example: "error,fatal" }
+        - name: min_level
+          in: query
+          required: false
+          description: This level and louder. Lines of unknown level are always kept.
+          schema:
+            type: string
+            enum: [debug, info, warn, error, fatal]
+        - name: since
+          in: query
+          required: false
+          description: Lines at or after this time, as RFC 3339 or unix milliseconds.
+          schema: { type: string, example: "2026-10-23T22:00:00Z" }
+        - name: until
+          in: query
+          required: false
+          description: Lines at or before this time, as RFC 3339 or unix milliseconds.
+          schema: { type: string, example: "2026-10-23T23:00:00Z" }
+        - name: before
+          in: query
+          required: false
+          description: A line id. Only older lines (paging back). Use `next` from the last answer.
+          schema: { type: string, pattern: "^[0-9]+$" }
+        - name: after
+          in: query
+          required: false
+          description: A line id. Only newer lines, oldest first (live tail). `next` is null.
+          schema: { type: string, pattern: "^[0-9]+$" }
+        - name: limit
+          in: query
+          required: false
+          description: How many lines to give back.
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        "200":
+          description: The lines, the counts per level and the next page.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogsPage" }
+        "400":
+          description: A value is not allowed (for example a bad level, time, id or limit).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: The key is an app key and the app or environment is not its own.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      description: |
+        An app's `HOMELAB_TOKEN` (`hlk_` and 43 characters), or an admin key with `logs:read`.
+        Send it as `Authorization: Bearer <key>`.
+  responses:
+    Unauthorized:
+      description: No key, a wrong key, or a revoked key. Comes with `WWW-Authenticate`.
+      headers:
+        WWW-Authenticate:
+          schema: { type: string, examples: ['Bearer realm="homelab"'] }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: The key lacks the `logs:read` scope.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+    LogsPage:
+      type: object
+      required: [lines, counts, next]
+      properties:
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/LogLine" }
+        counts:
+          $ref: "#/components/schemas/LogCounts"
+        next:
+          type: [string, "null"]
+          description: The `before` value for the next older page, or null.
+    LogLine:
+      type: object
+      required: [id, time, level, msg, app, env, service, stream, extra]
+      properties:
+        id: { type: integer, description: The line's id. Use it for `before` and `after`. }
+        time: { type: string, format: date-time, description: When the line was written, in UTC. }
+        level:
+          type: string
+          enum: [unknown, debug, info, warn, error, fatal]
+          description: "`unknown` is a JSON line with no level. Plain lines always have a level."
+        msg: { type: string, description: The message, at most 16 KB. }
+        app: { type: string, description: "The app. `homelab` for Homelab's own events." }
+        env: { type: string, description: "`dev` or `prod`. Empty for Homelab's own events." }
+        service: { type: string, description: "The container or service, for example `app`, `files` or `deploys`." }
+        stream:
+          type: string
+          enum: [stdout, stderr, event]
+        extra:
+          type: object
+          description: The other fields of a JSON line (up to 8 KB). Empty when there are none.
+          additionalProperties: true
+    LogCounts:
+      type: object
+      description: Lines per level for the same search. Always all six keys.
+      required: [unknown, debug, info, warn, error, fatal]
+      properties:
+        unknown: { type: integer, minimum: 0 }
+        debug: { type: integer, minimum: 0 }
+        info: { type: integer, minimum: 0 }
+        warn: { type: integer, minimum: 0 }
+        error: { type: integer, minimum: 0 }
+        fatal: { type: integer, minimum: 0 }

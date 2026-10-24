@@ -288,3 +288,33 @@ func TestWaitForSecretsGivesUpWhenTheServiceNeverComes(t *testing.T) {
 		t.Fatalf("a stopped start should say so, got %v", err)
 	}
 }
+
+func TestParseConfigLogs(t *testing.T) {
+	c, err := parseConfig(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j, err := c.Logs.logsJSON(); err != nil || j != "" {
+		t.Fatalf("default: %q %v", j, err)
+	}
+	c, err = parseConfig([]byte("logs:\n  min_level: warn\n  services:\n    files: debug\n  max_mb: 512\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, err := c.Logs.logsJSON()
+	if err != nil || j != `{"max_mb":512,"min_level":"warn","services":{"files":"debug"}}` {
+		t.Fatalf("json: %q %v", j, err)
+	}
+	for name, doc := range map[string]string{
+		"bad level":         "logs:\n  min_level: loud\n",
+		"bad service level": "logs:\n  services:\n    files: Debug\n",
+		"bad service name":  "logs:\n  services:\n    Files: debug\n",
+		"too small":         "logs:\n  max_mb: 1\n",
+		"too big":           "logs:\n  max_mb: 99999999\n",
+		"unknown key":       "logs:\n  keep_days: 3\n",
+	} {
+		if _, err := parseConfig([]byte(doc)); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}
