@@ -65,6 +65,10 @@ const (
 	// key can be made with it, and homelab-services refuses admin keys on that route.
 	ScopeReleasesRead = "releases:read"
 
+	// ScopeLogsRead reads logs. An admin key may have it (it reads every app's logs); an
+	// app's own key always has it and sees only its own app environment's lines.
+	ScopeLogsRead = "logs:read"
+
 	// Secrets scopes belong to an app's own key and never to an admin key: no admin key can
 	// be made with them, and homelab-services refuses admin keys on every secrets route.
 	ScopeSecretsRead  = "secrets:read"  // list and read the app's own secrets
@@ -72,7 +76,7 @@ const (
 )
 
 // scopes are the scopes an admin key may have.
-var scopes = []string{ScopeUsersRead, ScopeFilesRead, ScopeFilesWrite, ScopeDBRead}
+var scopes = []string{ScopeUsersRead, ScopeFilesRead, ScopeFilesWrite, ScopeDBRead, ScopeLogsRead}
 
 // Caller is who is calling with an API key.
 type Caller struct {
@@ -105,11 +109,11 @@ func checkScope(s string) error {
 	return nil
 }
 
-// appKeyScopes are the scopes an app's own key has: users:read and releases:read always. secrets_api in homelab.yaml decides the
+// appKeyScopes are the scopes an app's own key has: users:read, releases:read and logs:read always. secrets_api in homelab.yaml decides the
 // secrets ones: read (the default) gives secrets:read, write also gives secrets:write, and
 // none gives neither.
 func appKeyScopes(m *manifest.Manifest) []string {
-	out := []string{ScopeUsersRead, ScopeReleasesRead}
+	out := []string{ScopeUsersRead, ScopeReleasesRead, ScopeLogsRead}
 	switch m.SecretsAPI {
 	case manifest.SecretsAPINone:
 	case manifest.SecretsAPIWrite:
@@ -278,6 +282,7 @@ func (h *Hub) appKey(ctx context.Context, app, env string, scopes []string) (str
 	if err := h.ad.Secrets.Set(app, env, AppTokenSecret, token, core.ActorHomelab); err != nil {
 		return "", fmt.Errorf("save the app's API key: %w", err)
 	}
+	h.forgetLogMask(app, env)
 	k := state.APIKey{ID: id, Hash: hashKey(token), Prefix: keyPrefixOf(token), Name: app + " " + env, Kind: KeyKindApp,
 		App: app, Env: env, Scopes: scopes, CreatedAt: h.cfg.Now()}
 	if err := h.store.PutAPIKey(ctx, k); err != nil {

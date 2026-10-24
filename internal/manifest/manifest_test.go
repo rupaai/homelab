@@ -202,6 +202,25 @@ func TestSecretsAPI(t *testing.T) {
 	}
 }
 
+func TestLogsMinLevel(t *testing.T) {
+	m, err := Parse([]byte(movies), Defaults{})
+	if err != nil || m.Logs.MinLevel != "" || m.LogMinLevel("dev") != "debug" || m.LogMinLevel("prod") != "info" {
+		t.Fatalf("defaults: %+v %v", m.Logs, err)
+	}
+	for _, lvl := range []string{"debug", "info", "warn", "error", "fatal"} {
+		m, err := Parse([]byte(movies+"logs:\n  min_level: "+lvl+"\n"), Defaults{})
+		if err != nil || m.LogMinLevel("dev") != lvl || m.LogMinLevel("prod") != lvl {
+			t.Fatalf("%s: %+v %v", lvl, m.Logs, err)
+		}
+	}
+	for _, lvl := range []string{"Info", "warning", "trace", "unknown", "5"} {
+		_, err := Parse([]byte(movies+"logs:\n  min_level: "+lvl+"\n"), Defaults{})
+		if err == nil || !strings.Contains(err.Error(), "logs: min_level must be one of") {
+			t.Errorf("min_level %s gave %v", lvl, err)
+		}
+	}
+}
+
 func TestDatabase(t *testing.T) {
 	for _, engine := range []string{"postgres", "sqlite"} {
 		m, err := Parse([]byte(movies+"database: "+engine+"\n"), Defaults{})

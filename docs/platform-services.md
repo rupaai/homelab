@@ -26,6 +26,7 @@ An admin can revoke an app key under **Settings → API keys**, for example if i
 - `files:write`: also make folders, and save, change and delete files.
 - `db:read`: look inside every database (read only).
 - `releases:read`: list the app's own release versions. Only app keys have it (every app key does); admin keys can't.
+- `logs:read`: search the logs. Every app key has it, and sees only its own app and environment. An admin key can have it too, to read every app's lines.
 
 App keys need no files scope: an app always has its own folders, and only those. Databases and data add their own scopes when they arrive.
 
@@ -415,3 +416,156 @@ A signed-in person can do everything. An admin key needs the `db:read` scope. An
 The plugins (TypeScript, Python, Rust) wrap these calls as `db.list`, `db.info`, `db.tables`, `db.rows` and `db.query`; they never write. See [plugins](../plugins/README.md).
 
 The companion's own calls (admins only): `GET /api/apps/{id}/db` (engine, port and copies), `POST /api/apps/{id}/envs/{env}/db/copies` (copy now), `POST /api/apps/{id}/envs/{env}/db/copies/{name}/restore`, `POST /api/apps/{id}/db/copy-prod-to-dev`, and `POST /api/apps/{id}/envs/{env}/db/import` (the raw file as the body, `Content-Type: application/octet-stream`, with the companion's `X-Homelab-Request: 1` header; answers 202 `{"ok":true,"kind":"sqlite|pg_dump|sql"}` and loads in the background).
+
+## Logs
+
+Homelab keeps the log lines of every app's containers, and a line for each thing Homelab does with files, databases, secrets and deploys. Search them on the companion's **Logs** screen, or with the API.
+
+- An app's lines are what its containers print (stdout and stderr). When Homelab first sees a container, it reads back up to 14 days of its logs.
+- Homelab's own lines have the app `homelab` and a service such as `files`. A line about an app (for example a file saved in that app's folder) also shows in that app's logs.
+- Lines are kept 14 days. A size cap (`max_mb` in `config.yaml`, default 2048 MB) deletes the oldest lines first when the store is full.
+- Secret values are hidden before a line is stored. A hidden value shows as `[secret NAME]`. Values shorter than 6 characters are not hidden. A secret saved a moment ago can show for up to a minute, because Homelab keeps its list of secrets for 60 seconds.
+- Homelab never writes SQL, query values, file contents or keys into a line.
+
+### Levels
+
+Lines are ordered by number. `min_level` keeps that level and louder.
+
+| Level | Number | Tag | Colour | Icon | Row on the screen |
+|---|---|---|---|---|---|
+| unknown | 0 | `---` | grey | question mark | normal |
+| debug | 1 | `DBG` | blue | bug | dimmed |
+| info | 2 | `INF` | green | circle with an i | normal |
+| warn | 3 | `WRN` | yellow | triangle with a `!` | normal |
+| error | 4 | `ERR` | red | circle with an X | light red |
+| fatal | 5 | `FTL` | purple | octagon with a `!` | bold |
+
+### How a line's level is read
+
+- **A JSON line** (one that starts with `{`): the level comes from `level`, `lvl`, `severity` or `levelname`. It can be a word in any case, or a Python (pino) number: 10 or 20 is debug, 30 info, 40 warn, 50 error, 60 fatal. The message comes from `msg`, `message` or `event`. The time comes from `time`, `timestamp`, `ts` or `@timestamp` when it is RFC 3339, else from Docker. `app`, `env` and `service` are dropped, because Homelab sets them. The other fields go in `extra`. Up to 8 KB; a bigger set is dropped and `extra_truncated` is set. A JSON line with no level is `unknown`.
+- **Any other line**: the first word is read. If the first word is a number (a time), the first three words are read. `TRACE`, `DEBUG` and `DBG` are debug. `INFO`, `INF` and `NOTICE` are info. `WARN`, `WARNING` and `WRN` are warn. `ERROR` and `ERR` are error. `FATAL`, `FTL`, `CRITICAL`, `CRIT` and `PANIC` are fatal. Case does not matter, and brackets, colons and `level=` are ignored. So `ERROR:root:msg` is an error.
+- **No level found**: stderr is warn and stdout is info.
+- A line is at most 16 KB. A longer one is cut, and `…` is added.
+
+### Settings
+
+An app sets its own minimum in `homelab.yaml`:
+
+```yaml
+logs:
+  min_level: info    # debug, info, warn, error or fatal
+```
+
+The default is debug on dev and info on prod. Lines below the minimum are not stored. Lines of unknown level are always kept.
+
+Homelab sets its own in `config.yaml`:
+
+```yaml
+logs:
+  min_level: info        # Homelab's own events below this are not kept (default info)
+  services:
+    files: debug         # one service with its own level
+  max_mb: 2048           # the most disk the logs may take, from 16 to 1048576 MB
+```
+
+A bad value stops Homelab from starting, and the message names the setting.
+
+### What Homelab writes
+
+| Service | Event | Level | Notes |
+|---|---|---|---|
+| `files` | folder made, folder deleted, file saved, file deleted | info | Names, ids, sizes and who did it. Never the file |
+| `files` | file read | debug | Only kept with `services: {files: debug}` |
+| `databases` | query run | info | Milliseconds, rows, and whether it was a write. Never the SQL |
+| `databases` | table rows read | debug | Only kept with `services: {databases: debug}` |
+| `secrets` | secret saved, secret deleted | info | Names only |
+| `secrets` | secret read | info for an app's secret, debug for a config secret | Names and versions only. Config reads are only kept with `services: {secrets: debug}` |
+| `deploys` | deploy, promote, rollback, build | info, or error when it failed | Every other Homelab activity line goes to a service named after its first word, such as `app`, `key` or `disk` |
+
+### Who sees what
+
+| Caller | Sees |
+|---|---|
+| An owner or admin, signed in to the companion | Everything |
+| An admin key with `logs:read` | Everything |
+| An app key (every app key has `logs:read`) | Its own app and environment, and Homelab's events about them |
+| A key without `logs:read` | Nothing (403) |
+
+### Calls
+
+| Call | Gives |
+|---|---|
+| `GET /api/logs` | The lines that match, newest first, with the counts per level and the next page |
+
+| Parameter | Meaning |
+|---|---|
+| `q` | Words to find, in the message and the extra fields. Only the first 200 characters and 10 words are used. Every word must match, as whole words: `err` does not find `error` |
+| `app`, `env`, `service` | Exact match. `app=homelab` gives Homelab's own lines. An app key that asks for another app or environment gets 404 |
+| `level` | Exact levels, as a comma list such as `error,fatal`. `unknown` is allowed |
+| `min_level` | That level and louder. Lines of unknown level are kept too |
+| `since`, `until` | RFC 3339 or unix milliseconds |
+| `before` | A line id: only older lines. Use `next` from the last answer to page back |
+| `after` | A line id: only newer lines, oldest first. Follows new lines (live tail). `next` is null. If you get `limit` lines, ask again, so a backlog is not skipped |
+| `limit` | 1 to 500. Default 100. Another value gives 400 |
+
+```json
+{"lines":[{"id":42,"time":"2026-10-23T22:00:00.123Z","level":"error","msg":"...","app":"northern-lights",
+  "env":"prod","service":"app","stream":"stderr","extra":{}}],
+ "counts":{"unknown":0,"debug":0,"info":3,"warn":1,"error":2,"fatal":0},
+ "next":"41"}
+```
+
+`counts` is for the same search without `level`, `min_level`, `before` and `after`. Every level is there, even at 0. So a count can be tapped to filter. `next` is the `before` value for the next page, or null.
+
+A bad value gives 400, a key without `logs:read` gives 403, and an app key that asks for another app gives 404. Each answer is `{"error": "A sentence."}`. A complete description is in [logs.openapi.yaml](logs.openapi.yaml).
+
+```sh
+# From inside an app container: its warnings, errors and fatal lines, newest first
+curl -s -H "Authorization: Bearer $HOMELAB_TOKEN" "$HOMELAB_API_URL/api/logs?min_level=warn&limit=20"
+
+# The next older page: use the "next" value from the last answer (41 is an example)
+curl -s -H "Authorization: Bearer $HOMELAB_TOKEN" "$HOMELAB_API_URL/api/logs?min_level=warn&limit=20&before=41"
+```
+
+### Use it from your code
+
+The plugins wrap the search. See [plugins](../plugins/README.md).
+
+```ts
+// TypeScript
+const homelab = new Homelab();
+const found = await homelab.logs.search({ q: "timeout", minLevel: "warn", limit: 50 });
+for (const line of found.lines) console.log(line.time, line.level, line.msg);
+```
+
+```python
+# Python
+homelab = Homelab()
+found = homelab.logs.search(q="timeout", min_level="warn", limit=50)
+for line in found.lines:
+    print(line.time, line.level, line.msg)
+```
+
+```rust
+// Rust
+let homelab = Homelab::from_env()?;
+let found = homelab.logs().search(LogQuery {
+    q: Some("timeout".into()),
+    min_level: Some("warn".into()),
+    limit: Some(50),
+    ..Default::default()
+}).await?;
+```
+
+Python's `logging` can send its lines to Homelab in a form Homelab reads. Call it once, at start:
+
+```python
+import logging
+import homelab
+
+homelab.logs.setup()    # no key needed; safe to call twice
+logging.getLogger("app").info("started", extra={"port": 8000})
+# prints: {"time": "...", "level": "info", "msg": "started", "logger": "app", "port": 8000}
+```
+
+`setup()` prints one JSON line per record on stdout. DEBUG becomes debug, INFO info, WARNING warn, ERROR error and CRITICAL fatal. An `extra=` field named `time`, `level`, `msg`, `logger` or `exception` is saved as `extra_<name>`.

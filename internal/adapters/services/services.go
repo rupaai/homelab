@@ -72,7 +72,10 @@ type Options struct {
 	// in its environment. Without SecretsKey the secrets service is off.
 	SecretsKey    string
 	SecretsImport string
-	Logger        *slog.Logger
+	// LogsConfig is the settings of the logs service as JSON (HOMELAB_SERVICES_LOGS):
+	// {"min_level":"info","services":{"files":"debug"},"max_mb":2048}. Empty leaves it unset.
+	LogsConfig string
+	Logger     *slog.Logger
 }
 
 // Services runs homelab-services and forwards calls to it.
@@ -256,6 +259,9 @@ func (s *Services) runOnce(ctx context.Context) error {
 	}
 	if s.o.SecretsImport != "" {
 		cmd.Env = append(cmd.Env, "HOMELAB_SERVICES_SECRETS_IMPORT="+s.o.SecretsImport)
+	}
+	if s.o.LogsConfig != "" {
+		cmd.Env = append(cmd.Env, "HOMELAB_SERVICES_LOGS="+s.o.LogsConfig)
 	}
 	logs := &lineLogger{log: s.o.Logger}
 	cmd.Stdout, cmd.Stderr = logs, logs

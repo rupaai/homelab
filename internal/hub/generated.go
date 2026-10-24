@@ -63,6 +63,7 @@ func (h *Hub) ensureGenerated(m *manifest.Manifest, app, env string) error {
 		if err := h.ad.Secrets.Set(app, env, name, v, core.ActorHomelab); err != nil {
 			return fmt.Errorf("save %s: %w", name, err)
 		}
+		h.forgetLogMask(app, env)
 	}
 	return nil
 }

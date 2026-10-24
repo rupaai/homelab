@@ -60,6 +60,7 @@ func (h *Hub) RemoveApp(ctx context.Context, appID string, by core.Viewer) error
 	if err := h.ad.Secrets.DeleteApp(appID); err != nil {
 		h.log.Error("remove app: secrets", "app", appID, "err", err)
 	}
+	h.forgetLogMask(appID, "")
 	if h.ad.Databases != nil {
 		if err := h.ad.Databases.Forget(appID); err != nil {
 			h.log.Warn("remove app: databases", "app", appID, "err", err)
@@ -264,6 +265,7 @@ func (h *Hub) RestoreSecret(ctx context.Context, appID, env, name string, versio
 	if err != nil {
 		return secretFail(err)
 	}
+	h.forgetLogMask(appID, env)
 	h.logEvent(ctx, state.Event{Actor: by.Label(), App: appID, Env: env, Action: "secret.restored",
 		Detail: fmt.Sprintf("Put back version %d of %s for %s, as version %d. It's used from the next deploy.", version, name, env, n)})
 	return nil
@@ -290,6 +292,7 @@ func (h *Hub) SetSecret(ctx context.Context, appID, env, name, value string, by 
 	if err := h.ad.Secrets.Set(appID, env, name, value, by.Label()); err != nil {
 		return secretFail(err)
 	}
+	h.forgetLogMask(appID, env)
 	h.logEvent(ctx, state.Event{Actor: by.Label(), App: appID, Env: env, Action: "secret.set",
 		Detail: fmt.Sprintf("Set %s for %s. It's used from the next deploy.", name, env)})
 	return nil
@@ -328,6 +331,7 @@ func (h *Hub) DeleteSavedSecret(ctx context.Context, appID, env, name string, by
 	if err := h.ad.Secrets.DeleteSaved(appID, env, name); err != nil {
 		return secretFail(err)
 	}
+	h.forgetLogMask(appID, env)
 	h.logEvent(ctx, state.Event{Actor: by.Label(), App: appID, Env: env, Action: "secret.deleted",
 		Detail: fmt.Sprintf("Deleted %s, saved by the app, from %s", name, env)})
 	return nil
@@ -370,6 +374,7 @@ func (h *Hub) RegenerateSecret(ctx context.Context, appID, env, name string, by 
 	if err := h.ad.Secrets.Set(appID, env, name, v, by.Label()); err != nil {
 		return secretFail(err)
 	}
+	h.forgetLogMask(appID, env)
 	h.logEvent(ctx, state.Event{Actor: by.Label(), App: appID, Env: env, Action: "secret.set",
 		Detail: fmt.Sprintf("Made a new %s for %s", name, env)})
 	return nil
@@ -395,6 +400,7 @@ func (h *Hub) DeleteSecret(ctx context.Context, appID, env, name string, by core
 	if err := h.ad.Secrets.Delete(appID, env, name); err != nil {
 		return secretFail(err)
 	}
+	h.forgetLogMask(appID, env)
 	h.logEvent(ctx, state.Event{Actor: by.Label(), App: appID, Env: env, Action: "secret.deleted", Detail: fmt.Sprintf("Deleted %s from %s", name, env)})
 	return nil
 }
@@ -587,6 +593,7 @@ func (h *Hub) SetPlatformSetting(ctx context.Context, name, value string, by cor
 	if err := h.ad.Secrets.Set("", "", name, value, by.Label()); err != nil {
 		return secretFail(err)
 	}
+	h.forgetLogMask("", "")
 	h.logEvent(ctx, state.Event{Actor: by.Label(), Action: "setting.set", Detail: "Set " + name})
 	if name == "GITHUB_TOKEN" {
 		go h.CheckBuilds(context.WithoutCancel(ctx))
@@ -605,6 +612,7 @@ func (h *Hub) DeletePlatformSetting(ctx context.Context, name string, by core.Vi
 	if err := h.ad.Secrets.Delete("", "", name); err != nil {
 		return err
 	}
+	h.forgetLogMask("", "")
 	h.logEvent(ctx, state.Event{Actor: by.Label(), Action: "setting.deleted", Detail: "Deleted " + name})
 	return nil
 }
@@ -613,6 +621,15 @@ func (h *Hub) DeletePlatformSetting(ctx context.Context, name string, by core.Vi
 // text with [secret NAME], so logs shown in the companion or the API don't leak them (S6).
 // Values under 6 characters are left alone, so ordinary words aren't mangled.
 func (h *Hub) mask(ctx context.Context, a state.App, env, text string) string {
+	if r := h.masker(ctx, a, env); r != nil {
+		return r.Replace(text)
+	}
+	return text
+}
+
+// masker is what mask uses: a replacer for the secret values of an app environment and the
+// platform credentials, or nil when there is nothing to hide.
+func (h *Hub) masker(ctx context.Context, a state.App, env string) *strings.Replacer {
 	byValue := map[string]string{} // value -> name
 	if stored, err := h.ad.Secrets.List(a.ID, env); err == nil {
 		names := make([]string, 0, len(stored))
@@ -641,14 +658,14 @@ func (h *Hub) mask(ctx context.Context, a state.App, env, text string) string {
 		return len(values[i]) > len(values[j]) || (len(values[i]) == len(values[j]) && values[i] < values[j])
 	})
 	if len(values) == 0 {
-		return text
+		return nil
 	}
 	// One pass, so a replacement is never searched again.
 	pairs := make([]string, 0, 2*len(values))
 	for _, v := range values {
 		pairs = append(pairs, v, "[secret "+byValue[v]+"]")
 	}
-	return strings.NewReplacer(pairs...).Replace(text)
+	return strings.NewReplacer(pairs...)
 }
 
 // minMaskLen is the shortest secret value that is hidden in logs.

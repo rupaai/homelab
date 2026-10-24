@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { logsHref as searchHref } from '#lib/logs.ts';
 	import { appAddress, deployedLabel, envLabel, healthSentence } from '#lib/format.ts';
 	import type { AppView, EnvView } from '#lib/types.ts';
 	import ReleaseLine from './ReleaseLine.svelte';
@@ -71,7 +72,8 @@
 		{#if env.canRollback}
 			<button class="btn" type="button" onclick={onrollback} disabled={!!env.busy}>Roll back</button>
 		{/if}
-		<a class="btn" href={logsHref}>Logs</a>
+		<a class="btn" href={searchHref(app.id, env.env)}>Logs</a>
+		<a class="btn" href={logsHref}>Raw output</a>
 	</div>
 
 	<details>

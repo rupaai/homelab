@@ -1,6 +1,6 @@
 // Fake data for developing the UI without the Go server (see api.ts for how it's switched on).
 import { ApiError } from './errors';
-import type { ActivityEvent, Api, DbChange, DbCopy, DbInfo, DbTable, AppView, SavedSecretView, FileFolder, StorageDisk, StoredFile, UploadResult, EnvName, EnvView, PersonInput, KeyView, PersonView, ReleaseView, SecretView, SettingView, SecretVersion } from './types';
+import type { ActivityEvent, Api, DbChange, DbCopy, DbInfo, DbTable, AppView, SavedSecretView, FileFolder, StorageDisk, StoredFile, UploadResult, EnvName, EnvView, PersonInput, KeyView, PersonView, ReleaseView, SecretView, SettingView, SecretVersion, LogLevel, LogLine, LogCounts } from './types';
 
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 const delay = <T>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
@@ -272,6 +272,23 @@ function work(a: AppView, e: EnvName, busy: string, kind: 'deploy' | 'promote' |
 	}, 5000);
 }
 
+
+// A few sample log lines, oldest first. Ids go up with time.
+const logSeed: [number, LogLevel, string, string, string, string, string, Record<string, unknown>][] = [
+	[240, 'info', 'movie-night', 'prod', 'app', 'stdout', 'Listening on port 8080', {}],
+	[200, 'debug', 'movie-night', 'prod', 'app', 'stdout', 'Loaded 42 films from the cache', { films: 42 }],
+	[150, 'warn', 'movie-night', 'prod', 'app', 'stderr', 'Slow response from the film database (1.8s)', { ms: 1800 }],
+	[90, 'error', 'movie-night', 'prod', 'app', 'stderr', 'Could not load poster for "Heat": connection reset', { film: 'Heat', retry: true }],
+	[60, 'info', 'movie-night', 'dev', 'app', 'stdout', 'GET /api/films 200 12ms', { path: '/api/films', status: 200 }],
+	[45, 'fatal', 'recipe-box', 'dev', 'app', 'stderr', 'Out of memory, shutting down', {}],
+	[40, 'info', 'homelab', '', 'deploys', 'event', 'v0.4.0-dev.2 is running and healthy', {}],
+	[30, 'info', 'homelab', '', 'files', 'event', 'File saved: poster.jpg (212 KB) in movie-night-posters', { size: 212000 }],
+	[20, 'unknown', 'recipe-box', 'prod', 'app', 'stdout', 'A line without a level', {}],
+	[5, 'info', 'movie-night', 'prod', 'app', 'stdout', 'GET /api/films 200 10ms', { path: '/api/films', status: 200 }]
+];
+const logRows: LogLine[] = logSeed.map(([min, level, app, env, service, stream, msg, extra], i) => ({ id: i + 1, time: ago(min), level, msg, app, env, service, stream, extra }));
+const levelNumber: Record<LogLevel, number> = { unknown: 0, debug: 1, info: 2, warn: 3, error: 4, fatal: 5 };
+
 export const mockApi: Api = {
 	bootstrap: () => delay({ needsSetup: false, signInReady: true }),
 	initialOwnerPasskeyLink: () => delay({ url: 'http://localhost:7081/lc/mock-token' }),
@@ -522,6 +539,22 @@ export const mockApi: Api = {
 		let rows = events.filter((e) => !q.app || e.app === q.app);
 		if (q.before) rows = rows.filter((e) => e.id < q.before!);
 		return delay(rows.slice(0, q.limit ?? 50).map((e) => ({ ...e })));
+	},
+	async searchLogs(q) {
+		const words = (q.q ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+		const since = q.since ? (/^\d+$/.test(q.since) ? Number(q.since) : Date.parse(q.since)) : 0;
+		let rows = logRows.filter((l) => (!q.app || l.app === q.app) && (!q.env || l.env === q.env) && (!q.service || l.service === q.service) && Date.parse(l.time) >= since);
+		rows = rows.filter((l) => words.every((w) => `${l.msg} ${JSON.stringify(l.extra)}`.toLowerCase().includes(w)));
+		const counts: LogCounts = { debug: 0, info: 0, warn: 0, error: 0, fatal: 0, unknown: 0 };
+		for (const l of rows) counts[l.level]++;
+		if (q.level?.length) rows = rows.filter((l) => q.level!.includes(l.level));
+		if (q.minLevel) rows = rows.filter((l) => l.level === 'unknown' || levelNumber[l.level] >= levelNumber[q.minLevel!]);
+		if (q.before !== undefined) rows = rows.filter((l) => l.id < q.before!);
+		if (q.after !== undefined) rows = rows.filter((l) => l.id > q.after!);
+		rows = [...rows].sort((a, b) => b.id - a.id);
+		const limit = q.limit ?? 100;
+		const page = rows.slice(0, limit);
+		return delay({ lines: page.map((l) => ({ ...l, extra: { ...l.extra } })), counts, next: rows.length > limit ? String(page[page.length - 1].id) : null });
 	},
 	storage: () => delay(disks.map((d) => ({ ...d }))),
 	fileFolders: () => delay(folderStore.map((f) => ({ ...f }))),

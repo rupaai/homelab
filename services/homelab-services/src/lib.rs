@@ -12,6 +12,7 @@ pub mod dbs_api;
 pub mod dbs_sql;
 pub mod disk;
 pub mod files;
+pub mod logs;
 pub mod meta;
 pub mod releases;
 pub mod releases_api;

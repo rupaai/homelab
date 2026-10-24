@@ -318,3 +318,63 @@ class Release:
             notes=_str(d.get("notes")),
             raw=d,
         )
+
+
+LOG_LEVELS = ("unknown", "debug", "info", "warn", "error", "fatal")
+
+
+@dataclass(frozen=True)
+class LogLine:
+    """One log line."""
+
+    id: int
+    time: str  # RFC 3339
+    level: str  # one of LOG_LEVELS
+    msg: str
+    app: str
+    env: str
+    service: str
+    stream: str  # "stdout", "stderr" or "event"
+    extra: Dict[str, Any] = field(default_factory=dict)  # extra fields of a JSON log line
+    raw: Dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "LogLine":
+        extra = d.get("extra")
+        return cls(
+            id=_int(d.get("id")),
+            time=_str(d.get("time")),
+            level=_str(d.get("level"), "unknown"),
+            msg=_str(d.get("msg")),
+            app=_str(d.get("app")),
+            env=_str(d.get("env")),
+            service=_str(d.get("service")),
+            stream=_str(d.get("stream")),
+            extra=extra if isinstance(extra, dict) else {},
+            raw=d,
+        )
+
+
+@dataclass(frozen=True)
+class LogSearchResult:
+    """The answer to ``logs.search``: newest lines first."""
+
+    lines: List[LogLine]
+    counts: Dict[str, int]  # lines per level under the same search, ignoring level and min_level
+    next: Optional[str]  # pass as ``before`` for the next older page; None when there is none
+    raw: Dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "LogSearchResult":
+        counts = {k: 0 for k in LOG_LEVELS}
+        raw_counts = d.get("counts")
+        if isinstance(raw_counts, dict):
+            counts.update({k: v for k, v in raw_counts.items() if isinstance(k, str) and _int(v, -1) >= 0})
+        items = d.get("lines")
+        nxt = d.get("next")
+        return cls(
+            lines=[LogLine.from_dict(i) for i in items if isinstance(i, dict)] if isinstance(items, list) else [],
+            counts=counts,
+            next=nxt if isinstance(nxt, str) else None,
+            raw=d,
+        )

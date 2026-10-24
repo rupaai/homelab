@@ -120,7 +120,11 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 		return fmt.Errorf("secrets: %w", err)
 	}
 	storage := storageOrDefault(cfg, home)
-	svc, err := services.New(services.Options{Program: services.Program(exe), DataDir: servicesDir, Port: cfg.ServicesPort,
+	logsJSON, err := cfg.Logs.logsJSON()
+	if err != nil {
+		return err
+	}
+	svc, err := services.New(services.Options{LogsConfig: logsJSON, Program: services.Program(exe), DataDir: servicesDir, Port: cfg.ServicesPort,
 		Storage: storage, MaxUpload: cfg.MaxUploadMB << 20, SecretsKey: keyPath, SecretsImport: oldStore, Logger: log})
 	if err != nil {
 		return err
@@ -221,7 +225,7 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 		Addresses: addrs, Health: httphealth.New(nil), Secrets: secrets,
 		Smoke: deployer, Mirror: mirror, Identity: idp, Email: mailer,
 		Notifier: notifier, Resources: resources, System: sysinfo.New(sysinfo.Options{}), Updater: updater,
-		Services: svc, Databases: svc.Databases(), Versions: svc.Versions(),
+		Services: svc, Databases: svc.Databases(), Versions: svc.Versions(), Logs: svc.Logs(),
 	})
 
 	oidcConfig := api.NewOIDCConfig("", "", "")
@@ -259,6 +263,15 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	hubDone := make(chan struct{})
 	go func() { defer close(hubDone); h.Run(ctx) }()
 
+	// The follower reads the app containers' logs (Docker only) and stores them. It stops with Homelab.
+	followCtx, stopFollow := context.WithCancel(ctx)
+	defer stopFollow()
+	followDone := make(chan struct{})
+	go func() {
+		defer close(followDone)
+		deployer.FollowLogs(h.IngestLogs, filepath.Join(home, "logs-cursors.json")).Run(followCtx)
+	}()
+
 	var result error
 	select {
 	case <-ctx.Done():
@@ -272,6 +285,8 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	defer cancel()
 	_ = srv.Shutdown(stopCtx)
 	_ = doorSrv.Shutdown(stopCtx)
+	stopFollow()
+	<-followDone
 	stopServices()
 	<-svcDone
 	<-hubDone

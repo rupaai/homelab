@@ -28,3 +28,20 @@ describe('mock data shows versions', () => {
 		expect(p.notes).toBe('');
 	});
 });
+
+describe('mock logs', () => {
+	it('counts every level but filters by the chosen ones', async () => {
+		const r = await mockApi.searchLogs({ app: 'movie-night', level: ['error'] });
+		expect(r.lines.map((l) => l.level)).toEqual(['error']);
+		expect(r.counts.info).toBeGreaterThan(0);
+	});
+	it('gives Homelab lines and pages by id', async () => {
+		const h = await mockApi.searchLogs({ app: 'homelab' });
+		expect(h.lines.length).toBeGreaterThan(0);
+		const first = await mockApi.searchLogs({ limit: 2 });
+		const second = await mockApi.searchLogs({ limit: 2, before: Number(first.next) });
+		expect(second.lines[0].id).toBeLessThan(first.lines[1].id);
+		const tail = await mockApi.searchLogs({ after: first.lines[1].id });
+		expect(tail.lines.map((l) => l.id)).toEqual([first.lines[0].id]);
+	});
+});

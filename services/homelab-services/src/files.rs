@@ -28,6 +28,7 @@ use crate::caller::{Caller, Kind};
 use crate::config::Disk;
 use crate::db::{self, Db, FileRow, Folder};
 use crate::disk::{make_dirs, open_file, safe_name, valid_name, year_month};
+use crate::logs::{about, who, Level};
 use crate::meta;
 
 /// Trashed files are deleted for good after this many seconds (30 days).
@@ -355,8 +356,20 @@ async fn create_folder(State(s): State<AppState>, caller: Caller, body: Bytes) -
     };
     let json = folder_json(&folder, 0, 0);
     let name = folder.name.clone();
+    let (about_app, about_env) = about(&caller, &folder.owner_app, &folder.owner_env);
+    let disk = folder.disk.clone();
     match s.files.db.run(move |c| db::folder_insert(c, &folder)).await {
-        Ok(()) => Ok((StatusCode::CREATED, Json(json)).into_response()),
+        Ok(()) => {
+            s.logs.event(
+                "files",
+                Level::Info,
+                &format!("folder made: {name}"),
+                json!({ "folder": name, "disk": disk, "by": who(&caller) }),
+                &about_app,
+                &about_env,
+            );
+            Ok((StatusCode::CREATED, Json(json)).into_response())
+        }
         Err(rusqlite::Error::SqliteFailure(e, _))
             if e.code == rusqlite::ErrorCode::ConstraintViolation =>
         {
@@ -416,7 +429,17 @@ async fn delete_folder(
         }
     }
     let base = disk.path.join("homelab-files");
+    let event_name = name.clone();
     let _ = tokio::task::spawn_blocking(move || remove_empty_dirs(&base, &name)).await;
+    let (about_app, about_env) = about(&caller, &folder.owner_app, &folder.owner_env);
+    s.logs.event(
+        "files",
+        Level::Info,
+        &format!("folder deleted: {event_name}"),
+        json!({ "folder": event_name, "by": who(&caller) }),
+        &about_app,
+        &about_env,
+    );
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -580,9 +603,10 @@ async fn delete_file(
     caller: Caller,
     Path((folder, id)): Path<(String, String)>,
 ) -> Reply {
-    s.files.folder_for(&caller, &folder, true).await?;
+    let owner = s.files.folder_for(&caller, &folder, true).await?;
     let id = parse_id(&id)?;
     let now = unix_now();
+    let (folder_name, file_id) = (folder.clone(), id.clone());
     let changed = s
         .files
         .db
@@ -591,6 +615,15 @@ async fn delete_file(
     if changed == 0 {
         return Err(err(StatusCode::NOT_FOUND, "There's no file with that id."));
     }
+    let (about_app, about_env) = about(&caller, &owner.owner_app, &owner.owner_env);
+    s.logs.event(
+        "files",
+        Level::Info,
+        &format!("file deleted in {folder_name}"),
+        json!({ "folder": folder_name, "id": file_id, "by": who(&caller) }),
+        &about_app,
+        &about_env,
+    );
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -814,7 +847,24 @@ async fn upload(
     )
     .await;
     match result {
-        Ok((row, false)) => Ok((StatusCode::CREATED, Json(file_json(&row))).into_response()),
+        Ok((row, false)) => {
+            let (about_app, about_env) = about(&caller, &folder.owner_app, &folder.owner_env);
+            s.logs.event(
+                "files",
+                Level::Info,
+                &format!("file saved in {}: {}", row.folder, row.name),
+                json!({
+                    "folder": row.folder,
+                    "name": row.name,
+                    "id": row.id,
+                    "size": row.size,
+                    "by": who(&caller),
+                }),
+                &about_app,
+                &about_env,
+            );
+            Ok((StatusCode::CREATED, Json(file_json(&row))).into_response())
+        }
         Ok((row, true)) => Ok((
             StatusCode::OK,
             [("x-homelab-duplicate", "true")],
@@ -1016,6 +1066,15 @@ async fn download(
                 .expect("valid response"));
         }
     };
+    let (about_app, about_env) = about(&caller, &folder.owner_app, &folder.owner_env);
+    s.logs.event(
+        "files",
+        Level::Debug,
+        &format!("file read in {folder_name}"),
+        json!({ "folder": folder_name, "id": row.id, "size": len, "by": who(&caller) }),
+        &about_app,
+        &about_env,
+    );
     if start > 0 {
         file.seek(SeekFrom::Start(start))
             .await

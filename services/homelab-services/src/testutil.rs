@@ -12,6 +12,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use crate::config::Disk;
 use crate::dbs::Dbs;
 use crate::files::Files;
+use crate::logs::{Level, Logs, Settings};
 use crate::secrets::Secrets;
 
 use crate::app::{app, AppState};
@@ -140,6 +141,7 @@ pub struct TestEnv {
     pub files: Arc<Files>,
     pub secrets: Arc<Secrets>,
     pub dbs: Arc<Dbs>,
+    pub logs: Arc<Logs>,
     pub router: Router,
 }
 
@@ -163,6 +165,17 @@ pub fn test_env_github(max_upload: u64, github_api: &str) -> TestEnv {
     write_master_key(&key, &TEST_MASTER_KEY);
     let secrets = Arc::new(Secrets::open(&data.join("secrets.db"), &key, None).unwrap());
     let dbs = Arc::new(Dbs::open(&data.join("dbs.db")).unwrap());
+    // Debug events too, so the tests see every event.
+    let logs = Arc::new(
+        Logs::open(
+            &data.join("logs.db"),
+            Settings {
+                min_level: Level::Debug,
+                ..Settings::default()
+            },
+        )
+        .unwrap(),
+    );
     let router = app(AppState {
         key: Arc::new(test_key().verifying_key()),
         version: "test",
@@ -170,6 +183,7 @@ pub fn test_env_github(max_upload: u64, github_api: &str) -> TestEnv {
         secrets: Some(secrets.clone()),
         secrets_problem: String::new(),
         dbs: dbs.clone(),
+        logs: logs.clone(),
         github_api: github_api.to_string(),
     });
     TestEnv {
@@ -178,6 +192,7 @@ pub fn test_env_github(max_upload: u64, github_api: &str) -> TestEnv {
         files,
         secrets,
         dbs,
+        logs,
         router,
     }
 }

@@ -288,6 +288,8 @@ export interface Api {
 	uploadFile(folder: string, file: File, tags?: string[]): Promise<UploadResult>;
 	fileBlob(folder: string, id: string): Promise<Blob>;
 	deleteFile(folder: string, id: string): Promise<void>;
+	/** Searches the logs (GET /api/logs). */
+	searchLogs(q: LogQuery): Promise<LogPage>;
 	databases(): Promise<DbInfo[]>;
 	database(app: string, env: string): Promise<DbInfo>;
 	dbTables(app: string, env: string): Promise<DbTable[]>;
@@ -370,3 +372,10 @@ export interface UpdateStatus { managed: boolean; current: string; latest?: stri
 export interface TestVersion { version: string; pr: number; title: string; }
 export interface TestRun extends TestVersion { from: string; at: string; }
 export interface DeviceView { system?: SystemInfo; update?: UpdateStatus; problems?: string[]; }
+
+export type LogLevel = 'unknown' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
+export type LogCounts = Record<LogLevel, number>;
+export interface LogLine { id: number; time: string; level: LogLevel; msg: string; app: string; env: string; service: string; stream: string; extra: Record<string, unknown>; }
+export interface LogPage { lines: LogLine[]; counts: LogCounts; /** the `before` value for the next page, or null */ next: string | null; }
+/** level is a list of exact levels; minLevel keeps that level and above. since and until are RFC 3339 or unix ms. */
+export interface LogQuery { q?: string; app?: string; env?: string; service?: string; level?: LogLevel[]; minLevel?: LogLevel; since?: string; until?: string; before?: number; after?: number; limit?: number; }

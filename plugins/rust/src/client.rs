@@ -8,6 +8,7 @@ use reqwest::{RequestBuilder, Response};
 use crate::db::Db;
 use crate::error::{Error, Result};
 use crate::files::Files;
+use crate::logs::Logs;
 use crate::releases::Releases;
 use crate::secrets::{Secrets, DEFAULT_SECRETS_DIR};
 
@@ -142,6 +143,10 @@ impl Homelab {
     /// The app's own versions.
     pub fn releases(&self) -> Releases {
         Releases::new(self.inner.clone())
+    }
+    /// Search the logs.
+    pub fn logs(&self) -> Logs {
+        Logs::new(self.inner.clone())
     }
     /// This app's version (`HOMELAB_VERSION`), or `None` when Homelab has not given it one.
     pub fn version(&self) -> Option<String> {
