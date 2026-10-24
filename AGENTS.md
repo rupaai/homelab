@@ -4,7 +4,7 @@ These rules are for any AI helper: Gemini, Claude, Codex or others. A person (of
 
 ## Start here
 
-1. Read HANDOVER.md first. It has the current state and open work. Its section 6 ("Rules") applies to you too.
+1. Read HANDOVER.md first. It has the current state and open work. Its section 6 ("Rules") applies to you too. Also read the waiting notes in `handover/notes/`.
 2. Then read docs/how-it-works.md. It says what each part does and where its code is.
 3. For the human steps (GitHub, PRs), see CONTRIBUTING.md.
 
@@ -25,7 +25,7 @@ These rules are for any AI helper: Gemini, Claude, Codex or others. A person (of
 - Make small, focused PRs. One idea each.
 - Fix the cause, not the symptom. Find out why it broke first.
 - Add a test with every fix and every new feature.
-- Keep the docs current: every PR that changes how something works must update HANDOVER.md (and docs/how-it-works.md if a block changes) in the same PR.
+- Keep the docs current: do not edit the feature blocks in HANDOVER.md. Add a note in `handover/notes/<feature>/` (see handover/README.md), and mark it `ready` when the feature is done. A bot folds it into HANDOVER.md. Update docs/how-it-works.md in the same PR if a block changes.
 - Do not edit the old milestone docs. They are history.
 - Do not invent features, commands or paths. Check that they exist in the repo.
 - Write short, plain sentences in docs. No em-dashes. Explain jargon in one line.
