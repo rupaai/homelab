@@ -19,12 +19,12 @@ Small libraries that let your code use Homelab's services in one line, for examp
 | Rust | [rust](rust) | `homelab-sdk = { git = "https://github.com/rupaai/homelab" }` |
 
 Each folder's README has a quick start and every call. Services so far: **files**,
-**secrets**, **databases** and **releases** (the app's own versions). Data comes next, as `homelab.data`.
+**secrets**, **databases**, **releases** (the app's own versions) and **logs** (search). Data comes next, as `homelab.data`.
 
 ## The contract every plugin follows
 
 requests, reading answers, and turning errors into one error type. The source of truth is
-docs/files.openapi.yaml, docs/secrets.openapi.yaml, services/homelab-services/src/dbs_api.rs and docs/platform-services.md.
+docs/files.openapi.yaml, docs/secrets.openapi.yaml, docs/logs.openapi.yaml, services/homelab-services/src/dbs_api.rs and docs/platform-services.md.
 
 ## Config
 - `url` and `token`. Default to env `HOMELAB_API_URL` and `HOMELAB_TOKEN`. Missing either
@@ -109,6 +109,22 @@ client.releases.list({limit?}) -> Release[]                 GET    /api/releases
     Needs the `releases:read` scope, which every app key has. Admin keys and people get 403.
     TS `releases.list({ limit })`, Python `releases.list(limit=)`, Rust `releases().list(Some(n))`.
 
+## Logs
+Search the log lines of the app (and Homelab's own lines about it). It only reads.
+client.logs.search({q?, level?, minLevel?, app?, env?, service?, since?, until?, before?, after?, limit?}) -> LogSearchResult
+                                                             GET    /api/logs?q=&level=&min_level=&app=&env=&service=&since=&until=&before=&after=&limit=
+    Newest lines first. Returns {lines, counts, next}. `counts` always has all six levels (0 when none).
+    `next` is the `before` for the next older page, or null. Follow new lines with `after` (the newest id you have).
+    `level` is one level or a list, exact. `minLevel` is that level and louder. Lines of unknown level are always kept.
+    `limit` is 1 to 500, default 100. Bad levels and limits are refused before anything is sent (status 0).
+    An app key sees its own app and environment (and Homelab's events about them). Asking for another app or env gives 404.
+    Needs the `logs:read` scope, which every app key has. Admin keys need it too.
+    TS `logs.search({ q, level, minLevel, since, before, limit })`, Python `logs.search(q=, level=, min_level=, since=, before=, limit=)`,
+    Rust `logs().search(LogQuery { q, level, min_level, since, before, limit, ..Default::default() })`.
+Python only: `homelab.logs.setup(level="DEBUG")` makes Python's `logging` print one JSON line per record to stdout,
+    which Homelab reads for the level, message and extra fields. Needs no token. Safe to call twice (the second call only changes the level).
+    DEBUG, INFO, WARNING, ERROR and CRITICAL become debug, info, warn, error and fatal.
+
 ## Types
 Folder { name, disk, app, env, files, bytes, created_at }
 File   { id, folder, name, content_type, size, sha256, created_at, created_by, tags[], info{}, meta{} }
@@ -122,4 +138,6 @@ DbTable  { schema, name, rows }
 DbRows   { columns[], rows[][], truncated }
 DbQueryResult { columns[], rows[][], truncated, row_count, command, ms }
 Release  { tag, prerelease, commit, date, summary, notes }   (tag such as v0.4.0 or v0.4.0-dev.2; notes are markdown)
+LogLine  { id, time, level, msg, app, env, service, stream (stdout | stderr | event), extra{} }
+LogSearchResult { lines[], counts{unknown, debug, info, warn, error, fatal}, next }
 Unknown fields from the server are kept/ignored, never an error (forward compatible).

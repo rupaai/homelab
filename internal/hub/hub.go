@@ -74,6 +74,7 @@ type Adapters struct {
 	Services  core.Services  // may be nil: no files, databases or data (platform services)
 	Databases core.Databases // may be nil: homelab-services isn't told about databases
 	Versions  core.Versions  // may be nil: builds get no release versions
+	Logs      core.Logs      // may be nil: logs aren't stored
 }
 
 // Hub is the core. Create it with New and run it with Run.
@@ -105,6 +106,10 @@ type Hub struct {
 	keyMu      sync.Mutex
 	keyTouched map[string]time.Time // key id -> last "last used" written
 	keyLogged  map[string]time.Time // key id + read -> last time it was logged
+
+	logMu      sync.Mutex
+	logMasks   map[envKey]logMask // app environment -> what IngestLogs needs, for a minute
+	logSending chan struct{}      // limits the activity events being sent to Logs at once
 }
 
 // watch is prod being watched after a promote (C7).
@@ -260,6 +265,7 @@ func (h *Hub) logEvent(ctx context.Context, e state.Event) {
 		h.log.Error("activity log", "err", err)
 	}
 	h.log.Info(e.Action, "app", e.App, "env", e.Env, "actor", e.Actor, "detail", e.Detail)
+	h.sendLogEvent(e)
 }
 
 // parse reads an app's manifest with the defaults that come from its repo.
@@ -638,6 +644,7 @@ func (h *Hub) deploy(ctx context.Context, a state.App, env string, rel core.Rele
 	if err := h.ad.Deployer.Deploy(ctx, spec); err != nil {
 		return err
 	}
+	h.forgetLogMask(a.ID, env) // the app may print its new secrets from its first second
 	h.registerDatabase(a, env, rel)
 	return nil
 }

@@ -7,6 +7,7 @@ use homelab_services::app::{app, AppState};
 use homelab_services::config::{prepare_data_dir, prepare_storage, Config};
 use homelab_services::dbs::Dbs;
 use homelab_services::files::{spawn_purge, Files};
+use homelab_services::logs::{spawn_retention, Logs};
 use homelab_services::releases;
 use homelab_services::secrets::Secrets;
 use homelab_services::VERSION;
@@ -25,7 +26,8 @@ With no arguments, runs the server. It is configured with:\n\
   HOMELAB_SERVICES_STORAGE JSON list of disks: [{\"name\":\"main\",\"path\":\"/mnt/storage\"}]\n\
   HOMELAB_SERVICES_MAX_UPLOAD  biggest upload in bytes (optional, default 10 GiB)\n\
   HOMELAB_SERVICES_SECRETS_KEY    path of the master key file for secrets (optional; no secrets without it)\n\
-  HOMELAB_SERVICES_SECRETS_IMPORT path of homelabd's old secrets.db, imported once (optional)";
+  HOMELAB_SERVICES_SECRETS_IMPORT path of homelabd's old secrets.db, imported once (optional)\n\
+  HOMELAB_SERVICES_LOGS    JSON like {\"min_level\":\"info\",\"services\":{\"files\":\"debug\"},\"max_mb\":2048} (optional)";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -91,6 +93,8 @@ async fn serve(config: Config) -> Result<(), String> {
     )?);
     spawn_purge(files.clone());
     let dbs = Arc::new(Dbs::open(&config.data_dir.join("dbs.db"))?);
+    let logs = Arc::new(Logs::open(&config.data_dir.join("logs.db"), config.logs)?);
+    spawn_retention(logs.clone());
     let state = AppState {
         key: Arc::new(config.key),
         version: VERSION,
@@ -98,6 +102,7 @@ async fn serve(config: Config) -> Result<(), String> {
         secrets,
         secrets_problem,
         dbs,
+        logs,
         github_api: std::env::var("GITHUB_API_URL")
             .ok()
             .filter(|v| !v.trim().is_empty())

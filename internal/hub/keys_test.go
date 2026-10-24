@@ -310,7 +310,7 @@ func TestAppKeyIsInjectedAndStable(t *testing.T) {
 		t.Fatal("prod shares dev's token")
 	}
 	c, err := r.hub.Authenticate(ctx, tok)
-	if err != nil || c.Kind != KeyKindApp || c.App != "movies" || c.Env != core.Dev || !reflect.DeepEqual(c.Scopes, []string{ScopeUsersRead, ScopeReleasesRead, ScopeSecretsRead}) {
+	if err != nil || c.Kind != KeyKindApp || c.App != "movies" || c.Env != core.Dev || !reflect.DeepEqual(c.Scopes, []string{ScopeUsersRead, ScopeReleasesRead, ScopeLogsRead, ScopeSecretsRead}) {
 		t.Fatalf("caller=%+v err=%v", c, err)
 	}
 	if got := c.Label(); got != "app key movies/dev" {
@@ -548,5 +548,20 @@ func TestDBReadScope(t *testing.T) {
 	// An app's own key needs no scope for its own database.
 	if slices.Contains(appKeyScopes(&manifest.Manifest{}), ScopeDBRead) {
 		t.Fatal("app keys get db:read")
+	}
+}
+
+func TestLogsReadIsAnAdminScopeAndEveryAppKeyHasIt(t *testing.T) {
+	if err := checkScope(ScopeLogsRead); err != nil {
+		t.Fatalf("an admin key may have logs:read: %v", err)
+	}
+	for _, api := range []string{"", "secrets_api: none\n", "secrets_api: write\n"} {
+		m, err := manifest.Parse([]byte("id: movies\nimage: ghcr.io/a/movies\ntag: \"{commit}\"\nport: 80\n"+api), manifest.Defaults{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Contains(appKeyScopes(m), ScopeLogsRead) {
+			t.Errorf("%q: app key lacks logs:read", api)
+		}
 	}
 }

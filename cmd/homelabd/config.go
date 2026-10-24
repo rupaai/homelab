@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -37,11 +38,59 @@ type Config struct {
 	Storage []core.Disk `yaml:"storage"`
 	// MaxUploadMB is the largest file Homelab accepts, in MB. Default 10240 (10 GB).
 	MaxUploadMB int64 `yaml:"max_upload_mb"`
+	// Logs is how much of the logs Homelab keeps (platform services).
+	Logs LogsConfig `yaml:"logs"`
 	// Unknown are top-level keys this version doesn't know, e.g. a setting added by a newer
 	// Homelab after an update went back. They are skipped with a warning, not an error, so
 	// Homelab still starts.
 	Unknown []string `yaml:"-"`
 }
+
+// LogsConfig is the logs: part of config.yaml. All of it is optional.
+type LogsConfig struct {
+	// MinLevel keeps that level and above for Homelab's own services. Default info.
+	MinLevel string `yaml:"min_level"`
+	// Services sets the level for single services, e.g. {files: debug}.
+	Services map[string]string `yaml:"services"`
+	// MaxMB is the most disk the logs may take. Default 2048.
+	MaxMB int64 `yaml:"max_mb"`
+}
+
+// logsJSON checks the logs settings and gives them as the JSON homelab-services reads
+// (HOMELAB_SERVICES_LOGS). Nothing set gives "".
+func (l LogsConfig) logsJSON() (string, error) {
+	if l.MinLevel == "" && len(l.Services) == 0 && l.MaxMB == 0 {
+		return "", nil
+	}
+	out := map[string]any{}
+	if l.MinLevel != "" {
+		if !core.ValidLogLevel(l.MinLevel) {
+			return "", fmt.Errorf("config.yaml: logs: min_level must be one of %s, not %q", strings.Join(core.LogLevels, ", "), l.MinLevel)
+		}
+		out["min_level"] = l.MinLevel
+	}
+	if len(l.Services) > 0 {
+		for name, lvl := range l.Services {
+			if !logServiceName.MatchString(name) {
+				return "", fmt.Errorf("config.yaml: logs: services names use lowercase letters, numbers, - and _, not %q", name)
+			}
+			if !core.ValidLogLevel(lvl) {
+				return "", fmt.Errorf("config.yaml: logs: services: %s must be one of %s, not %q", name, strings.Join(core.LogLevels, ", "), lvl)
+			}
+		}
+		out["services"] = l.Services
+	}
+	if l.MaxMB != 0 {
+		if l.MaxMB < 16 || l.MaxMB > 1<<20 {
+			return "", fmt.Errorf("config.yaml: logs: max_mb must be between 16 and 1048576, not %d", l.MaxMB)
+		}
+		out["max_mb"] = l.MaxMB
+	}
+	b, err := json.Marshal(out)
+	return string(b), err
+}
+
+var logServiceName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
 const (
 	defaultListen      = "127.0.0.1:7080"
@@ -144,6 +193,9 @@ func parseConfig(b []byte) (Config, error) {
 	}
 	if c.MaxUploadMB < 1 || c.MaxUploadMB > 1<<20 {
 		return c, fmt.Errorf("config.yaml: max_upload_mb must be between 1 and 1048576, not %d", c.MaxUploadMB)
+	}
+	if _, err := c.Logs.logsJSON(); err != nil {
+		return c, err
 	}
 	return c, nil
 }

@@ -28,6 +28,7 @@ use serde_json::{json, Value};
 
 use crate::app::{error_response, not_found, AppState};
 use crate::caller::{Caller, Kind};
+use crate::logs::Level;
 use crate::secrets::{self, Error, Info, Kind as SecretKind, Secrets};
 
 /// Scopes an app key needs.
@@ -246,6 +247,14 @@ async fn blocking<T: Send + 'static>(
         .map_err(ApiError::from)
 }
 
+/// Reads of config secrets (every deploy) are debug; reads of an app's own are info.
+fn read_level(kind: SecretKind) -> Level {
+    match kind {
+        SecretKind::Config => Level::Debug,
+        SecretKind::App => Level::Info,
+    }
+}
+
 fn now_ms() -> i64 {
     crate::app::unix_now().saturating_mul(1000)
 }
@@ -314,6 +323,14 @@ async fn app_get(
     let found = blocking(store, move |st| st.get(&p.app, &p.env, &key, version))
         .await?
         .ok_or_else(missing)?;
+    s.logs.event(
+        "secrets",
+        read_level(found.kind),
+        &format!("secret read: {name}"),
+        json!({ "name": name, "version": found.version, "by": crate::logs::who(&caller) }),
+        &caller.app,
+        &caller.env,
+    );
     Ok(Json(json!({
         "name": name,
         "value": found.value.as_str(),
@@ -345,6 +362,7 @@ async fn app_put(
         ));
     }
     let key = name.clone();
+    let (app, env) = (p.app.clone(), p.env.clone());
     let version = blocking(store, move |st| {
         st.put(
             &p.app,
@@ -357,6 +375,14 @@ async fn app_put(
         )
     })
     .await?;
+    s.logs.event(
+        "secrets",
+        Level::Info,
+        &format!("secret saved: {name}"),
+        json!({ "name": name, "version": version, "by": crate::logs::who(&caller) }),
+        &app,
+        &env,
+    );
     Ok(Json(json!({ "name": name, "version": version })).into_response())
 }
 
@@ -371,10 +397,19 @@ async fn app_delete(State(s): State<AppState>, caller: Caller, Path(name): Path<
             "Names starting with HOMELAB_ are Homelab's own.",
         ));
     }
+    let (app, env, key) = (p.app.clone(), p.env.clone(), name.clone());
     blocking(store, move |st| {
-        st.delete(&p.app, &p.env, &name, Some(SecretKind::App))
+        st.delete(&p.app, &p.env, &key, Some(SecretKind::App))
     })
     .await?;
+    s.logs.event(
+        "secrets",
+        Level::Info,
+        &format!("secret deleted: {name}"),
+        json!({ "name": name, "by": crate::logs::who(&caller) }),
+        &app,
+        &env,
+    );
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -456,9 +491,18 @@ async fn sys_get(
     let (app, env) = place(&q);
     let version = parse_version(&q)?;
     let key = name.clone();
+    let place = (app.clone(), env.clone());
     let found = blocking(store, move |st| st.get(&app, &env, &key, version))
         .await?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "There's no such secret."))?;
+    s.logs.event(
+        "secrets",
+        read_level(found.kind),
+        &format!("secret read: {name}"),
+        json!({ "name": name, "version": found.version, "by": "system" }),
+        &place.0,
+        &place.1,
+    );
     Ok(Json(json!({
         "name": name,
         "kind": found.kind.as_str(),
@@ -497,10 +541,19 @@ async fn sys_put(
     };
     let by = clean_by(&body.by)?;
     let key = name.clone();
+    let (a, e, who) = (app.clone(), env.clone(), by.clone());
     let version = blocking(store, move |st| {
         st.put(&app, &env, &key, kind, &body.value, &by, now_ms())
     })
     .await?;
+    s.logs.event(
+        "secrets",
+        Level::Info,
+        &format!("secret saved: {name}"),
+        json!({ "name": name, "version": version, "kind": kind.as_str(), "by": who }),
+        &a,
+        &e,
+    );
     Ok(Json(json!({ "name": name, "version": version })).into_response())
 }
 
@@ -521,7 +574,16 @@ async fn sys_delete(
                 .ok_or_else(|| err(StatusCode::BAD_REQUEST, "The kind is config or app."))?,
         ),
     };
-    blocking(store, move |st| st.delete(&app, &env, &name, only)).await?;
+    let (a, e, key) = (app.clone(), env.clone(), name.clone());
+    blocking(store, move |st| st.delete(&app, &env, &key, only)).await?;
+    s.logs.event(
+        "secrets",
+        Level::Info,
+        &format!("secret deleted: {name}"),
+        json!({ "name": name, "by": "system" }),
+        &a,
+        &e,
+    );
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -801,6 +863,7 @@ mod tests {
             secrets: None,
             secrets_problem: "broken".into(),
             dbs: env.dbs.clone(),
+            logs: env.logs.clone(),
             github_api: String::new(),
         };
         let router = crate::app::app(state);

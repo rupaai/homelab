@@ -390,3 +390,59 @@ pub struct Release {
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
+
+/// One log line. Unknown fields from the server end up in `raw`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LogLine {
+    pub id: u64,
+    /// An RFC 3339 time.
+    pub time: String,
+    /// `unknown`, `debug`, `info`, `warn`, `error` or `fatal`.
+    pub level: String,
+    pub msg: String,
+    pub app: String,
+    pub env: String,
+    pub service: String,
+    /// `stdout`, `stderr` or `event`.
+    pub stream: String,
+    /// Extra fields of a JSON log line.
+    pub extra: Map<String, Value>,
+    #[serde(flatten)]
+    pub raw: Map<String, Value>,
+}
+
+/// The answer to `logs().search`: newest lines first.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LogSearchResult {
+    pub lines: Vec<LogLine>,
+    /// Lines per level under the same search, ignoring `level` and `min_level`.
+    pub counts: std::collections::BTreeMap<String, u64>,
+    /// Pass as `before` for the next older page; `None` when there is none.
+    pub next: Option<String>,
+}
+
+/// What to look for. Every field is optional; the default asks for the newest lines.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LogQuery {
+    /// Words to find in the message and extra fields.
+    pub q: Option<String>,
+    /// Exact levels: `unknown`, `debug`, `info`, `warn`, `error`, `fatal`.
+    pub level: Vec<String>,
+    /// This level and louder. Lines with an unknown level are always kept.
+    pub min_level: Option<String>,
+    /// Admin keys only; an app key sees its own app and environment.
+    pub app: Option<String>,
+    pub env: Option<String>,
+    pub service: Option<String>,
+    /// RFC 3339 text or unix milliseconds.
+    pub since: Option<String>,
+    pub until: Option<String>,
+    /// A line id: only older lines. Use `next` from the last answer.
+    pub before: Option<u64>,
+    /// A line id: only newer lines (to follow along).
+    pub after: Option<u64>,
+    /// 1 to 500. Default 100.
+    pub limit: Option<u32>,
+}

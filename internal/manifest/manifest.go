@@ -64,6 +64,8 @@ type Manifest struct {
 	// default), "write" (also save and delete the app's own secrets) or "none".
 	SecretsAPI string `yaml:"secrets_api"`
 	Memory     string `yaml:"memory"`
+	// Logs says how much of the app's log Homelab keeps (see LogsConfig).
+	Logs LogsConfig `yaml:"logs"`
 	// Database says which database each environment gets (see core.Database*): "postgres",
 	// "sqlite", or a map {engine: sqlite, path: /data/app.db} to use a sqlite file the app
 	// already keeps in one of its data folders. DatabaseRaw is what the file says; Parse
@@ -232,6 +234,24 @@ func Parse(b []byte, d Defaults) (*Manifest, error) {
 	return &m, nil
 }
 
+// LogsConfig is the logs: part of homelab.yaml.
+type LogsConfig struct {
+	// MinLevel keeps that level and above: debug, info, warn, error or fatal. Empty means
+	// the default: debug on dev, info on prod (see LogMinLevel).
+	MinLevel string `yaml:"min_level"`
+}
+
+// LogMinLevel is the lowest log level kept for an environment of the app.
+func (m *Manifest) LogMinLevel(env string) string {
+	if m.Logs.MinLevel != "" {
+		return m.Logs.MinLevel
+	}
+	if env == core.Dev {
+		return "debug"
+	}
+	return "info"
+}
+
 func (m *Manifest) validate() error {
 	var problems []string
 	add := func(f string, a ...any) { problems = append(problems, fmt.Sprintf(f, a...)) }
@@ -265,6 +285,9 @@ func (m *Manifest) validate() error {
 	case SecretsAPIRead, SecretsAPIWrite, SecretsAPINone:
 	default:
 		add("secrets_api must be read, write or none")
+	}
+	if l := m.Logs.MinLevel; l != "" && !core.ValidLogLevel(l) {
+		add("logs: min_level must be one of %s, not %q", strings.Join(core.LogLevels, ", "), l)
 	}
 	switch m.Promotion {
 	case core.PromotionManual, core.PromotionAutoDev, core.PromotionAuto:

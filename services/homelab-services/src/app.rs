@@ -17,6 +17,7 @@ use crate::caller::verify;
 use crate::dbs::Dbs;
 use crate::dbs_api;
 use crate::files::{self, Files};
+use crate::logs::{self, Logs};
 use crate::releases_api;
 use crate::secrets::Secrets;
 use crate::secrets_api;
@@ -37,6 +38,8 @@ pub struct AppState {
     pub secrets_problem: String,
     /// The databases service.
     pub dbs: Arc<Dbs>,
+    /// The logs service.
+    pub logs: Arc<Logs>,
     /// The GitHub API address the release routes call (`https://api.github.com`).
     pub github_api: String,
 }
@@ -51,6 +54,7 @@ pub fn app(state: AppState) -> Router {
         .merge(secrets_api::routes())
         .merge(dbs_api::routes())
         .merge(releases_api::routes())
+        .merge(logs::routes())
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -103,6 +107,9 @@ async fn require_caller(State(state): State<AppState>, mut req: Request, next: N
                 return refusal.into_response();
             }
             if let Some(refusal) = releases_api::refuse_path(&caller, req.uri().path()) {
+                return refusal.into_response();
+            }
+            if let Some(refusal) = logs::refuse_path(&caller, req.uri().path()) {
                 return refusal.into_response();
             }
             req.extensions_mut().insert(caller);
