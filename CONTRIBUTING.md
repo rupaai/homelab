@@ -4,7 +4,7 @@ Welcome. This guide takes you from nothing to your first pull request. A pull re
 
 Before you start, know two things:
 
-- For what is going on right now, read [HANDOVER.md](HANDOVER.md).
+- For what is going on right now, read [HANDOVER.md](HANDOVER.md) and the waiting notes in `handover/notes/`.
 - For how Homelab works, read [docs/how-it-works.md](docs/how-it-works.md).
 
 ## 1. GitHub setup, from zero
@@ -143,7 +143,7 @@ You are in charge, not the AI. Read what it changes before you commit. The rules
 
 ## 6. Rules
 
-- Keep the docs current: every PR that changes how something works must update HANDOVER.md (and docs/how-it-works.md if a block changes) in the same PR.
+- Keep the docs current: do not edit the feature blocks in HANDOVER.md. Add a note in `handover/notes/<feature>/` (see [handover/README.md](handover/README.md)), and mark it `ready` when the feature is done. A bot folds it into HANDOVER.md. Update docs/how-it-works.md in the same PR if a block changes.
 - Secrets: only Labiba sees app secret values. Never ask for them, print them, log them, or commit them. This applies to you and to any AI helper.
 - On mars, Homelab only touches its own containers (homelab-*). Never change Gabriele's own containers (Home Assistant, matterbridge, cloudflared, matter-server, tplink-proxy).
 - Never run things on mars or change production without asking Labiba.

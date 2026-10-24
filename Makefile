@@ -2,7 +2,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: all build web services test test-docker check check-services clean
+.PHONY: all build web services test test-docker check check-services check-handover clean
 
 all: build
 
@@ -28,7 +28,11 @@ check:
 check-services:
 	cd services && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 
-test: check check-services
+# The handover notes script (scripts/handover.py) and its tests. Python 3, no packages.
+check-handover:
+	python3 scripts/test_handover.py
+
+test: check check-services check-handover
 
 # The Docker adapter's end-to-end test needs a running Docker.
 test-docker:
