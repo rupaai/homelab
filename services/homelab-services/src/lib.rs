@@ -3,6 +3,7 @@
 //! homelabd is the only caller. It signs every request it forwards, and this
 //! server refuses anything that is not signed (except /healthz).
 
+pub mod api;
 pub mod app;
 pub mod caller;
 pub mod config;

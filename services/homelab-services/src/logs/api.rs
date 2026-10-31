@@ -11,7 +11,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::extract::{Query as UrlQuery, State};
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::DateTime;
@@ -19,7 +19,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{Level, Logs, Query, RawLine, Scope, MAX_EXTRA, MAX_LIMIT};
-use crate::app::{error_response, not_found, AppState};
+use crate::api::{err, valid_place, ApiError, Reply};
+use crate::app::{not_found, AppState};
 use crate::caller::{Caller, Kind};
 use crate::disk::valid_name;
 
@@ -65,23 +66,8 @@ pub fn refuse_path(caller: &Caller, path: &str) -> Option<ApiError> {
     None
 }
 
-pub struct ApiError(StatusCode, String);
-
-fn err(status: StatusCode, message: impl Into<String>) -> ApiError {
-    ApiError(status, message.into())
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        error_response(self.0, &self.1)
-    }
-}
-
-type Reply = Result<Response, ApiError>;
-
 fn forbidden(caller: &Caller, why: &str) -> ApiError {
-    tracing::warn!(kind = ?caller.kind, app = %caller.app, env = %caller.env, "logs request refused");
-    err(StatusCode::FORBIDDEN, why)
+    crate::api::forbidden("logs", caller, why)
 }
 
 fn system_caller(caller: &Caller) -> Result<(), ApiError> {
@@ -112,11 +98,6 @@ async fn blocking<T: Send + 'static>(
         .await
         .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong."))?
         .map_err(|m| err(StatusCode::INTERNAL_SERVER_ERROR, m))
-}
-
-/// An app name, `dev` or `prod`.
-fn valid_place(app: &str, env: &str) -> bool {
-    valid_name(app, 60) && matches!(env, "dev" | "prod")
 }
 
 // ---- for homelabd ----
