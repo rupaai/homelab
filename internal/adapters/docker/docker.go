@@ -333,7 +333,17 @@ const stopSettle = 15 * time.Second
 
 // Observe reports one entry per environment Homelab has containers for.
 func (d *Deployer) Observe(ctx context.Context) ([]core.Running, error) {
-	cs, err := d.api.containers(ctx, labelApp)
+	return d.observe(ctx, labelApp)
+}
+
+// ObserveApp is Observe for one app: the engine lists only that app's containers, and only
+// those are inspected.
+func (d *Deployer) ObserveApp(ctx context.Context, app string) ([]core.Running, error) {
+	return d.observe(ctx, labelApp+"="+app)
+}
+
+func (d *Deployer) observe(ctx context.Context, label string) ([]core.Running, error) {
+	cs, err := d.api.containers(ctx, label)
 	if err != nil {
 		return nil, err
 	}
