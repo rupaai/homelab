@@ -336,7 +336,7 @@ func (h *Hub) Reconcile(ctx context.Context) {
 
 // observeApp reports what runs for one app, by environment.
 func (h *Hub) observeApp(ctx context.Context, app string) (map[string]*core.Running, error) {
-	running, err := h.ad.Deployer.Observe(ctx)
+	running, err := h.ad.Deployer.ObserveApp(ctx, app)
 	if err != nil {
 		return nil, err
 	}
@@ -997,7 +997,7 @@ func (h *Hub) checkEnv(ctx context.Context, a state.App, env string, want *core.
 func (h *Hub) waitHealthy(ctx context.Context, a state.App, env string, want *core.Release) (bool, string) {
 	deadline := h.cfg.Now().Add(h.cfg.HealthyWait)
 	for {
-		running, err := h.ad.Deployer.Observe(ctx)
+		running, err := h.ad.Deployer.ObserveApp(ctx, a.ID)
 		if err == nil {
 			var r *core.Running
 			for i := range running {

@@ -141,13 +141,16 @@ func (r *Registry) PullAuth(context.Context, string) (core.RegistryAuth, error) 
 // Deployer is a fake container runtime. Running environments are kept in memory, and an
 // optional Serve hook lets tests stand a real HTTP server up on the host port.
 type Deployer struct {
-	mu       sync.Mutex
-	Envs     map[string]core.Running // "app/env"
-	Specs    map[string]core.EnvSpec
-	FailFor  map[string]error // digest -> error from Deploy
-	Calls    []string
-	LogTail  string // added to every Logs answer
-	FilesErr error  // what CheckFiles returns
+	mu      sync.Mutex
+	Envs    map[string]core.Running // "app/env"
+	Specs   map[string]core.EnvSpec
+	FailFor map[string]error // digest -> error from Deploy
+	Calls   []string
+	// FullObserves counts Observe calls; AppObserves counts ObserveApp calls by app.
+	FullObserves int
+	AppObserves  map[string]int
+	LogTail      string // added to every Logs answer
+	FilesErr     error  // what CheckFiles returns
 	// CopyErr, when set, is asked before each Copy; an error it returns fails the copy.
 	CopyErr func(from, to string) error
 
@@ -324,10 +327,30 @@ func (d *Deployer) SetServiceDown(app, env, detail string) {
 
 func (d *Deployer) Observe(context.Context) ([]core.Running, error) {
 	d.mu.Lock()
+	d.FullObserves++
+	d.mu.Unlock()
+	return d.observe("")
+}
+
+// ObserveApp is Observe for one app.
+func (d *Deployer) ObserveApp(_ context.Context, app string) ([]core.Running, error) {
+	d.mu.Lock()
+	if d.AppObserves == nil {
+		d.AppObserves = map[string]int{}
+	}
+	d.AppObserves[app]++
+	d.mu.Unlock()
+	return d.observe(app)
+}
+
+func (d *Deployer) observe(app string) ([]core.Running, error) {
+	d.mu.Lock()
 	defer d.mu.Unlock()
 	var out []core.Running
 	for _, r := range d.Envs {
-		out = append(out, r)
+		if app == "" || r.App == app {
+			out = append(out, r)
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].App+out[i].Env < out[j].App+out[j].Env })
 	return out, nil

@@ -71,6 +71,8 @@ type Deployer interface {
 	ImportSQL(ctx context.Context, app, env, file string) error
 	// Observe reports every environment Homelab runs, including stopped ones.
 	Observe(ctx context.Context) ([]Running, error)
+	// ObserveApp is Observe for one app only: it looks at that app's containers and no others.
+	ObserveApp(ctx context.Context, app string) ([]Running, error)
 	// Logs returns the last lines of an environment's logs, oldest first.
 	Logs(ctx context.Context, app, env string, lines int) (string, error)
 	// RemoveOldImages deletes the downloaded images of one app (repository image) that no
