@@ -3,10 +3,14 @@ name: Release
 # Every change merged to main that needs one becomes a release with a version (vX.Y.Z, picked
 # from the pull request titles by `homelab-services release`) and the program for the device,
 # the Mac and arm64 Linux. Homelab on the device updates itself from these. A merge of only
-# docs, chore, test, ci, style, refactor or build changes makes no release. The release is only
-# published when the checks pass, and in one step with its programs.
+# docs, chore, test, ci, style, refactor or build changes makes no release. The checks run once,
+# in ci.yml. This workflow starts when CI has finished on main, and publishes only if CI passed,
+# in one step with the programs. (A newer push cancels the CI run of an older one; that one makes
+# no release, and its changes go out with the next.)
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
 
 permissions:
@@ -18,17 +22,15 @@ concurrency:
 
 jobs:
   release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
+    env:
+      # The commit CI checked. GITHUB_SHA is the newest commit of main, which may be later.
+      SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
+          ref: ${{ github.event.workflow_run.head_sha }}
       - name: Build the release tool
         working-directory: services
         run: cargo build --release --locked
@@ -37,7 +39,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          if ! VERSION=$(services/target/release/homelab-services release prod --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --first v0.20.0 --dry-run 2>raw-notes.txt); then
+          if ! VERSION=$(services/target/release/homelab-services release prod --repo "$GITHUB_REPOSITORY" --commit "$SHA" --first v0.20.0 --dry-run 2>raw-notes.txt); then
             cat raw-notes.txt >&2
             exit 1
           fi
@@ -48,25 +50,16 @@ jobs:
           fi
           # Keep only the notes: drop the tool's own messages.
           grep -v -e '^Dry run: ' -e ' is already made for this commit\.$' raw-notes.txt > notes.md || true
-          printf '\nBuilt from %s. On the device, update from the companion (Resources). For a first install see docs/history/milestone6.md.\n' "${GITHUB_SHA::7}" >> notes.md
+          printf '\nBuilt from %s. On the device, update from the companion (Resources). For a first install see docs/history/milestone6.md.\n' "${SHA::7}" >> notes.md
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-      - name: Rust targets for homelab-services
+      - name: Build the programs
         if: steps.version.outputs.version != ''
-        run: |
-          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
-          pip install ziglang==0.17.0 cargo-zigbuild
-      - name: Build the companion
-        if: steps.version.outputs.version != ''
-        working-directory: web
-        run: npm ci && npm run check && npm test && npm run build
-      - name: Check the Go code
-        if: steps.version.outputs.version != ''
-        run: make check
-      - name: Build and publish the release
+        uses: ./.github/actions/build-dist
+        with:
+          version: ${{ steps.version.outputs.version }}
+      - name: Publish the release
         if: steps.version.outputs.version != ''
         env:
           VERSION: ${{ steps.version.outputs.version }}
           GH_TOKEN: ${{ github.token }}
-        run: |
-          scripts/build-release.sh "$VERSION"
-          gh release create "$VERSION" dist/* --target "$GITHUB_SHA" --title "$VERSION" --notes-file notes.md
+        run: gh release create "$VERSION" dist/* --target "$SHA" --title "$VERSION" --notes-file notes.md

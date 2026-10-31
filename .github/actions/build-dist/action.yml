@@ -1,0 +1,36 @@
+name: Build dist
+description: >-
+  Builds every program of a release into dist/ (homelabd for Linux and Mac, homelab-services
+  for Linux, with the companion inside) plus checksums. Used by the release and test-build
+  workflows. The caller checks out the code first and builds the release tool on its own.
+
+inputs:
+  version:
+    description: The version to stamp into the programs, for example v0.21.0.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v7
+      with:
+        go-version-file: go.mod
+    - uses: actions/setup-node@v7
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: web/package-lock.json
+    - name: Rust targets for homelab-services
+      shell: bash
+      run: |
+        rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+        pip install ziglang==0.17.0 cargo-zigbuild
+    - name: Build the companion
+      shell: bash
+      working-directory: web
+      run: npm ci && npm run build
+    - name: Build the programs
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: scripts/build-release.sh "$VERSION"
