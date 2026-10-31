@@ -23,7 +23,7 @@ Each folder's README has a quick start and every call. Services so far: **files*
 
 ## The contract every plugin follows
 
-requests, reading answers, and turning errors into one error type. The source of truth is
+Each plugin is a thin wrapper: it makes the web requests, reads the answers, and turns errors into one error type. The source of truth is
 docs/files.openapi.yaml, docs/secrets.openapi.yaml, docs/logs.openapi.yaml, services/homelab-services/src/dbs_api.rs and docs/platform-services.md.
 
 ## Config

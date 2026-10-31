@@ -66,6 +66,7 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
 - `web/`: the companion (SvelteKit, built to static files and embedded in homelabd).
 - `plugins/`: thin libraries for apps in TypeScript, Python and Rust.
 - `docs/`: guides for app developers. `docs/history/`: one doc per milestone.
+- `docs/map.md`: the knowledge map (which files to open to change something). `docs/topics/`: one page per topic, simple first and deeper below.
 - `scripts/build-release.sh`: the release build. `.github/workflows/`: CI and releases.
 - Plans and decisions outside the repo: the project's shared files, `homehub/` folder
   (`milestones.md`, `blocks/*_decisions.md`, `databases_plan.md`, `os_basics_ideas.md`).
