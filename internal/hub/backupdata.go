@@ -1,4 +1,4 @@
-// Data copies made before a promote, and restoring them.
+// Copies of an app environment's data (folders and database dump) made before a promote, and restoring them.
 
 package hub
 
