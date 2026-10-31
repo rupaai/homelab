@@ -28,14 +28,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
       - name: Build the release tool
         working-directory: services
         run: cargo build --release --locked
@@ -56,20 +48,11 @@ jobs:
             exit 0
           fi
           echo "version=$BASE.${SHA::7}" >> "$GITHUB_OUTPUT"
-      - name: Rust targets for homelab-services
+      - name: Build the programs
         if: steps.version.outputs.version != ''
-        run: |
-          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
-          pip install ziglang==0.17.0 cargo-zigbuild
-      - name: Build the companion
-        if: steps.version.outputs.version != ''
-        working-directory: web
-        run: npm ci && npm run build
-      - name: Build homelabd
-        if: steps.version.outputs.version != ''
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: scripts/build-release.sh "$VERSION"
+        uses: ./.github/actions/build-dist
+        with:
+          version: ${{ steps.version.outputs.version }}
       - name: Replace the test version
         if: steps.version.outputs.version != ''
         env:
