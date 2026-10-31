@@ -73,7 +73,7 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
 ## 3. State of each part
 <!-- feature:deploy-loop -->
 - **Deploy loop** (milestone 1): add an app by `owner/name`, builds from GitHub Actions, dev
-  and prod, promote, rollback, health checks, logs. Done.
+  and prod, promote, rollback, health checks, logs. Each round asks Docker once per app, not once per app per app. Done.
 <!-- /feature:deploy-loop -->
 <!-- feature:apps-no-setup -->
 - **Apps with no setup** (milestone 2): promotion modes `manual`, `auto-dev`, `auto` with
@@ -112,7 +112,7 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
   files on a disk (mars: `/mnt/storage/homelab`). Done. OpenAPI: `docs/files.openapi.yaml`.
 <!-- /feature:files -->
 <!-- feature:secrets -->
-- **Secrets**: encrypted in homelab-services, key in `<home>/secrets/master.key`. Set in the
+- **Secrets**: encrypted in homelab-services, key in `<home>/secrets/master.key` (homelabd makes it; the old Go store code is gone and only its data is imported once). Set in the
   companion. Only the owner, and people given "Can see secrets", can see values. API keys
   never read secrets. Views are logged, 5 versions kept, hidden in logs. Apps get them as files
   in `/run/secrets` (and as environment variables unless `secrets_as: files`).
@@ -137,7 +137,7 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
 - **Release versions**: `homelab-services release <prod|dev|test>` picks the next `vX.Y.Z` (or `-dev.N` / `-pr.N`) from PR titles and makes the GitHub release; works in any repo's CI. Every app gets versions with no repo change (dev `v0.4.0-dev.1`, prod `v0.4.0`), shown in the companion and set as `HOMELAB_VERSION`; GitHub refusing never blocks a deploy. Apps list theirs with `releases:read`. See [docs/platform-services.md](docs/platform-services.md).
 <!-- /feature:release-versions -->
 <!-- feature:own-releases -->
-- **Homelab's own releases**: `release.yml` runs `homelab-services release` for `vX.Y.Z` (first `v0.20.0`), test versions are `vX.Y.Z-pr.N.<commit>`; the companion shows the update's new/fix counts and notes (older ones were `build-N`).
+- **Homelab's own releases**: `release.yml` runs `homelab-services release` for `vX.Y.Z` (first `v0.20.0`) after CI passes on main (no checks of its own); both it and `test-build.yml` build through `.github/actions/build-dist`; test versions are `vX.Y.Z-pr.N.<commit>`; the companion shows the update's new/fix counts and notes (older ones were `build-N`).
 <!-- /feature:own-releases -->
 <!-- new-features -->
 
