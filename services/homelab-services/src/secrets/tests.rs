@@ -644,8 +644,7 @@ fn values_survive_closing_and_opening() {
 
 // ---- the one-time import from homelabd's Go store ----
 
-/// The Go fixture: made by the real Go store (see internal/adapters/secretstore/testdata),
-/// with a known key. See also TestRustImportFixtureOpens in the Go tests.
+/// The Go fixture: made once by the old Go store (since removed), with a known key.
 fn fixture_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/go-secrets")
 }

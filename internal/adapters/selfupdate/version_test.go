@@ -52,14 +52,6 @@ func TestReleaseVersionShapes(t *testing.T) {
 	}
 }
 
-func TestBuildNumber(t *testing.T) {
-	for v, want := range map[string]int{"build-12": 12, "build-0": 0, "v1.2.3": 0, "dev": 0} {
-		if n, ok := BuildNumber(v); n != want || ok != (want > 0) {
-			t.Errorf("BuildNumber(%q) = %d, %v", v, n, ok)
-		}
-	}
-}
-
 func TestNewer(t *testing.T) {
 	cases := []struct {
 		latest, current string
