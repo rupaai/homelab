@@ -20,13 +20,14 @@ use std::sync::Arc;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::app::{error_response, not_found, AppState};
+use crate::api::{err, ApiError, Reply};
+use crate::app::{not_found, AppState};
 use crate::caller::{Caller, Kind};
 use crate::logs::Level;
 use crate::secrets::{self, Error, Info, Kind as SecretKind, Secrets};
@@ -99,18 +100,6 @@ pub fn routes() -> Router<AppState> {
 
 // ---- errors ----
 
-pub struct ApiError(StatusCode, String);
-
-fn err(status: StatusCode, message: impl Into<String>) -> ApiError {
-    ApiError(status, message.into())
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        error_response(self.0, &self.1)
-    }
-}
-
 impl From<Error> for ApiError {
     fn from(e: Error) -> ApiError {
         match e {
@@ -133,12 +122,9 @@ impl From<Error> for ApiError {
     }
 }
 
-type Reply = Result<Response, ApiError>;
-
 /// What a caller who may not use secrets gets. Logged without any value.
 pub fn forbidden(caller: &Caller, why: &str) -> ApiError {
-    tracing::warn!(kind = ?caller.kind, app = %caller.app, env = %caller.env, "secrets request refused");
-    err(StatusCode::FORBIDDEN, why)
+    crate::api::forbidden("secrets", caller, why)
 }
 
 /// The answer for a caller kind that never gets secrets (people, admin keys).

@@ -10,13 +10,14 @@
 
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::app::{error_response, not_found, AppState};
+use crate::api::{err, ApiError, Reply};
+use crate::app::{not_found, AppState};
 use crate::caller::{Caller, Kind};
 use crate::releases::{create, plan, summary_of_notes, Channel, Options, Repo};
 use crate::releases_github::GitHub;
@@ -73,20 +74,6 @@ pub fn refuse_path(caller: &Caller, path: &str) -> Option<ApiError> {
     }
     None
 }
-
-pub struct ApiError(StatusCode, String);
-
-fn err(status: StatusCode, message: impl Into<String>) -> ApiError {
-    ApiError(status, message.into())
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        error_response(self.0, &self.1)
-    }
-}
-
-type Reply = Result<Response, ApiError>;
 
 /// A GitHub failure. GitHub saying no to the token (401, 403, or 404 on a write) is 403, so
 /// homelabd can tell the owner to fix the token; anything else is 424. Neither carries the
