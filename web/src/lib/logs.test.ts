@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FILTER_LEVELS, LEVELS, RANGES, addCounts, chipFor, countSummary, extraText, fixLogPage, levelInfo, lineTime, logsHref, logsParams, mergeNewer, newestId, noCounts, sinceFor } from './logs';
+import { FILTER_LEVELS, LEVELS, RANGES, addCounts, chipFor, extraText, fixLogPage, levelInfo, lineTime, logsHref, logsParams, mergeNewer, newestId, noCounts, sinceFor } from './logs';
 import type { LogLine } from './types';
 
 const line = (id: number, o: Partial<LogLine> = {}): LogLine => ({ id, time: '2026-10-23T22:00:00.123Z', level: 'info', msg: 'hi', app: 'a', env: 'prod', service: 'app', stream: 'stdout', extra: {}, ...o });
@@ -66,8 +66,6 @@ describe('chipFor', () => {
 });
 
 describe('counts', () => {
-	it('summarises the levels that have lines, loudest first', () => expect(countSummary({ ...noCounts(), warn: 12, error: 3 })).toBe('3 ERR · 12 WRN'));
-	it('is empty with no lines', () => expect(countSummary(noCounts())).toBe(''));
 	it('adds', () => expect(addCounts({ ...noCounts(), info: 1 }, { ...noCounts(), info: 2, error: 1 })).toMatchObject({ info: 3, error: 1, debug: 0 }));
 });
 

@@ -278,15 +278,6 @@ func prune(binDir string) {
 	}
 }
 
-// BuildNumber reads the number of an old release version such as "build-12".
-func BuildNumber(v string) (int, bool) {
-	r, ok := parseRelease(v)
-	if !ok || r.semver {
-		return 0, false
-	}
-	return r.major, true
-}
-
 // relink points binDir/name at target in one step.
 func relink(binDir, name, target string) error {
 	tmp := filepath.Join(binDir, "."+name+".tmp")

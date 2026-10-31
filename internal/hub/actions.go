@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,11 +23,6 @@ func userErr(f string, a ...any) error { return &UserError{Msg: fmt.Sprintf(f, a
 
 // ErrBusy means another action is already working on the app.
 var ErrBusy = &UserError{Msg: "Something else is already happening on this app. Try again when it's finished."}
-
-// ServeCompanion gives the companion its own address ("homelab").
-func (h *Hub) ServeCompanion(ctx context.Context, handler http.Handler) error {
-	return h.ad.Addresses.Ensure(ctx, "homelab", handler)
-}
 
 // ---- Registry: adding apps (A10) ----
 

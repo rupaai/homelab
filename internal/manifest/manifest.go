@@ -578,8 +578,3 @@ func AddressName(app, env string) string {
 	}
 	return app + "-" + env
 }
-
-// SecretNames is every secret the app gets: the ones the owner sets and the ones Homelab makes.
-func (m *Manifest) SecretNames() []string {
-	return append(slices.Clone(m.Secrets), m.GenerateSecrets...)
-}

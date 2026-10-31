@@ -62,8 +62,6 @@ export function deployedLabel(kind: DeployKind | string): string {
 	}
 }
 
-export const shortSha = (sha: string): string => sha.slice(0, 7);
-
 export const actorLabel = (actor: string): string => (actor === 'homelab' ? 'Homelab' : actor);
 
 export function isProblemAction(action: string): boolean {
