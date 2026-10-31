@@ -424,7 +424,7 @@ Homelab keeps the log lines of every app's containers, and a line for each thing
 - An app's lines are what its containers print (stdout and stderr). When Homelab first sees a container, it reads back up to 14 days of its logs.
 - Homelab's own lines have the app `homelab` and a service such as `files`. A line about an app (for example a file saved in that app's folder) also shows in that app's logs.
 - Lines are kept 14 days. A size cap (`max_mb` in `config.yaml`, default 2048 MB) deletes the oldest lines first when the store is full.
-- Secret values are hidden before a line is stored. A hidden value shows as `[secret NAME]`. Values shorter than 6 characters are not hidden. A secret saved a moment ago can show for up to a minute, because Homelab keeps its list of secrets for 60 seconds.
+- Secret values are hidden before a line is stored. A hidden value shows as `[secret NAME]`. Values shorter than 6 characters are not hidden. A secret saved a moment ago can show for a few seconds, because Homelab keeps its list of secrets for 5 seconds.
 - Homelab never writes SQL, query values, file contents or keys into a line.
 
 ### Levels

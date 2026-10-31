@@ -8,6 +8,8 @@ These rules are for any AI helper: Gemini, Claude, Codex or others. A person (of
 2. Then read docs/how-it-works.md. It says what each part does and where its code is.
 3. For the human steps (GitHub, PRs), see CONTRIBUTING.md.
 
+To find the files for a topic, use docs/map.md and docs/topics/.
+
 ## Build and test
 
 - `make test`: all Go and Rust checks. Run it before every push. CI runs the same.
