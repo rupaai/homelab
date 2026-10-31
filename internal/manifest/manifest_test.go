@@ -160,8 +160,8 @@ func TestGenerateSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(m.SecretNames(), ","); got != "TMDB_API_KEY,ADMIN_TOKEN" {
-		t.Fatalf("SecretNames = %s", got)
+	if got := strings.Join(m.GenerateSecrets, ","); got != "ADMIN_TOKEN" {
+		t.Fatalf("GenerateSecrets = %s", got)
 	}
 }
 

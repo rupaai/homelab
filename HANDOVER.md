@@ -58,7 +58,7 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
 - `internal/adapters/`: one folder per outside thing. `docker` (Compose), `github` (source,
   builds, ghcr images), `gitmirror`, `httphealth`, `local` (ports), `pocketid` (people and
   sign-in), `services` (starts and talks to homelab-services), `selfupdate`, `smtp`, `sysinfo`,
-  `sysres`, `webpush`, `secretstore` (old secrets store, only imported now), `fake` (for tests).
+  `sysres`, `webpush`, `secretstore` (makes master.key; the old store is only imported once), `fake` (for tests).
 - `internal/manifest/`: reads an app's `homelab.yaml`. `internal/identity/`: signed headers
   that tell an app who is using it. `internal/sharedir/`: lets containers write to their folders.
 - `services/homelab-services/`: the Rust program for platform services (files, secrets,

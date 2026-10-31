@@ -92,11 +92,6 @@ export function chipFor(line: Pick<LogLine, 'app' | 'env' | 'service'>): { text:
 	return { text: [line.app, line.env].filter(Boolean).join(' · ') || 'unknown', homelab: false };
 }
 
-/** "3 ERR · 12 WRN": the levels that have lines, loudest first. */
-export function countSummary(c: LogCounts): string {
-	return FILTER_LEVELS.filter((l) => c[l.level] > 0).map((l) => `${c[l.level]} ${l.tag}`).join(' · ');
-}
-
 export function addCounts(a: LogCounts, b: LogCounts): LogCounts {
 	const out = noCounts();
 	for (const l of LEVELS) out[l.level] = (a[l.level] ?? 0) + (b[l.level] ?? 0);
