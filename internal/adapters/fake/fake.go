@@ -177,6 +177,9 @@ func (d *Deployer) Deploy(_ context.Context, spec core.EnvSpec) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.Calls = append(d.Calls, "deploy "+spec.App+"/"+spec.Env+" "+spec.Release.Digest)
+	if spec.Recreate {
+		d.Calls = append(d.Calls, "recreate "+spec.App+"/"+spec.Env)
+	}
 	if err := d.FailFor[spec.Release.Digest]; err != nil {
 		return err
 	}

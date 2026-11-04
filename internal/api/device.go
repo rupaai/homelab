@@ -104,6 +104,17 @@ func (s *server) updateHomelab(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"version": version})
 }
 
+func (s *server) restartHomelab(w http.ResponseWriter, r *http.Request) {
+	if !decode(w, r, &struct{}{}, false) {
+		return
+	}
+	if err := s.hub.RestartHomelab(actionCtx(r), viewer(r)); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	accepted(w)
+}
+
 func (s *server) testVersions(w http.ResponseWriter, r *http.Request) {
 	tests, err := s.hub.TestVersions(r.Context())
 	if err != nil {

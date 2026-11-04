@@ -328,3 +328,23 @@ describe('release versions in the API', () => {
 		expect((await api.apps())[0].versionProblem).toContain('Contents: read and write');
 	});
 });
+
+describe('restart API', () => {
+	afterEach(() => vi.unstubAllGlobals());
+	const accepted = () => new Response('{"accepted":true}', { status: 202, headers: { 'Content-Type': 'application/json' } });
+	const post = expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ 'X-Homelab-Request': '1' }) });
+
+	it('posts a restart for one environment of an app', async () => {
+		const fetch = vi.fn().mockResolvedValue(accepted());
+		vi.stubGlobal('fetch', fetch);
+		await api.restart('movie night', 'dev');
+		expect(fetch).toHaveBeenCalledWith('/api/apps/movie%20night/envs/dev/restart', post);
+	});
+
+	it('posts a Homelab restart', async () => {
+		const fetch = vi.fn().mockResolvedValue(accepted());
+		vi.stubGlobal('fetch', fetch);
+		await api.restartHomelab();
+		expect(fetch).toHaveBeenCalledWith('/api/device/restart', post);
+	});
+});

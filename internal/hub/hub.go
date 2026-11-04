@@ -624,10 +624,16 @@ func (h *Hub) mounts(app, env string, data, folders []manifest.Data) ([]core.Mou
 }
 
 func (h *Hub) deploy(ctx context.Context, a state.App, env string, rel core.Release) error {
+	return h.deployWith(ctx, a, env, rel, false)
+}
+
+// deployWith is deploy; recreate makes fresh containers even when nothing changed.
+func (h *Hub) deployWith(ctx context.Context, a state.App, env string, rel core.Release, recreate bool) error {
 	spec, err := h.spec(ctx, a, env, rel)
 	if err != nil {
 		return err
 	}
+	spec.Recreate = recreate
 	if err := h.ad.Deployer.Prepare(ctx, spec); err != nil {
 		return err
 	}

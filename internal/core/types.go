@@ -123,6 +123,9 @@ type EnvSpec struct {
 	Services  []Service // more containers that run next to the app, e.g. a media server
 	// Postgres is the environment's database container (database: postgres); nil for none.
 	Postgres *Postgres
+	// Recreate makes fresh containers for the app and its services even when nothing
+	// changed, so new secrets and settings are picked up (a restart).
+	Recreate bool
 }
 
 // Postgres is the database container of one app environment. The deploy adapter runs it

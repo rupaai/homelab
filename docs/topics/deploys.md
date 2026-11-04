@@ -8,6 +8,7 @@ How a build of an app gets to dev and prod, and how it goes back. Back to [the m
 - **Prod** gets a build only when someone promotes it, or when the app is on `auto` and dev has stayed healthy for a set time.
 - A promote copies prod's data first. If the new version does not start or does not stay healthy, Homelab puts the old version back with its data.
 - Rollback starts the version before the current one. You do it by hand, or Homelab does it itself for 10 minutes after a promote.
+- An admin can restart an environment. Homelab makes fresh containers from the build that environment runs now, so new secrets and settings are picked up. The build does not change.
 - You see it on the app page in the companion ([apps/[id]/+page.svelte](../../web/src/routes/apps/%5Bid%5D/+page.svelte)), in the promote sheet ([PromoteSheet.svelte](../../web/src/lib/components/PromoteSheet.svelte)) and in the activity log.
 
 ## How it works
@@ -31,6 +32,7 @@ How a build of an app gets to dev and prod, and how it goes back. Back to [the m
 12. **Roll back by hand.** `Rollback` finds the newest earlier release that is not held (`previous` in `actions.go`) and starts it. It does not copy data back.
 13. **Clean up images.** After a healthy start, `removeOldImages` deletes the app's images that no container uses. It keeps what each environment runs now and what is in its recent history (`removeOldImages`, `actions.go`).
 14. **Mirror the code.** Every 10 minutes (`MirrorEvery`), `SyncMirrors` (in [manage.go](../../internal/hub/manage.go)) updates a full read-only git copy of each repo ([gitmirror.go](../../internal/adapters/gitmirror/gitmirror.go)).
+15. **Restart an environment.** The Restart button on an environment card ([RestartSheet.svelte](../../web/src/lib/components/RestartSheet.svelte)) calls `RestartEnv` ([actions.go](../../internal/hub/actions.go)). It needs the app's lock, an idle environment, and something running there. It deploys the release the environment runs now, with `Recreate` set. Compose then runs `up -d --remove-orphans --force-recreate` (`upArgs` in [docker.go](../../internal/adapters/docker/docker.go)), so the app, its extra services and its database container are all made again. The wanted release does not change, and no data is copied. The wait for health is the same as a promote's. Activity records `restart.started`, then `restart.done`, `restart.failed` or `restart.unhealthy`.
 
 ### Addresses and ports
 
@@ -75,6 +77,9 @@ How a build of an app gets to dev and prod, and how it goes back. Back to [the m
 | [internal/hub/access.go](../../internal/hub/access.go) | `Can`: who may do which action |
 | [internal/hub/auto_test.go](../../internal/hub/auto_test.go) | Auto-promote, smoke hold, watch and auto rollback tests |
 | [internal/hub/hub_test.go](../../internal/hub/hub_test.go), [observe_test.go](../../internal/hub/observe_test.go), [deploydata_test.go](../../internal/hub/deploydata_test.go) | Reconciler, observe and deploy data tests |
+| [internal/hub/restart_test.go](../../internal/hub/restart_test.go) | Tests for the environment restart and its refusals |
+| [internal/api/restart_test.go](../../internal/api/restart_test.go) | Tests for the environment restart route |
+| [web/src/lib/components/RestartSheet.svelte](../../web/src/lib/components/RestartSheet.svelte) | The restart confirm sheet for an environment |
 | [web/src/routes/apps/[id]/+page.svelte](../../web/src/routes/apps/%5Bid%5D/+page.svelte) | The app page: environments, deploy, promote, rollback |
 | [web/src/lib/components/PromoteSheet.svelte](../../web/src/lib/components/PromoteSheet.svelte) | The promote sheet: what prod runs now, what it will run, the changes |
 | [web/src/lib/components/PromotionSheet.svelte](../../web/src/lib/components/PromotionSheet.svelte) | Changes the promotion mode of an app |
@@ -88,6 +93,7 @@ How a build of an app gets to dev and prod, and how it goes back. Back to [the m
 - `POST /api/apps/{id}/deploy`: put the latest passing build (or a given commit) on dev.
 - `GET` and `POST /api/apps/{id}/promote`: preview, then promote dev's build to prod.
 - `GET` and `POST /api/apps/{id}/envs/{env}/rollback`: preview, then roll back an environment.
+- `POST /api/apps/{id}/envs/{env}/restart`: restart an environment with fresh containers (admins only).
 - `GET /api/apps/{id}/envs/{env}/logs`: the container log of an environment.
 - `PUT /api/apps/{id}/promotion`: set `manual`, `auto-dev` or `auto`.
 - `DELETE /api/apps/{id}`: remove the app. Both environments stop and its secrets are deleted. Its data folders are kept.
@@ -103,6 +109,8 @@ How a build of an app gets to dev and prod, and how it goes back. Back to [the m
 - **Smoke test failed:** the commit is held, so auto-promote never takes it. Someone can still promote it by hand (`smokeTest`, `auto.go`).
 - **Smoke test limits:** the test runs on dev's network with 512 MB of memory, no Linux capabilities, a read-only file system, and a 5 minute limit (`SmokeTimeout`). Container flags are in `smokeArgs` in `smoke.go`.
 - **Held commits:** rollback and auto-promote skip them (`previous`, `autoPromoteApp`).
+- **Restart refusals:** a restart is refused while the app or environment is busy, and when nothing runs there (`RestartEnv`, `actions.go`). Nothing is stopped first.
+- **Restart gap:** the containers are replaced in one `up` call, so the environment is down for a short time.
 - **Restart loop guard:** a container that stops again straight after a start waits 1 minute before the next start (`reconcileEnv`).
 - **Ports:** `ports:` from `homelab.yaml` are opened for prod only (`compose.go`).
 - **Compose names:** the project is `homelab-<app>-<env>` and the app service is `app` (`project` and `serviceName` in `compose.go`).
@@ -116,12 +124,13 @@ How a build of an app gets to dev and prod, and how it goes back. Back to [the m
 - To change the Compose file, edit `composeYAML` in [compose.go](../../internal/adapters/docker/compose.go). Then run the docker tests.
 - To add a `homelab.yaml` key, add it to the `Manifest` struct and `validate()` in [manifest.go](../../internal/manifest/manifest.go), and add a case to [manifest_test.go](../../internal/manifest/manifest_test.go).
 - To change who may promote, edit the route mapping in [api.go](../../internal/api/api.go) or `Can` in [access.go](../../internal/hub/access.go).
+- To change what a restart does, edit `RestartEnv` in [actions.go](../../internal/hub/actions.go) and `upArgs` in [docker.go](../../internal/adapters/docker/docker.go). Then run the hub and docker tests.
 
 **Test it**
 
 ```sh
 make check                              # gofmt, go vet, go test ./... (Go side)
-go test ./internal/manifest/... ./internal/hub/... ./internal/adapters/docker/... ./internal/adapters/github/... ./internal/adapters/gitmirror/...
+go test ./internal/manifest/... ./internal/hub/... ./internal/api/... ./internal/adapters/docker/... ./internal/adapters/github/... ./internal/adapters/gitmirror/...
 make test-docker                        # Docker end-to-end test, needs Docker running
 cd web && npm ci && npm run check && npm test
 ```

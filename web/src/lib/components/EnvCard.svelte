@@ -12,12 +12,14 @@
 		env,
 		onpromote,
 		onrollback,
+		onrestart,
 		ondeploy,
 		admin = false
-	}: { app: AppView; env: EnvView; onpromote: () => void; onrollback: () => void; ondeploy: () => void; admin?: boolean } = $props();
+	}: { app: AppView; env: EnvView; onpromote: () => void; onrollback: () => void; onrestart: () => void; ondeploy: () => void; admin?: boolean } = $props();
 
 	const build = $derived(app.latestBuild);
 	const canDeploy = $derived(env.env === 'dev' && build?.status === 'passed' && !build.deployed);
+	const canRestart = $derived(admin && !!env.version && env.state !== '');
 	const logsHref = $derived(`/apps/${encodeURIComponent(app.id)}/logs/${env.env}`);
 </script>
 
@@ -71,6 +73,9 @@
 		{/if}
 		{#if env.canRollback}
 			<button class="btn" type="button" onclick={onrollback} disabled={!!env.busy}>Roll back</button>
+		{/if}
+		{#if canRestart}
+			<button class="btn" type="button" onclick={onrestart} disabled={!!env.busy}>Restart</button>
 		{/if}
 		<a class="btn" href={searchHref(app.id, env.env)}>Logs</a>
 		<a class="btn" href={logsHref}>Raw output</a>

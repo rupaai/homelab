@@ -223,7 +223,12 @@ func (h *Hub) setWantAndApply(ctx context.Context, a state.App, env string, rel 
 }
 
 func (h *Hub) applyAndWait(ctx context.Context, a state.App, env string, rel core.Release, kind, actor string) bool {
-	if err := h.deploy(ctx, a, env, rel); err != nil {
+	return h.applyAndWaitWith(ctx, a, env, rel, kind, actor, false)
+}
+
+// applyAndWaitWith is applyAndWait; recreate makes fresh containers (a restart).
+func (h *Hub) applyAndWaitWith(ctx context.Context, a state.App, env string, rel core.Release, kind, actor string, recreate bool) bool {
+	if err := h.deployWith(ctx, a, env, rel, recreate); err != nil {
 		h.deployFailed(ctx, a.ID, env, err, false)
 		h.logEvent(ctx, state.Event{Actor: actor, App: a.ID, Env: env, Action: kind + ".failed", Detail: "Couldn't start " + rel.Label() + ": " + err.Error()})
 		return false
@@ -625,6 +630,54 @@ func (h *Hub) Rollback(ctx context.Context, appID, env string, by core.Viewer) e
 		return userErr("There's no earlier version to go back to.")
 	}
 	return h.setWantAndApply(ctx, a, env, *prev, "rollback", by, "Roll back to")
+}
+
+// RestartEnv makes fresh containers for an environment from the release it runs now, with
+// its services, so new secrets and settings are picked up. The wanted release stays as it is.
+func (h *Hub) RestartEnv(ctx context.Context, appID, env string, by core.Viewer) error {
+	a, err := h.store.App(ctx, appID)
+	if err != nil {
+		return userErr("There's no app %q.", appID)
+	}
+	if env != core.Dev && env != core.Prod {
+		return userErr("There's no environment %q.", env)
+	}
+	lock := h.appLock(a.ID)
+	if !lock.TryLock() {
+		return ErrBusy
+	}
+	e, err := h.store.Env(ctx, a.ID, env)
+	if err != nil {
+		lock.Unlock()
+		return err
+	}
+	running, err := h.ad.Deployer.ObserveApp(ctx, a.ID)
+	if err != nil {
+		lock.Unlock()
+		return err
+	}
+	if e.Want == nil || !slices.ContainsFunc(running, func(r core.Running) bool { return r.Env == env }) {
+		lock.Unlock()
+		return userErr("Nothing is running on %s, so there is nothing to restart.", env)
+	}
+	h.mu.Lock()
+	busy := h.st(a.ID, env).busy
+	h.mu.Unlock()
+	if busy != "" {
+		lock.Unlock()
+		return ErrBusy
+	}
+	rel, actor := *e.Want, by.Label()
+	h.logEvent(ctx, state.Event{Actor: actor, App: a.ID, Env: env, Action: "restart.started",
+		Detail: fmt.Sprintf("Restarting %s with fresh containers (%s)", env, rel.Label())})
+	h.setBusy(a.ID, env, "Restarting "+rel.Label())
+	go func() {
+		defer h.Kick()
+		defer lock.Unlock()
+		defer h.setBusy(a.ID, env, "")
+		h.applyAndWaitWith(context.WithoutCancel(ctx), a, env, rel, "restart", actor, true)
+	}()
+	return nil
 }
 
 // ---- Reading ----

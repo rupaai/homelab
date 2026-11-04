@@ -338,10 +338,12 @@ export const mockApi: Api = {
 			],
 			rebootRequired: true, updatesPending: 4, securityPending: 2, reportedAt: new Date().toISOString()
 		},
+		canRestart: true,
 		update: { managed: true, current: 'v0.20.0', latest: 'v0.21.0', available: true, checkedAt: new Date().toISOString(), lastResult: 'Updated to v0.20.0.',
 			changes: { breaking: 0, new: 2, fixes: 1, notes: '## New\n\n- Show what an update changes (#31)\n- Pick release versions from PR titles (#30)\n\n## Fixes\n\n- Keep the test version when Homelab restarts (#29)' } }
 	}),
 	updateHomelab: () => delay('v0.21.0'),
+	restartHomelab: () => delay(undefined as void),
 	testVersions: () => delay([{ version: 'v0.21.0-pr.17.1a2b3c4', pr: 17, title: 'Test version button' }, { version: 'v0.21.0-pr.16.9f8e7d6', pr: 16, title: 'Platform services' }]),
 	tryTestVersion: (version: string) => delay({ version, pr: 17, title: 'Test version button' }),
 	endTest: (keep: boolean) => delay(keep ? '' : 'v0.20.0'),
@@ -415,6 +417,18 @@ export const mockApi: Api = {
 	async rollback(id, e) {
 		const a = find(id);
 		work(a, e, 'Deploying ' + (e === 'prod' ? oldest : older).version, 'rollback', e === 'prod' ? oldest : older, 'Roll back to');
+		await delay(null);
+	},
+	async restart(id, e) {
+		const a = find(id);
+		const ev = envOf(a, e);
+		ev.busy = 'Restarting ' + (ev.version?.version || ev.version?.short || '');
+		log('rupaai', a.id, e, 'restart.started', `Restarting ${e} with fresh containers`);
+		setTimeout(() => {
+			ev.busy = '';
+			ev.health = 'healthy';
+			log('rupaai', a.id, e, 'restart.done', 'It is running and healthy');
+		}, 5000);
 		await delay(null);
 	},
 	logs: async (id, e, lines) => {

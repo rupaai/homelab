@@ -37,6 +37,15 @@
 		} catch (e) { updateMsg = messageOf(e); updating = false; }
 	}
 
+	async function restartHomelab() {
+		if (!confirm('Restart Homelab? The companion is away for about a minute. Your apps keep running.')) return;
+		updating = true; updateMsg = '';
+		try {
+			await api.restartHomelab();
+			restarting('Homelab is restarting; this page comes back in about a minute.');
+		} catch (e) { updateMsg = messageOf(e); updating = false; }
+	}
+
 	// The page comes back once Homelab has restarted.
 	function restarting(msg: string) {
 		updateMsg = msg;
@@ -156,6 +165,9 @@
 							</div>
 						{/if}
 					{:else if u.managed && !u.testing}<p class="muted">Homelab is up to date.</p>{/if}
+					{#if device.canRestart}
+						<button class="btn" type="button" disabled={updating} onclick={restartHomelab}>Restart Homelab</button>
+					{/if}
 					{#if updateMsg}<p class="notice" role="status">{updateMsg}</p>{/if}
 					{#if u.managed && !u.testing}
 						<details class="tests" ontoggle={(e) => { if ((e.currentTarget as HTMLDetailsElement).open && tests === null) showTests(); }}>

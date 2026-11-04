@@ -134,6 +134,7 @@ const realApi: Api = {
 		return { ...p, blockers: list(p.blockers) };
 	},
 	rollback: (id, env) => request('POST', `/api/apps/${enc(id)}/envs/${env}/rollback`),
+	restart: (id, env) => request('POST', `/api/apps/${enc(id)}/envs/${env}/restart`),
 	logs: async (id, env, lines) => (await request<{ lines: string }>('GET', `/api/apps/${enc(id)}/envs/${env}/logs?lines=${lines}`)).lines ?? '',
 	pushKey: async () => (await request<{ publicKey: string }>('GET', '/api/push/key')).publicKey ?? '',
 	subscribePush: (sub) => request('POST', '/api/push/subscriptions', sub),
@@ -148,6 +149,7 @@ const realApi: Api = {
 		return { ...d, problems: list(d.problems), system: d.system ? { ...d.system, disks: list(d.system.disks) } : undefined };
 	},
 	updateHomelab: async () => (await request<{ version: string }>('POST', '/api/device/update')).version,
+	restartHomelab: () => request('POST', '/api/device/restart'),
 	testVersions: async () => list(await request<TestVersion[]>('GET', '/api/device/tests')),
 	tryTestVersion: (version) => request<TestVersion>('POST', '/api/device/test', { version }),
 	endTest: async (keep) => (await request<{ version: string }>('POST', keep ? '/api/device/test/keep' : '/api/device/test/back')).version,

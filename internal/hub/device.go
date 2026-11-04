@@ -15,6 +15,8 @@ type DeviceView struct {
 	System   *core.SystemInfo   `json:"system,omitempty"`
 	Update   *core.UpdateStatus `json:"update,omitempty"`
 	Problems []string           `json:"problems,omitempty"`
+	// CanRestart is set when something (systemd) starts Homelab again after it stops.
+	CanRestart bool `json:"canRestart"`
 }
 
 // Device describes the device and whether a newer Homelab is out. A part that can't be read
@@ -31,6 +33,7 @@ func (h *Hub) Device(ctx context.Context, fresh bool) (DeviceView, error) {
 	if h.ad.Updater != nil {
 		if u, err := h.ad.Updater.Status(ctx, fresh); err == nil {
 			v.Update = &u
+			v.CanRestart = h.ad.Updater.CanRestart()
 		} else {
 			v.Problems = append(v.Problems, "Couldn't check Homelab's version: "+err.Error())
 		}
@@ -99,6 +102,22 @@ func (h *Hub) UpdateHomelab(ctx context.Context, by core.Viewer) (string, error)
 	}
 	h.logEvent(ctx, state.Event{Actor: by.Label(), Action: "homelab.update", Detail: "Started updating Homelab to " + version})
 	return version, nil
+}
+
+// RestartHomelab restarts Homelab on the same version, the safe way an update does: it
+// refuses while an action runs, and the shutdown waits for running actions.
+func (h *Hub) RestartHomelab(ctx context.Context, by core.Viewer) error {
+	if h.ad.Updater == nil || !h.ad.Updater.CanRestart() {
+		return userErr("Homelab can't restart itself here, because nothing would start it again. Restart it from the computer.")
+	}
+	if err := h.refuseIfBusy(); err != nil {
+		return err
+	}
+	h.logEvent(ctx, state.Event{Actor: by.Label(), Action: "homelab.restart", Detail: "Restarting Homelab"})
+	if err := h.ad.Updater.Restart(ctx); err != nil {
+		return userErr("Homelab didn't restart: %s.", err)
+	}
+	return nil
 }
 
 // RecordUpdate notes in the activity how an update went (said by the program that ran it).

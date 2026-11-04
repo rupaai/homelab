@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -51,6 +52,8 @@ type Options struct {
 	HTTP    *http.Client  // default: 60s timeout
 	// Restart stops Homelab so systemd starts it again on the new version.
 	Restart func()
+	// Systemd is set when systemd runs Homelab and so starts it again after it stops.
+	Systemd bool
 	Logger  *slog.Logger
 	Now     func() time.Time
 }
@@ -425,6 +428,26 @@ func (u *Updater) download(ctx context.Context, a asset, sumText []byte, tag str
 		return nil, fmt.Errorf("the download of %s (%s) didn't match its checksum, so it wasn't installed", tag, a.Name)
 	}
 	return data, nil
+}
+
+// UnderSystemd says whether systemd started this process. systemd sets INVOCATION_ID for
+// every service it runs.
+func UnderSystemd() bool {
+	return runtime.GOOS == "linux" && os.Getenv("INVOCATION_ID") != ""
+}
+
+// CanRestart says whether Homelab will be started again after it stops.
+func (u *Updater) CanRestart() bool { return u.o.Systemd }
+
+// Restart stops Homelab on the same version so systemd starts it again.
+func (u *Updater) Restart(context.Context) error {
+	if !u.o.Systemd {
+		return errors.New("Homelab isn't run by systemd here, so nothing would start it again")
+	}
+	u.o.Logger.Info("restarting on request")
+	// Give the request that asked for this a moment to get its answer.
+	time.AfterFunc(time.Second, u.o.Restart)
+	return nil
 }
 
 // restart stops Homelab so systemd starts it on the version homelabd now points at.

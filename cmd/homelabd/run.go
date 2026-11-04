@@ -132,7 +132,7 @@ func run(ctx context.Context, home string, cfg Config, log *slog.Logger) error {
 	secrets := svc.Secrets()
 	// The GitHub token is a secret too: until the secrets service is up there is none.
 	token := func() string { t, _ := secrets.Platform("GITHUB_TOKEN"); return t }
-	updater := selfupdate.New(selfupdate.Options{Home: home, Version: version, Token: token, Logger: log, Restart: restart})
+	updater := selfupdate.New(selfupdate.Options{Home: home, Version: version, Token: token, Logger: log, Restart: restart, Systemd: selfupdate.UnderSystemd()})
 	svcCtx, stopServices := context.WithCancel(ctx)
 	defer stopServices()
 	svcDone := make(chan struct{})

@@ -427,3 +427,12 @@ func TestComposeYAMLPostgres(t *testing.T) {
 		t.Error("a service named db next to the database should be refused")
 	}
 }
+
+func TestUpArgsForceRecreateOnlyOnRestart(t *testing.T) {
+	if got := strings.Join(upArgs(core.EnvSpec{}), " "); got != "up -d --remove-orphans" {
+		t.Errorf("normal deploy: %q", got)
+	}
+	if got := strings.Join(upArgs(core.EnvSpec{Recreate: true}), " "); got != "up -d --remove-orphans --force-recreate" {
+		t.Errorf("restart: %q", got)
+	}
+}
