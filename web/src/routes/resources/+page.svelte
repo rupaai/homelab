@@ -211,8 +211,8 @@
 	.card + .card, .notice + .card { margin-top: 1rem; }
 	h2 { font-size: 1.05rem; margin: 0 0 0.6rem; }
 	.meter { display: grid; grid-template-columns: 1fr auto; gap: 0.2rem 0.75rem; margin: 0 0 0.8rem; }
-	.meter progress { grid-column: 1 / -1; width: 100%; height: 0.5rem; accent-color: var(--accent); }
-	.meter.warn progress { accent-color: var(--bad-border); }
+	.meter progress { grid-column: 1 / -1; width: 100%; height: 8px; }
+	.meter.warn progress { color: var(--bad); }
 	table { width: 100%; border-collapse: collapse; }
 	th, td { text-align: left; padding: 0.45rem 0.25rem; border-bottom: 1px solid var(--border); }
 	th { font-size: 0.85rem; color: var(--muted); font-weight: 600; }

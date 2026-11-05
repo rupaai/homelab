@@ -45,11 +45,13 @@
 		overflow: visible;
 	}
 	dialog::backdrop {
-		background: rgb(0 0 0 / 0.5);
+		background: rgb(0 0 0 / 0.65);
 	}
 	.panel {
 		background: var(--surface);
-		border-radius: 18px 18px 0 0;
+		border: 1px solid var(--border-strong);
+		border-bottom: 0;
+		border-radius: 14px 14px 0 0;
 		max-height: min(92dvh, 46rem);
 		display: flex;
 		flex-direction: column;
@@ -64,7 +66,8 @@
 	}
 	h2 {
 		margin: 0;
-		font-size: 1.15rem;
+		font-size: 1.0625rem;
+		font-weight: 600;
 	}
 	.icon {
 		display: grid;
@@ -72,7 +75,7 @@
 		width: 44px;
 		height: 44px;
 		border: 0;
-		border-radius: 10px;
+		border-radius: 8px;
 		background: transparent;
 		color: var(--muted);
 		cursor: pointer;
@@ -98,7 +101,8 @@
 			margin: auto;
 		}
 		.panel {
-			border-radius: 18px;
+			border-radius: 14px;
+			border-bottom: 1px solid var(--border-strong);
 		}
 		footer {
 			padding-bottom: 0.8rem;

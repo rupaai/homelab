@@ -10,6 +10,7 @@
 	import Sheet from '#lib/components/Sheet.svelte';
 	import Spinner from '#lib/components/Spinner.svelte';
 	import StatusDot from '#lib/components/StatusDot.svelte';
+	import { appsSummary, summaryParts } from '#lib/summary.ts';
 
 	let projects = $state<AppView[]>([]);
 	let projectsLoaded = $state(false);
@@ -19,6 +20,7 @@
 	const builder = $derived(canAddApps || !!me?.roles.includes('builder'));
 	// Builders see project cards. Everyone else sees the apps shared with them.
 	let meLoaded = $state(false);
+	const summary = $derived(summaryParts(appsSummary(projects)));
 
 	async function refreshProjects() {
 		try {
@@ -60,8 +62,17 @@
 <div class="page">
 	<div class="page-head">
 		<h1>Apps</h1>
-		{#if canAddApps}<button class="btn primary small" type="button" onclick={() => ((adding = true), (addError = ''))}>Add app</button>{/if}
+		{#if canAddApps}<button class="btn primary" type="button" onclick={() => ((adding = true), (addError = ''))}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>Add app</button>{/if}
 	</div>
+
+	{#if builder && summary.length > 0}
+		<p class="summary" aria-label="Summary of your apps">
+			{#each summary as part, i}
+				{#if i > 0}<span class="sep" aria-hidden="true">·</span>{/if}
+				<span class={part.tone}>{part.text}</span>
+			{/each}
+		</p>
+	{/if}
 
 	{#if !meLoaded && !projectsError}
 		<p class="muted loading"><Spinner /> Loading your apps…</p>
@@ -103,9 +114,11 @@
 				<span class="icon" aria-hidden="true">{app.icon || appInitial(app.name)}</span>
 				<div class="titles">
 					<h2><a class="stretch" href="/apps/{encodeURIComponent(app.id)}">{app.name}</a></h2>
-					<p class="repo muted small">{app.repo}</p>
+					<p class="repo">{app.repo}</p>
 				</div>
-				<svg class="chev" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+				{#if prod?.address && prod.addressReady}
+					<a class="open" href={appAddress(prod.address)} target="_blank" rel="noopener">Open<span class="sr-only"> {app.name} (opens in a new tab)</span></a>
+				{/if}
 			</div>
 
 			<ul class="envs">
@@ -116,7 +129,7 @@
 							{#if env.busy}
 								<span class="busy"><Spinner /> {env.busy}…</span>
 							{:else}
-								<StatusDot health={env.health} />
+								<StatusDot health={env.health} label={!env.version && env.health === 'unknown' ? 'Not deployed' : undefined} />
 							{/if}
 						</span>
 						<code class="sha">{env.version ? releaseName(env.version) : '—'}</code>
@@ -125,13 +138,9 @@
 			</ul>
 
 			{#if b?.status === 'failed'}
-				<p class="hint-row bad"><a href={b.url} target="_blank" rel="noopener">Build failed<span class="sr-only"> (opens in a new tab)</span></a> <span class="muted">for {b.short}, so it won't be deployed</span></p>
+				<p class="note bad"><a href={b.url} target="_blank" rel="noopener">Build failed<span class="sr-only"> (opens in a new tab)</span></a> for {b.short}, so it won't be deployed</p>
 			{:else if b?.status === 'passed' && !b.deployed}
-				<p class="hint-row ready"><strong>New build ready</strong> <span class="muted">({b.short}), not on dev yet</span></p>
-			{/if}
-
-			{#if prod?.address && prod.addressReady}
-				<div class="open-row"><a class="btn primary small" href={appAddress(prod.address)} target="_blank" rel="noopener">Open<span class="sr-only"> {app.name} (opens in a new tab)</span></a></div>
+				<p class="note"><strong>New build ready</strong> ({b.short}), not on dev yet</p>
 			{/if}
 		</article>
 	{/each}{/if}
@@ -166,7 +175,30 @@
 	@media (min-width: 720px) {
 		.grid {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
+			align-items: start;
 		}
+	}
+	.summary {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem 0.5rem;
+		margin: 0;
+		padding: 0.75rem 1rem;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		font-size: 0.875rem;
+		color: var(--muted);
+	}
+	.summary .sep {
+		color: var(--border-strong);
+	}
+	.summary .warn {
+		color: var(--warn);
+		font-weight: 600;
+	}
+	.summary .bad {
+		color: var(--bad);
+		font-weight: 600;
 	}
 	.family-card {
 		display: flex;
@@ -175,14 +207,6 @@
 	}
 	.family-card h2 {
 		margin: 0;
-	}
-	.open-row {
-		position: relative;
-		z-index: 1;
-		margin-top: auto;
-		padding-top: 0.7rem;
-		display: flex;
-		justify-content: flex-end;
 	}
 	.loading {
 		display: flex;
@@ -194,24 +218,23 @@
 	}
 	.app {
 		position: relative;
-		display: flex;
-		flex-direction: column;
 	}
 	.head {
 		display: flex;
-		align-items: center;
+		align-items: flex-start;
 		gap: 0.75rem;
 	}
 	.icon {
-		width: 2.6rem;
-		height: 2.6rem;
-		border-radius: 12px;
-		background: var(--accent-soft);
+		width: 2.5rem;
+		height: 2.5rem;
+		border-radius: 8px;
+		border: 1px solid var(--border);
+		background: var(--surface-2);
 		color: var(--accent);
 		display: grid;
 		place-items: center;
-		font-size: 1.4rem;
-		font-weight: 700;
+		font-size: 1.25rem;
+		font-weight: 600;
 		flex: none;
 	}
 	.titles {
@@ -220,13 +243,14 @@
 	}
 	h2 {
 		margin: 0;
-		font-size: 1.1rem;
+		font-size: 1.0625rem;
+		line-height: 1.5rem;
 	}
 	h2 a {
 		color: var(--text);
 		text-decoration: none;
 	}
-	/* The whole card is the link; the build links below sit above it. */
+	/* The whole card is the link; the Open button and build links sit above it. */
 	.stretch::after {
 		content: '';
 		position: absolute;
@@ -235,61 +259,76 @@
 	}
 	.repo {
 		margin: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.chev {
+		font: 0.8125rem/1.25rem var(--mono);
 		color: var(--muted);
+		overflow-wrap: anywhere;
+	}
+	.open {
+		position: relative;
+		z-index: 1;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-height: 44px;
+		margin: -0.375rem 0;
+		padding: 0 1rem;
+		border: 1px solid var(--border-strong);
+		border-radius: 8px;
+		color: var(--text);
+		font-size: 0.875rem;
+		font-weight: 500;
+		text-decoration: none;
 		flex: none;
+	}
+	.open:hover {
+		background: var(--surface-2);
 	}
 	.envs {
 		list-style: none;
-		margin: 0.7rem 0 0;
+		margin: 1rem 0 0;
 		padding: 0;
-		border-top: 1px solid var(--border);
+		display: grid;
+		gap: 0.5rem;
 	}
 	.envs li {
 		display: grid;
-		grid-template-columns: 3.2rem 1fr auto;
+		grid-template-columns: 3rem minmax(0, 1fr) auto;
 		align-items: center;
-		gap: 0.5rem;
-		padding: 0.5rem 0 0;
+		gap: 0.75rem;
+		min-height: 44px;
+		padding: 0 0.75rem;
+		background: var(--surface-2);
+		border-radius: 8px;
 	}
 	.envname {
-		font-weight: 600;
 		color: var(--muted);
-		font-size: 0.875rem;
+		font-size: 0.8125rem;
 	}
 	.busy {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.4rem;
+		gap: 0.5rem;
+		font-size: 0.875rem;
 		font-weight: 600;
 		color: var(--accent);
 	}
 	.sha {
-		font-size: 0.85rem;
-		background: var(--chip);
-		padding: 0.05rem 0.4rem;
-		border-radius: 6px;
+		font-size: 0.8125rem;
+		color: var(--text);
 	}
-	.hint-row {
+	.note {
 		position: relative;
 		z-index: 1;
-		margin: 0.7rem 0 0;
-		padding: 0.45rem 0.7rem;
-		border-radius: 10px;
-		font-size: 0.9rem;
+		margin: 0.75rem 0 0;
+		font-size: 0.8125rem;
+		color: var(--muted);
 	}
-	.ready {
-		background: var(--accent-soft);
+	.note strong {
+		font-weight: 500;
+		color: var(--text);
 	}
-	.bad {
-		background: var(--bad-bg);
-	}
-	.hint-row a {
-		font-weight: 700;
+	.note.bad,
+	.note.bad a {
 		color: var(--bad);
 	}
 </style>

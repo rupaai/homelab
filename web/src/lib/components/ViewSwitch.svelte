@@ -18,8 +18,9 @@
 		display: flex;
 		padding: 3px;
 		gap: 3px;
-		background: var(--chip);
-		border-radius: 12px;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 10px;
 		width: 100%;
 		max-width: 22rem;
 	}
@@ -30,17 +31,17 @@
 		align-items: center;
 		justify-content: center;
 		padding: 0 1rem;
-		border-radius: 9px;
+		border-radius: 7px;
 		color: var(--muted);
-		font-weight: 600;
+		font-size: 0.875rem;
+		font-weight: 500;
 		text-decoration: none;
 	}
 	a:hover {
 		color: var(--text);
 	}
 	a[aria-current='page'] {
-		background: var(--surface);
+		background: var(--surface-2);
 		color: var(--accent);
-		box-shadow: 0 1px 3px rgb(0 0 0 / 0.15);
 	}
 </style>

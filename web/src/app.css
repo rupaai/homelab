@@ -1,56 +1,41 @@
+/* Plain dark look. One dark theme on every device (no light palette, no system switch).
+   Tokens first: grounds, hairlines, one blue accent, state colours. Screens use only these. */
 :root {
-	--bg: #f6f7f9;
-	--surface: #ffffff;
-	--surface-2: #f0f2f5;
-	--text: #14181f;
-	--muted: #586170;
-	--border: #e0e4ea;
-	--border-strong: #c3c9d3;
-	--accent: #3b5bdb;
-	--accent-ink: #ffffff;
-	--accent-soft: #e8edff;
-	--ok: #17803d;
-	--warn: #8f5200;
-	--warn-bg: #fff4e0;
-	--warn-border: #f0cf94;
-	--bad: #c22d2d;
-	--bad-bg: #fdecec;
-	--bad-border: #f2b8b8;
-	--chip: #eceff4;
-	--shadow: 0 8px 30px rgb(0 0 0 / 0.18);
+	/* grounds: page, surface (cards), inset (rows inside cards) */
+	--bg: #0e1012;
+	--surface: #15181c;
+	--surface-2: #1b1f24;
+	--text: #e8eaed;
+	--muted: #9aa0a9;
+	--border: #23272d;
+	--border-strong: #343a42;
+	/* the one accent: primary buttons, active tab, links */
+	--accent: #7c9cff;
+	--accent-ink: #0b0d12;
+	--accent-soft: #1b1f24;
+	/* state colours: always shown with a word and a dot */
+	--ok: #4fbf86;
+	--warn: #e5a93d;
+	--warn-bg: #1d1910;
+	--warn-border: #4a3c1a;
+	--bad: #ff7b7b;
+	--bad-bg: #211415;
+	--bad-border: #5a2b2e;
+	--chip: #1b1f24;
+	--shadow: 0 8px 30px rgb(0 0 0 / 0.6);
 	--mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 	--sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-	--radius: 14px;
+	--radius: 10px;
 	--gutter: 16px;
-	color-scheme: light dark;
-}
-
-@media (prefers-color-scheme: dark) {
-	:root {
-		--bg: #0f1217;
-		--surface: #181c23;
-		--surface-2: #20252e;
-		--text: #e8ebf0;
-		--muted: #a3abb8;
-		--border: #2a303a;
-		--border-strong: #3c4452;
-		--accent: #8aa4ff;
-		--accent-ink: #0b1020;
-		--accent-soft: #232c4d;
-		--ok: #4cc27a;
-		--warn: #f0b24a;
-		--warn-bg: #2b2212;
-		--warn-border: #5a4420;
-		--bad: #ff8585;
-		--bad-bg: #2e1819;
-		--bad-border: #6a2f31;
-		--chip: #262c36;
-		--shadow: 0 8px 30px rgb(0 0 0 / 0.6);
-	}
+	color-scheme: dark;
 }
 
 * {
 	box-sizing: border-box;
+}
+input[type='checkbox'],
+input[type='radio'] {
+	accent-color: var(--accent);
 }
 html,
 body {
@@ -61,7 +46,7 @@ body {
 	background: var(--bg);
 	color: var(--text);
 	font-family: var(--sans);
-	font-size: 1rem;
+	font-size: 0.9375rem;
 	line-height: 1.45;
 	-webkit-text-size-adjust: 100%;
 	overscroll-behavior-y: none;
@@ -72,15 +57,20 @@ body:has(dialog[open]) {
 h1 {
 	font-size: 1.5rem;
 	margin: 0;
-	line-height: 1.2;
+	line-height: 2rem;
+	font-weight: 600;
+	letter-spacing: -0.02em;
 }
 h2 {
-	font-size: 1.1rem;
+	font-size: 1.0625rem;
+	line-height: 1.5rem;
+	font-weight: 600;
 }
 h3 {
-	font-size: 0.8rem;
+	font-size: 0.75rem;
+	font-weight: 600;
 	text-transform: uppercase;
-	letter-spacing: 0.04em;
+	letter-spacing: 0.06em;
 	color: var(--muted);
 	margin: 1rem 0 0.35rem;
 }
@@ -133,17 +123,18 @@ pre {
 	background: var(--surface);
 	border: 1px solid var(--border);
 	border-radius: var(--radius);
-	padding: 0.9rem 1rem;
+	padding: 1rem 1.25rem;
 }
 
 .btn {
 	font: inherit;
+	font-size: 0.875rem;
 	font-weight: 600;
 	min-height: 44px;
 	padding: 0.5rem 1rem;
-	border-radius: 10px;
+	border-radius: 8px;
 	border: 1px solid var(--border-strong);
-	background: var(--surface);
+	background: transparent;
 	color: var(--text);
 	cursor: pointer;
 	text-decoration: none;
@@ -155,18 +146,22 @@ pre {
 .btn:hover {
 	background: var(--surface-2);
 }
+.btn:active {
+	background: var(--border);
+}
 .btn.primary {
 	background: var(--accent);
 	border-color: var(--accent);
 	color: var(--accent-ink);
 }
 .btn.primary:hover {
-	filter: brightness(1.08);
+	background: var(--accent);
+	filter: brightness(1.1);
 }
 .btn.small {
 	min-height: 36px;
 	padding: 0.25rem 0.75rem;
-	font-size: 0.9rem;
+	font-size: 0.8125rem;
 }
 .btn:disabled {
 	opacity: 0.5;
@@ -178,6 +173,7 @@ pre {
 	font-size: 0.75rem;
 	font-weight: 600;
 	background: var(--chip);
+	border: 1px solid var(--border);
 	color: var(--text);
 	padding: 0.1rem 0.5rem;
 	border-radius: 999px;
@@ -185,8 +181,9 @@ pre {
 }
 
 .notice {
-	border-radius: 10px;
+	border-radius: 8px;
 	padding: 0.65rem 0.8rem;
+	color: var(--text);
 	border: 1px solid var(--warn-border);
 	background: var(--warn-bg);
 	margin: 0;
@@ -205,7 +202,8 @@ pre {
 
 label {
 	display: block;
-	font-weight: 600;
+	font-weight: 500;
+	font-size: 0.875rem;
 	margin: 0.75rem 0 0.25rem;
 }
 input[type='text'],
@@ -214,15 +212,47 @@ input[type='email'],
 input[type='search'],
 input[type='url'],
 input[type='number'],
+input[type='date'],
+input[type='tel'],
+textarea,
 select {
 	font: inherit;
 	width: 100%;
 	min-height: 44px;
 	padding: 0.4rem 0.7rem;
-	border-radius: 10px;
+	border-radius: 8px;
 	border: 1px solid var(--border-strong);
 	background: var(--bg);
 	color: var(--text);
+}
+progress {
+	appearance: none;
+	border: 0;
+	height: 8px;
+	border-radius: 4px;
+	background: var(--border);
+	color: var(--accent);
+	overflow: hidden;
+}
+progress::-webkit-progress-bar {
+	background: var(--border);
+}
+progress::-webkit-progress-value {
+	background: currentColor;
+	border-radius: 4px;
+}
+progress::-moz-progress-bar {
+	background: currentColor;
+}
+input[type='date'] {
+	color-scheme: dark;
+}
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 0;
+	border-color: var(--accent);
 }
 .hint {
 	color: var(--muted);
@@ -231,11 +261,15 @@ select {
 }
 
 .btn.danger {
-	background: var(--bad);
-	border-color: var(--bad);
-	color: var(--accent-ink);
+	background: transparent;
+	border-color: var(--bad-border);
+	color: var(--bad);
 }
 .btn.danger:hover {
-	filter: brightness(1.08);
-	background: var(--bad);
+	background: var(--bad-bg);
+	border-color: var(--bad);
+}
+fieldset {
+	border: 1px solid var(--border-strong);
+	border-radius: 8px;
 }

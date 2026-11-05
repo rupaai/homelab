@@ -8,6 +8,7 @@ This page covers the companion, the website where you manage Homelab. It covers 
 - You open it at `http://localhost:7080` on the device, or at the device's address on your home network.
 - It talks to `homelabd` only through the JSON API under `/api/`. The server checks every call.
 - Each screen is a folder under `web/src/routes/`, for example Apps, Activity, Storage and Settings.
+- The look is one dark theme ("plain dark") on every device. There is no light theme and no system switch. For design work, read `PRODUCT.md` and `.impeccable/surfaces/web.md` in the repo root.
 - For a screen without Homelab running, start the dev server with `?mock` in the address. The screen shows fake data.
 
 ## How it works
@@ -37,6 +38,9 @@ Who may do what: the server decides. The owner, admins, builders and users see d
 |---|---|
 | `web/src/routes/` | One folder per screen. See the list below. |
 | `web/src/routes/+layout.svelte` | The shell: first-time setup, sign-in, the top bar, the phone tab bar, the round account button (`/me`), and the session check. |
+| `web/src/app.css` | The design tokens (grounds, hairlines, the one blue accent, state colours, radius) and the shared classes: `.btn`, `.card`, `.notice`, `.chip`, inputs, progress bars. Change the look here first. |
+| `web/src/lib/summary.ts` | `appsSummary` and `summaryParts`: the counts in the one-line summary at the top of Apps (from the projects list, no extra call). Tested in `summary.test.ts`. |
+| `PRODUCT.md`, `.impeccable/surfaces/web.md` | Product facts and the design direction for the companion. Read them before changing the look. |
 | `web/src/lib/nav.ts` | `navTabs(roles)`: the main tabs per role and which paths light each one. Admins get Apps, Activity, Storage, Settings. Everyone else gets only Apps, and then no tab bar shows. |
 | `web/src/lib/nav.test.ts` | Tests the tabs per role and the path rules, including the old paths. |
 | `web/src/lib/components/ViewSwitch.svelte` | A small switch made of links. Used for Events / Logs and Files / Databases. |
@@ -51,8 +55,8 @@ Who may do what: the server decides. The owner, admins, builders and users see d
 | `web/src/lib/session.ts` | Tells the layout when the API says the session is gone, so it can show sign-in. |
 | `web/src/lib/push.ts` | Asks permission, subscribes the device, and checks that push can work here. |
 | `web/src/service-worker.ts` | Shows push notifications and opens the matching screen on tap. |
-| `web/src/app.html` | The page shell. |
-| `web/static/` | Icons and the web app manifest, copied as they are. |
+| `web/src/app.html` | The page shell. Sets the dark `theme-color` (`#0e1012`). |
+| `web/static/` | Icons and the web app manifest (dark `background_color` and `theme_color`), copied as they are. |
 | `web/vite.config.ts` | Vite and SvelteKit setup. Sends `/api` and `/healthz` to `127.0.0.1:7080` in dev. Adds the Vitest test pattern. |
 | `web/package.json` | The scripts: `dev`, `build`, `embed`, `check`, `test`. |
 | `web/scripts/embed.mjs` | Copies `web/build` to `internal/companion/build`. |

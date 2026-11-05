@@ -12,19 +12,17 @@
 	.status {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.4rem;
-		font-weight: 600;
+		gap: 0.5rem;
+		font-size: 0.875rem;
+		font-weight: 500;
 		white-space: nowrap;
 	}
 	.dot {
-		width: 0.65rem;
-		height: 0.65rem;
+		width: 8px;
+		height: 8px;
 		border-radius: 50%;
 		background: currentColor;
 		flex: none;
-	}
-	.healthy {
-		color: var(--ok);
 	}
 	.degraded {
 		color: var(--warn);
@@ -32,8 +30,18 @@
 	.down {
 		color: var(--bad);
 	}
+	.healthy {
+		color: var(--muted);
+	}
+	.degraded,
+	.down {
+		font-weight: 600;
+	}
 	.unknown {
 		color: var(--muted);
+	}
+	.healthy .dot {
+		background: var(--ok);
 	}
 	/* The dot's shape differs too, so it isn't only colour. */
 	.degraded .dot {
@@ -45,6 +53,6 @@
 	}
 	.unknown .dot {
 		background: transparent;
-		border: 2px solid currentColor;
+		border: 1.5px solid currentColor;
 	}
 </style>
