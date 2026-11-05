@@ -62,6 +62,7 @@ type composeService struct {
 	Environment map[string]string         `json:"environment,omitempty"`
 	NetworkMode string                    `json:"network_mode,omitempty"`
 	CapAdd      []string                  `json:"cap_add,omitempty"`
+	SecurityOpt []string                  `json:"security_opt,omitempty"`
 	Ports       []string                  `json:"ports"`
 	Volumes     []composeMount            `json:"volumes,omitempty"`
 	Devices     []string                  `json:"devices,omitempty"`
@@ -201,6 +202,8 @@ func composeYAML(spec core.EnvSpec, envDir string) ([]byte, error) {
 	if spec.Bluetooth {
 		svc.Volumes = append(svc.Volumes, composeMount{Type: "bind", Source: "/run/dbus", Target: "/run/dbus", ReadOnly: true})
 		svc.CapAdd = []string{"NET_ADMIN", "NET_RAW"}
+		// Docker's default AppArmor profile blocks D-Bus on Ubuntu, so BlueZ is denied.
+		svc.SecurityOpt = []string{"apparmor:unconfined"}
 	}
 	file := composeFile{Services: map[string]composeService{serviceName: svc}}
 	for _, s := range spec.Services {

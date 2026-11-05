@@ -24,11 +24,12 @@ In the app's `homelab.yaml`:
 port: 8123        # the port the app listens on; with network: host it is the device's port
 network: host     # only "host" or empty
 devices: [zigbee] # names from config.yaml
-bluetooth: true   # mounts /run/dbus:/run/dbus:ro and adds NET_ADMIN and NET_RAW
+bluetooth: true   # mounts /run/dbus:/run/dbus:ro, adds NET_ADMIN and NET_RAW, turns AppArmor off for the app
 ```
 
 ## Rules
 
+- `bluetooth: true` also sets `security_opt: ["apparmor:unconfined"]`. On Ubuntu, Docker's default AppArmor profile blocks D-Bus ("AppArmor DBus AccessDenied"), so Bluetooth would fail without it. The app is still not privileged.
 - `network: host` gives the app the device's own network, which discovery (mDNS, HomeKit, cast) needs. The app is then not published on `127.0.0.1:<host port>`. Homelab reaches it at `127.0.0.1:<port>` from `homelab.yaml`.
 - `network: host` can't be used with `services:`, `database: postgres` or `ports:`. Those need Homelab's own network. `homelab.yaml` is refused with a message.
 - With `network: host` the port must not be in 7000-7999 (kept for Homelab), and two apps on the host network can't use the same port.
