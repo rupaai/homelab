@@ -145,7 +145,7 @@ You are in charge, not the AI. Read what it changes before you commit. The rules
 
 - Keep the docs current: do not edit the feature blocks in HANDOVER.md. Add a note in `handover/notes/<feature>/` (see [handover/README.md](handover/README.md)), and mark it `ready` when the feature is done. A bot folds it into HANDOVER.md. Update docs/how-it-works.md in the same PR if a block changes.
 - Secrets: only Labiba sees app secret values. Never ask for them, print them, log them, or commit them. This applies to you and to any AI helper.
-- On mars, Homelab only touches its own containers (homelab-*). Never change Gabriele's own containers (Home Assistant, matterbridge, cloudflared, matter-server, tplink-proxy).
+- On mars, Homelab only touches its own containers (homelab-*). Never change containers Homelab did not make. Home Assistant, matterbridge, cloudflared and matter-server (in /srv/homeassistant) are Labiba's, and tplink-proxy is Gabriele's.
 - Never run things on mars or change production without asking Labiba.
 - Add tests with every fix. A fix with no test can break again.
 - Do not push to `main`. Always use a branch and a PR.

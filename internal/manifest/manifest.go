@@ -83,6 +83,14 @@ type Manifest struct {
 	// Services are more containers that run next to the app in each environment.
 	Services []Service `yaml:"services"`
 
+	// Network, Devices and Bluetooth ask for real hardware. Prod only, and only for apps
+	// the device owner lists in hardware_apps (config.yaml). Dev ignores all three.
+	// Network is "host" or empty; Devices are names from config.yaml (devices:);
+	// Bluetooth mounts /run/dbus and adds the Bluetooth network rights.
+	Network   string   `yaml:"network"`
+	Devices   []string `yaml:"devices"`
+	Bluetooth bool     `yaml:"bluetooth"`
+
 	// SmokeTest is a command run inside the app's own image against dev before an auto
 	// promote (C6), e.g. ["python", "-m", "app.smoke"]. It reads HOMELAB_TARGET_URL.
 	SmokeTest []string `yaml:"smoke_test"`
@@ -164,6 +172,14 @@ type Service struct {
 	Ports   []string          `yaml:"ports"`
 	Memory  string            `yaml:"memory"`
 	GPU     bool              `yaml:"gpu"`
+}
+
+// NetworkHost is the one value network: accepts: the app uses the device's own network.
+const NetworkHost = "host"
+
+// UsesHardware says whether the app asks for host network, devices or Bluetooth.
+func (m *Manifest) UsesHardware() bool {
+	return m.Network != "" || len(m.Devices) > 0 || m.Bluetooth
 }
 
 // maxIDLen keeps "<id>-dev" within a 63-character DNS label.
@@ -311,6 +327,7 @@ func (m *Manifest) validate() error {
 	}
 	checkMounts(add, "", m.Data, m.Folders)
 	checkPorts(add, "", m.Ports)
+	m.checkHardware(add)
 	seenSvc := map[string]bool{}
 	for _, s := range m.Services {
 		where := "services." + s.Name + ": "
@@ -387,6 +404,29 @@ func (m *Manifest) validate() error {
 		return fmt.Errorf("%s", strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+// checkHardware checks network:, devices: and bluetooth:.
+func (m *Manifest) checkHardware(add func(string, ...any)) {
+	switch m.Network {
+	case "":
+	case NetworkHost:
+		if len(m.Services) > 0 || m.Database == core.DatabasePostgres || len(m.Ports) > 0 {
+			add("network: host can't be used with services, database: postgres or ports, because an app on the host network can't use Homelab's own network or port maps")
+		}
+		if m.Port >= 7000 && m.Port <= 7999 {
+			add("port %d: with network: host the app uses the device's port, and 7000-7999 are kept for Homelab", m.Port)
+		}
+	default:
+		add("network must be host, or left out")
+	}
+	seen := map[string]bool{}
+	for _, d := range m.Devices {
+		if !namePattern.MatchString(d) || seen[d] {
+			add("device %q must be a name from config.yaml (devices:), used once", d)
+		}
+		seen[d] = true
+	}
 }
 
 // readDatabase reads database: in either form, "sqlite" or {engine: sqlite, path: ...}.

@@ -45,6 +45,6 @@ Only Labiba sees app secret values. Never ask for them, print them, log them, or
 
 ## Mars (the real box)
 
-- On mars, Homelab only touches its own containers (homelab-*). Never change Gabriele's own containers (Home Assistant, matterbridge, cloudflared, matter-server, tplink-proxy).
+- On mars, Homelab only touches its own containers (homelab-*). Never change containers Homelab did not make. Home Assistant, matterbridge, cloudflared and matter-server (in /srv/homeassistant) are Labiba's, and tplink-proxy is Gabriele's. When Home Assistant moves into Homelab it runs as homelab-home-assistant-*, and then Homelab may touch those.
 - Never run things on mars or change production without asking Labiba first.
 - Ask before running anything that is not a local build or test.

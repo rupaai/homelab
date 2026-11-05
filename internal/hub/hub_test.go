@@ -537,3 +537,99 @@ func TestOldErrorClearsWhenHealthy(t *testing.T) {
 		t.Fatalf("a healthy app should drop the old error: health %s, error %q", e.Health, e.LastError)
 	}
 }
+
+const haDoc = `
+id: movies
+name: Movie Night
+image: ghcr.io/rupaai/movies
+tag: "sha-{commit}"
+port: 8123
+health: /healthz
+network: host
+devices: [zigbee]
+bluetooth: true
+`
+
+func TestSpecHardware(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	a := state.App{ID: "movies", Name: "Movies", Repo: repo, Manifest: []byte(haDoc), Promotion: "manual"}
+	if _, err := r.store.AddApp(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	rel := core.Release{Image: "ghcr.io/rupaai/movies", Commit: "abc", Manifest: []byte(haDoc)}
+	stick := filepath.Join(t.TempDir(), "zigbee")
+	if err := os.WriteFile(stick, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Dev ignores all three, so it can never touch real devices, even when not allowed.
+	dev, err := r.hub.spec(ctx, a, core.Dev, rel)
+	if err != nil {
+		t.Fatalf("dev should ignore hardware: %v", err)
+	}
+	if dev.HostNetwork || dev.Bluetooth || len(dev.Devices) != 0 || dev.HostPort == 0 {
+		t.Errorf("dev = %+v", dev)
+	}
+	// Prod stops when the app is not trusted, with a plain message.
+	if _, err := r.hub.spec(ctx, a, core.Prod, rel); err == nil || !strings.Contains(err.Error(), "hardware_apps") {
+		t.Fatalf("an app that isn't in hardware_apps should be refused, got %v", err)
+	}
+	r.hub.cfg.HardwareApps = []string{"movies"}
+	if _, err := r.hub.spec(ctx, a, core.Prod, rel); err == nil || !strings.Contains(err.Error(), `device "zigbee"`) {
+		t.Fatalf("a device missing from config.yaml should be explained, got %v", err)
+	}
+	r.hub.cfg.Devices = map[string]string{"zigbee": filepath.Join(t.TempDir(), "gone")}
+	if _, err := r.hub.spec(ctx, a, core.Prod, rel); err == nil || !strings.Contains(err.Error(), "plugged in") {
+		t.Fatalf("a device missing on the host should be explained, got %v", err)
+	}
+	r.hub.cfg.Devices["zigbee"] = stick
+	prod, err := r.hub.spec(ctx, a, core.Prod, rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !prod.HostNetwork || !prod.Bluetooth || !slices.Equal(prod.Devices, []string{stick}) {
+		t.Errorf("prod = %+v", prod)
+	}
+
+	// Another app on the host network can't use the same port.
+	other := strings.NewReplacer("id: movies", "id: other", "name: Movie Night", "name: Other", "devices: [zigbee]\n", "", "bluetooth: true\n", "").Replace(haDoc)
+	o := state.App{ID: "other", Name: "Other", Repo: "rupaai/other", Manifest: []byte(other), Promotion: "manual"}
+	if _, err := r.store.AddApp(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.store.SetWant(ctx, state.Deployment{App: "other", Env: core.Prod, Release: core.Release{Image: "ghcr.io/rupaai/other", Commit: "abc", Manifest: []byte(other)}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.hub.spec(ctx, a, core.Prod, rel); err == nil || !strings.Contains(err.Error(), "already used") {
+		t.Fatalf("a port used by another host-network app should be refused, got %v", err)
+	}
+}
+
+// With the host network the app answers on its own port, so the health check and the
+// address use it, not the port Homelab publishes.
+func TestHostNetworkUsesDirectPort(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	a := state.App{ID: "movies", Name: "Movies", Repo: repo, Manifest: []byte(haDoc), Promotion: "manual", Slot: 1}
+	host := []byte(haDoc)
+	if got := r.hub.reachPort(a.Slot, core.Prod, host, repo); got != 8123 {
+		t.Errorf("prod host-network port = %d, want 8123", got)
+	}
+	if got := r.hub.reachPort(a.Slot, core.Dev, host, repo); got != r.hub.hostPort(a.Slot, core.Dev) {
+		t.Errorf("dev must keep its own published port, got %d", got)
+	}
+	if got := r.hub.reachPort(a.Slot, core.Prod, []byte(manifestDoc), repo); got != r.hub.hostPort(a.Slot, core.Prod) {
+		t.Errorf("a normal app keeps its published port, got %d", got)
+	}
+	want := &core.Release{Image: "ghcr.io/rupaai/movies", Commit: "abc", Digest: "sha256:abc", Manifest: host}
+	run := &core.Running{App: "movies", Env: core.Prod, Digest: "sha256:abc", State: core.StateRunning}
+	r.health.SetFailing("http://127.0.0.1:8123/healthz", true)
+	if s := r.hub.checkEnv(ctx, a, core.Prod, want, run); s != core.Degraded {
+		t.Errorf("the check should reach port 8123 and fail, got %s", s)
+	}
+	r.health.SetFailing("http://127.0.0.1:8123/healthz", false)
+	if s := r.hub.checkEnv(ctx, a, core.Prod, want, run); s != core.Healthy {
+		t.Errorf("status = %s, want healthy", s)
+	}
+}

@@ -120,7 +120,13 @@ type EnvSpec struct {
 	Ports          []string // extra ports opened on the device, "host:container[/udp]"; prod only
 	// OpenPorts publishes Ports on every network (addresses: ip); otherwise on 127.0.0.1 only.
 	OpenPorts bool
-	Services  []Service // more containers that run next to the app, e.g. a media server
+	// HostNetwork, Devices and Bluetooth are for a trusted prod app that needs real
+	// hardware (hardware_apps in config.yaml). Devices are host paths, mounted at the same
+	// path inside. HostNetwork replaces HostPort: the app listens on Port on the device.
+	HostNetwork bool
+	Devices     []string
+	Bluetooth   bool
+	Services    []Service // more containers that run next to the app, e.g. a media server
 	// Postgres is the environment's database container (database: postgres); nil for none.
 	Postgres *Postgres
 	// Recreate makes fresh containers for the app and its services even when nothing

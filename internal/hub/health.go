@@ -66,7 +66,7 @@ func (h *Hub) checkEnv(ctx context.Context, a state.App, env string, want *core.
 			status, detail = core.Degraded, err.Error()
 			break
 		}
-		u := fmt.Sprintf("http://127.0.0.1:%d%s", h.hostPort(a.Slot, env), m.Health)
+		u := fmt.Sprintf("http://127.0.0.1:%d%s", h.reachPort(a.Slot, env, want.Manifest, a.Repo), m.Health)
 		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		res := h.ad.Health.Check(cctx, u)
 		cancel()
