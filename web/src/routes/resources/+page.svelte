@@ -90,6 +90,7 @@
 <svelte:head><title>Resources · Homelab</title></svelte:head>
 
 <div class="page">
+	<a class="back" href="/settings">← Settings</a>
 	<div class="page-head">
 		<div><h1>Resources</h1><p class="muted">What this computer and each app use right now, and how the device is doing.</p></div>
 		<button class="btn small" type="button" disabled={busy} onclick={() => load(true)}>{busy ? 'Checking…' : 'Refresh'}</button>

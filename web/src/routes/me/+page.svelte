@@ -46,12 +46,13 @@
 	}
 </script>
 
-<svelte:head><title>Me · Homelab</title></svelte:head>
+<svelte:head><title>Your account · Homelab</title></svelte:head>
 
 <div class="page">
-	<h1>Me</h1>
+	{#if person?.roles.some((r) => r === 'owner' || r === 'admin')}<a class="back" href="/settings">← Settings</a>{/if}
+	<h1>Your account</h1>
 	{#if error}<p class="notice bad" role="alert">{error}</p>{/if}
-	{#if person}<section class="card"><h2>{person.name}</h2><p class="muted">{person.login}</p><p>Roles: {person.roles.join(', ')}</p>{#if person.local}<button class="btn" type="button" disabled={busy} onclick={setUpPasskey}>{busy ? 'Preparing…' : 'Set up a passkey'}</button>{#if passkeyUrl}<p>Pocket ID will open its passkey setup page. On that page, click Add passkey to register this device.</p><a class="btn primary" href={passkeyUrl} target="_blank" rel="noopener">Register passkey</a>{/if}{/if}<button class="btn danger" type="button" disabled={busy} onclick={signOut}>{busy ? 'Signing out…' : 'Sign out'}</button></section>{/if}
+	{#if person}<section class="card"><h2>{person.name}</h2><p class="muted">{person.login}</p><p>Roles: {person.roles.join(', ')}</p>{#if person.local}<button class="btn" type="button" disabled={busy} onclick={setUpPasskey}>{busy ? 'Preparing…' : 'Set up a passkey'}</button>{#if passkeyUrl}<p>Pocket ID will open its passkey setup page. On that page, click Add passkey to register this device.</p><a class="btn primary" href={passkeyUrl} target="_blank" rel="noopener">Register passkey</a>{/if}{/if}<button class="btn" type="button" disabled={busy} onclick={signOut}>{busy ? 'Signing out…' : 'Sign out'}</button></section>{/if}
 	{#if person}
 		<section class="card" aria-labelledby="notifications">
 			<h2 id="notifications">Notifications</h2>
@@ -67,5 +68,6 @@
 
 <style>
 	.card + .card { margin-top: 1rem; }
+	.card > .btn { margin: 0.2rem 0.4rem 0.2rem 0; }
 	.actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.8rem 0; }
 </style>

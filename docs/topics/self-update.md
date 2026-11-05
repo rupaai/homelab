@@ -4,7 +4,7 @@ How Homelab on the device installs a newer version of itself, tries test version
 
 ## In short
 
-- On the device, Homelab can update itself from its GitHub releases. The update is in the companion: Resources, then "Update to ...".
+- On the device, Homelab can update itself from its GitHub releases. The update is in the companion: Settings, This device, then "Update to ...".
 - Each open pull request also has a test version. You can try one on the device, then keep it or go back to the old version.
 - A new version has two minutes to prove it is running. If it does not stay up after three starts, Homelab goes back to the version before it, on its own.
 - `homelab-services` is installed next to `homelabd` at the same version, and the two are updated together.

@@ -123,6 +123,12 @@ pre {
 	justify-content: space-between;
 	gap: 0.75rem;
 }
+.back {
+	text-decoration: none;
+	font-weight: 600;
+	align-self: flex-start;
+	padding: 0.25rem 0;
+}
 .card {
 	background: var(--surface);
 	border: 1px solid var(--border);
@@ -204,6 +210,10 @@ label {
 }
 input[type='text'],
 input[type='password'],
+input[type='email'],
+input[type='search'],
+input[type='url'],
+input[type='number'],
 select {
 	font: inherit;
 	width: 100%;

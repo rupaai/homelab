@@ -92,7 +92,8 @@
 <svelte:head><title>API keys · Homelab</title></svelte:head>
 
 <div class="page">
-	<div class="page-head"><h1>API keys</h1><a class="btn small" href="/settings">Settings</a></div>
+	<a class="back" href="/settings">← Settings</a>
+	<div class="page-head"><h1>API keys</h1></div>
 	<p class="muted intro">Keys let a server outside Homelab use it, for example a service that needs to know who's in the household. They work on the companion's address.</p>
 
 	{#if error}<p class="notice bad" role="alert">{error}</p>{/if}

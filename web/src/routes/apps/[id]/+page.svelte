@@ -64,14 +64,14 @@
 <svelte:head><title>{app?.name ?? 'App'} · Homelab</title></svelte:head>
 
 <div class="page">
-	<a class="back" href="/">← Projects</a>
+	<a class="back" href="/">← Apps</a>
 
 	{#if !appsStore.loaded}
 		<p class="muted loading"><Spinner /> Loading…</p>
 	{:else if !app}
 		<div class="card">
 			<p><strong>There's no app called "{id}".</strong></p>
-			<p class="muted">It may have been removed. <a href="/">Back to your projects</a>.</p>
+			<p class="muted">It may have been removed. <a href="/">Back to Apps</a>.</p>
 		</div>
 	{:else}
 		<div class="head">

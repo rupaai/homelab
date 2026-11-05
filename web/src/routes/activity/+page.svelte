@@ -7,6 +7,7 @@
 	import type { ActivityEvent } from '#lib/types.ts';
 	import EventList from '#lib/components/EventList.svelte';
 	import Spinner from '#lib/components/Spinner.svelte';
+	import ViewSwitch from '#lib/components/ViewSwitch.svelte';
 
 	const PAGE = 50;
 	let events = $state<ActivityEvent[]>([]);
@@ -40,6 +41,7 @@
 <svelte:head><title>Activity · Homelab</title></svelte:head>
 
 <div class="page">
+	<ViewSwitch label="Activity views" current="/activity" views={[{ href: '/activity', label: 'Events' }, { href: '/logs', label: 'Logs' }]} />
 	<div class="page-head">
 		<h1>Activity{#if page.url.searchParams.get('app')} · {appName(page.url.searchParams.get('app') ?? '')}{/if}</h1>
 		<button class="btn small" type="button" onclick={() => load()}>Refresh</button>

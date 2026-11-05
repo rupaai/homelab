@@ -1,223 +1,56 @@
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
-	import { api } from '#lib/api.ts';
-	import { messageOf } from '#lib/errors.ts';
-	import type { SettingView } from '#lib/types.ts';
-	import RevealedValue from '#lib/components/RevealedValue.svelte';
-	import SecretHistory from '#lib/components/SecretHistory.svelte';
-	import SecretRow from '#lib/components/SecretRow.svelte';
-	import SecretSheet from '#lib/components/SecretSheet.svelte';
-	import Spinner from '#lib/components/Spinner.svelte';
-
-	let items = $state<SettingView[]>([]);
-	let loaded = $state(false);
-	let error = $state('');
-	let editing = $state<SettingView | null>(null);
-	let history = $state<SettingView | null>(null);
-	let canSeeValues = $state(false);
-	// Values people asked to see, by name. Only kept while this page is open.
-	let revealed = $state<Record<string, string>>({});
-	let revealing = $state('');
-
-	async function show(name: string) {
-		revealing = name;
-		error = '';
-		try {
-			revealed[name] = await api.revealSetting(name);
-		} catch (e) {
-			error = messageOf(e);
-		} finally {
-			revealing = '';
-		}
-	}
-
-	async function restore(version: number) {
-		const h = history!;
-		await api.restoreSetting(h.name, version);
-		delete revealed[h.name];
-		history = null;
-		await load();
-	}
-
-	onDestroy(() => {
-		revealed = {};
-	});
-
-	async function load() {
-		try {
-			[items, canSeeValues] = await Promise.all([api.settings(), api.me().then((m) => m.canSeeSecrets === true)]);
-			error = '';
-		} catch (e) {
-			error = messageOf(e);
-		} finally {
-			loaded = true;
-		}
-	}
-	onMount(load);
-
-	// The Gmail address and app password have their own card.
-	const isEmail = (name: string) => name === 'EMAIL_ADDRESS' || name === 'EMAIL_APP_PASSWORD';
-	const credentials = $derived(items.filter((s) => !isEmail(s.name)));
-	const emailItems = $derived(items.filter((s) => isEmail(s.name)));
-	const emailReady = $derived(emailItems.length === 2 && emailItems.every((s) => s.set));
-	let emailAddress = $state('');
-	let emailPassword = $state('');
-	let emailBusy = $state(false);
-	let emailNote = $state('');
-	let emailError = $state('');
-
-	async function saveEmail(e: SubmitEvent) {
-		e.preventDefault();
-		emailBusy = true; emailNote = ''; emailError = '';
-		try {
-			if (emailAddress.trim()) await api.setSetting('EMAIL_ADDRESS', emailAddress.trim());
-			if (emailPassword.trim()) await api.setSetting('EMAIL_APP_PASSWORD', emailPassword.trim());
-			emailAddress = emailPassword = '';
-			emailNote = 'Saved.';
-			await load();
-		} catch (err) { emailError = messageOf(err); }
-		finally { emailBusy = false; }
-	}
-	async function sendTest() {
-		emailBusy = true; emailNote = ''; emailError = '';
-		try { await api.testEmail(); emailNote = 'Sent. Check your inbox.'; }
-		catch (err) { emailError = messageOf(err); }
-		finally { emailBusy = false; }
-	}
-
-	async function save(value: string) {
-		await api.setSetting(editing!.name, value);
-		delete revealed[editing!.name];
-		editing = null;
-		await load();
-	}
+	const rows = [
+		{ href: '/resources', title: 'This device', note: 'Health, updates and restarting Homelab.' },
+		{ href: '/people', title: 'People', note: 'Who can use Homelab and its apps.' },
+		{ href: '/settings/homelab', title: 'Homelab passwords and keys', note: 'Email setup and keys Homelab itself needs.' },
+		{ href: '/settings/keys', title: 'API keys', note: 'Let a server outside Homelab use it.' },
+		{ href: '/me', title: 'Your account', note: 'Passkey, notifications and sign out.' }
+	];
 </script>
 
 <svelte:head><title>Settings · Homelab</title></svelte:head>
 
 <div class="page">
-	<div class="page-head"><h1>Settings</h1><span class="head-links"><a class="btn small" href="/settings/keys">API keys</a><a class="btn small" href="/resources">Resources</a></span></div>
-	<p class="muted intro">
-		Passwords and keys Homelab itself needs.
-		{#if canSeeValues}
-			Showing a value is written to Activity.
-		{:else}
-			Only the owner, or people the owner allows, can see or change values.
-		{/if}
-	</p>
-
-	{#if error}<p class="notice bad" role="alert">{error}</p>{/if}
-
-	{#if !loaded}
-		<p class="muted loading"><Spinner /> Loading…</p>
-	{:else}
-		<section class="card email" aria-labelledby="email-title">
-			<h2 id="email-title">Email <span class="chip" class:missing={!emailReady}>{emailReady ? 'Set up' : 'Not set up'}</span></h2>
-			<p class="muted small">Homelab uses it to email invites. It sends from your Gmail account. Turn on 2-step verification, then make an app password at <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">myaccount.google.com/apppasswords</a>. It is not your Gmail password.</p>
-			{#if canSeeValues}
-				<form onsubmit={saveEmail}>
-					<label for="email-address">Gmail address</label>
-					<input id="email-address" type="email" bind:value={emailAddress} autocomplete="off" placeholder={emailReady ? 'Saved. Type to replace.' : 'you@gmail.com'} />
-					<label for="email-password">App password</label>
-					<input id="email-password" type="password" bind:value={emailPassword} autocomplete="new-password" placeholder={emailReady ? 'Saved. Type to replace.' : '16 letters'} />
-					<div class="email-actions">
-						<button class="btn small primary" type="submit" disabled={emailBusy || (!emailAddress.trim() && !emailPassword.trim())}>Save</button>
-						<button class="btn small" type="button" disabled={emailBusy || !emailReady} onclick={sendTest}>Send test email</button>
-					</div>
-				</form>
-			{:else}
-				<p class="muted small">Only the owner, or people the owner allows, can change these.</p>
-				<div class="email-actions"><button class="btn small" type="button" disabled={emailBusy || !emailReady} onclick={sendTest}>Send test email</button></div>
-			{/if}
-			{#if emailNote}<p class="small" role="status">{emailNote}</p>{/if}
-			{#if emailError}<p class="notice bad" role="alert">{emailError}</p>{/if}
-		</section>
-
-		<section class="card" aria-label="Homelab credentials">
-			<ul>
-				{#each credentials as s (s.name)}
-					<SecretRow name={s.name} set={s.set} updatedAt={s.updatedAt} updatedBy={s.updatedBy} note={s.description} extra={s.appliesAfterRestart ? 'Applies after Homelab restarts' : undefined}>
-						{#snippet actions()}
-							{#if canSeeValues}
-								{#if s.set}
-									<button class="btn small" type="button" disabled={revealing === s.name} onclick={() => (s.name in revealed ? delete revealed[s.name] : show(s.name))}>
-										{s.name in revealed ? 'Hide' : revealing === s.name ? 'Showing…' : 'Show'}<span class="sr-only"> {s.name}</span>
-									</button>
-									<button class="btn small" type="button" onclick={() => (history = s)}>
-										History<span class="sr-only"> of {s.name}</span>
-									</button>
-								{/if}
-								<button class="btn small" type="button" onclick={() => (editing = s)}>
-									{s.set ? 'Replace' : 'Set'}<span class="sr-only"> {s.name}</span>
-								</button>
-							{/if}
-						{/snippet}
-						{#snippet below()}
-							{#if s.name in revealed}
-								<RevealedValue value={revealed[s.name]} label={s.name} onhide={() => delete revealed[s.name]} />
-							{/if}
-						{/snippet}
-					</SecretRow>
-				{/each}
-			</ul>
-		</section>
-	{/if}
-
-	{#if editing}
-		<SecretSheet
-			title="{editing.set ? 'Replace' : 'Set'} {editing.name}"
-			name={editing.name}
-			intro={editing.appliesAfterRestart ? 'Applies after Homelab restarts.' : undefined}
-			onsave={save}
-			onclose={() => (editing = null)}
-		/>
-	{/if}
-
-	{#if history}
-		<SecretHistory
-			title="History of {history.name}"
-			name={history.name}
-			load={() => api.settingVersions(history!.name)}
-			onrestore={restore}
-			onclose={() => (history = null)}
-		/>
-	{/if}
+	<h1>Settings</h1>
+	<ul class="rows">
+		{#each rows as r (r.href)}
+			<li>
+				<a class="card row" href={r.href}>
+					<span class="text"><strong>{r.title}</strong><span class="muted small">{r.note}</span></span>
+					<svg class="chev" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+				</a>
+			</li>
+		{/each}
+	</ul>
 </div>
 
 <style>
-	.head-links {
-		display: flex;
-		gap: 0.4rem;
-	}
-	.intro,
-	.loading {
-		margin: 0;
-	}
-	.loading {
-		display: flex;
-		gap: 0.5rem;
-		align-items: center;
-	}
-	.email h2 {
-		margin: 0 0 0.4rem;
-		font-size: 1.05rem;
-	}
-	.email form {
-		display: grid;
-		gap: 0.45rem;
-	}
-	.email p {
-		margin: 0.3rem 0;
-	}
-	.email-actions {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.4rem;
-		margin-top: 0.3rem;
-	}
-	ul {
+	.rows {
 		list-style: none;
 		margin: 0;
 		padding: 0;
+		display: grid;
+		gap: 0.75rem;
+	}
+	.row {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		min-height: 44px;
+		color: var(--text);
+		text-decoration: none;
+	}
+	.row:hover {
+		background: var(--surface-2);
+	}
+	.text {
+		flex: 1;
+		min-width: 0;
+		display: grid;
+		gap: 0.1rem;
+	}
+	.chev {
+		color: var(--muted);
+		flex: none;
 	}
 </style>
