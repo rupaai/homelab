@@ -40,6 +40,7 @@ function env(app: string, name: EnvName, o: Partial<EnvView>): EnvView {
 		healthDetail: 'Answered a check a few seconds ago',
 		healthSince: ago(300),
 		checkedAt: ago(0.2),
+		off: false,
 		busy: '',
 		lastError: '',
 		deployedBy: '',
@@ -373,7 +374,9 @@ export const mockApi: Api = {
 		const a = find(id);
 		const dev = envOf(a, 'dev'), prod = envOf(a, 'prod');
 		const blockers: string[] = [];
-		if (dev.health !== 'healthy') blockers.push("Dev isn't healthy, so this build hasn't proven it works yet.");
+		const warnings: string[] = [];
+		if (dev.off) warnings.push("Dev is off, so this build wasn't tested in dev.");
+		else if (dev.health !== 'healthy') blockers.push("Dev isn't healthy, so this build hasn't proven it works yet.");
 		if (prod.version?.digest === dev.version?.digest) blockers.push('Prod already runs this build.');
 		if (prod.busy) blockers.push(`Prod is busy: ${prod.busy}.`);
 		const same = a.id !== 'movie-night';
@@ -391,7 +394,9 @@ export const mockApi: Api = {
 			dataCopy: !!prod.version,
 			missingSecrets: [],
 			devHealth: dev.health,
+			devOff: !!dev.off,
 			blockers,
+			warnings,
 			nextVersion: dev.version?.version ? prodVersion(dev.version.version) : '',
 			summary: dev.version?.version ? (dev.version.summary ?? '') : '',
 			notes: dev.version?.version ? (dev.version.notes ?? '') : ''
@@ -429,6 +434,17 @@ export const mockApi: Api = {
 			ev.health = 'healthy';
 			log('rupaai', a.id, e, 'restart.done', 'It is running and healthy');
 		}, 5000);
+		await delay(null);
+	},
+	async setOff(id, e, off) {
+		const a = find(id);
+		const ev = envOf(a, e);
+		if (e !== 'dev') throw new Error('Only dev can be turned off. Prod always runs.');
+		ev.off = off;
+		ev.state = off ? 'off' : 'running';
+		ev.health = off ? 'unknown' : 'healthy';
+		ev.healthDetail = off ? 'Turned off' : 'Just started';
+		log('rupaai', a.id, e, off ? 'env.turned_off' : 'env.turned_on', off ? 'Turned dev off. It is stopped, and its data is kept. New builds wait' : 'Turned dev on. It starts on its newest build');
 		await delay(null);
 	},
 	logs: async (id, e, lines) => {

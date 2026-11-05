@@ -9,6 +9,7 @@ How a build of an app gets to dev and prod, and how it goes back. Back to [the m
 - A promote copies prod's data first. If the new version does not start or does not stay healthy, Homelab puts the old version back with its data.
 - Rollback starts the version before the current one. You do it by hand, or Homelab does it itself for 10 minutes after a promote.
 - An admin can restart an environment. Homelab makes fresh containers from the build that environment runs now, so new secrets and settings are picked up. The build does not change.
+- An admin can turn dev off for an app, to save memory. Dev stops and stays stopped, its data is kept, and new builds wait until it is turned on. Prod is never touched.
 - You see it on the app page in the companion ([apps/[id]/+page.svelte](../../web/src/routes/apps/%5Bid%5D/+page.svelte)), in the promote sheet ([PromoteSheet.svelte](../../web/src/lib/components/PromoteSheet.svelte)) and in the activity log.
 
 ## How it works
@@ -33,6 +34,12 @@ How a build of an app gets to dev and prod, and how it goes back. Back to [the m
 13. **Clean up images.** After a healthy start, `removeOldImages` deletes the app's images that no container uses. It keeps what each environment runs now and what is in its recent history (`removeOldImages`, `actions.go`).
 14. **Mirror the code.** Every 10 minutes (`MirrorEvery`), `SyncMirrors` (in [manage.go](../../internal/hub/manage.go)) updates a full read-only git copy of each repo ([gitmirror.go](../../internal/adapters/gitmirror/gitmirror.go)).
 15. **Restart an environment.** The Restart button on an environment card ([RestartSheet.svelte](../../web/src/lib/components/RestartSheet.svelte)) calls `RestartEnv` ([actions.go](../../internal/hub/actions.go)). It needs the app's lock, an idle environment, and something running there. It deploys the release the environment runs now, with `Recreate` set. Compose then runs `up -d --remove-orphans --force-recreate` (`upArgs` in [docker.go](../../internal/adapters/docker/docker.go)), so the app, its extra services and its database container are all made again. The wanted release does not change, and no data is copied. The wait for health is the same as a promote's. Activity records `restart.started`, then `restart.done`, `restart.failed` or `restart.unhealthy`.
+16. **Turn dev off and on.** "Turn off" on the dev card ([TurnOffSheet.svelte](../../web/src/lib/components/TurnOffSheet.svelte)) and "Turn on" call `POST /api/apps/{id}/envs/dev/off` and `.../on` (admins only, `envOff` in [apps.go](../../internal/api/apps.go)). Both go to `SetEnvOff` ([actions.go](../../internal/hub/actions.go)), which sets `envs.off` in the state file (default on), writes `env.turned_off` or `env.turned_on` to the activity log, and wakes the reconciler. Prod returns a plain 400.
+    - **Reconcile:** while dev is off, `reconcileEnv` calls `reconcileOff` ([hub.go](../../internal/hub/hub.go)). It stops the whole compose project (the app and services like Jellyfin) with `Stop`, keeps containers, data, secrets and the database, removes dev's address, and never starts it.
+    - **New builds:** they are still saved as dev's wanted version (`deploy.waiting` in the log), but nothing starts. Turning dev on starts the newest one.
+    - **Health and alerts:** dev is not checked while off, so it is never down and sends no alert (alerts are for prod only). The app view gives `off: true`, state `off` and the detail "Turned off".
+    - **Promote:** dev being off does not block a promote. The preview has `devOff: true` and a warning, "Dev is off, so this build wasn't tested in dev." It still blocks when nothing was ever deployed to dev. Auto-promote waits ("Dev is off") and starts counting again once dev is on.
+    - **Refused with "Dev is off. Turn it on first.":** restart, rollback, and database copies, restores and imports for dev. Logs and secrets still work.
 
 ### Addresses and ports
 
@@ -78,6 +85,8 @@ How a build of an app gets to dev and prod, and how it goes back. Back to [the m
 | [internal/hub/auto_test.go](../../internal/hub/auto_test.go) | Auto-promote, smoke hold, watch and auto rollback tests |
 | [internal/hub/hub_test.go](../../internal/hub/hub_test.go), [observe_test.go](../../internal/hub/observe_test.go), [deploydata_test.go](../../internal/hub/deploydata_test.go) | Reconciler, observe and deploy data tests |
 | [internal/hub/restart_test.go](../../internal/hub/restart_test.go) | Tests for the environment restart and its refusals |
+| [internal/hub/devoff_test.go](../../internal/hub/devoff_test.go) | Tests for turning dev off and on: reconcile, new builds, promote, auto-promote, refusals |
+| [web/src/lib/components/TurnOffSheet.svelte](../../web/src/lib/components/TurnOffSheet.svelte) | The confirm sheet for turning dev off |
 | [internal/api/restart_test.go](../../internal/api/restart_test.go) | Tests for the environment restart route |
 | [web/src/lib/components/RestartSheet.svelte](../../web/src/lib/components/RestartSheet.svelte) | The restart confirm sheet for an environment |
 | [web/src/routes/apps/[id]/+page.svelte](../../web/src/routes/apps/%5Bid%5D/+page.svelte) | The app page: environments, deploy, promote, rollback |

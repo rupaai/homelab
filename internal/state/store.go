@@ -35,6 +35,9 @@ type Env struct {
 	// LastBuild is the newest build commit already handled for auto-dev, so a build is
 	// deployed once, even if someone later deploys an older commit by hand.
 	LastBuild string
+	// Off means the environment is turned off: nothing starts there, though Want is still
+	// recorded. Only dev is turned off. Default is on.
+	Off bool
 }
 
 // Deployment is one entry in an environment's history: what ran, from when, set by whom.
@@ -153,6 +156,8 @@ var migrations = []string{
 	CREATE UNIQUE INDEX api_keys_one_per_app_env ON api_keys(app, env) WHERE kind='app' AND revoked_at IS NULL;`,
 	// Each person's own password for other devices (addresses: ip). Only a bcrypt hash is kept.
 	`CREATE TABLE person_passwords (person_id TEXT PRIMARY KEY REFERENCES people(id) ON DELETE CASCADE, hash TEXT NOT NULL);`,
+	// An environment can be turned off (dev), to save memory. Everything stays; nothing runs.
+	`ALTER TABLE envs ADD COLUMN off INTEGER NOT NULL DEFAULT 0;`,
 }
 
 func (s *Store) migrate() error {
@@ -345,7 +350,7 @@ func (s *Store) App(ctx context.Context, id string) (App, error) {
 func (s *Store) Env(ctx context.Context, app, env string) (Env, error) {
 	e := Env{App: app, Env: env}
 	var want sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT want, last_build FROM envs WHERE app = ? AND env = ?`, app, env).Scan(&want, &e.LastBuild)
+	err := s.db.QueryRowContext(ctx, `SELECT want, last_build, off FROM envs WHERE app = ? AND env = ?`, app, env).Scan(&want, &e.LastBuild, &e.Off)
 	if errors.Is(err, sql.ErrNoRows) {
 		return e, core.ErrNotFound
 	}
@@ -439,6 +444,16 @@ func (s *Store) SetVersion(ctx context.Context, app, env, commit, version, summa
 func (s *Store) SetLastBuild(ctx context.Context, app, env, commit string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE envs SET last_build = ? WHERE app = ? AND env = ?`, commit, app, env)
 	return err
+}
+
+// SetOff turns an environment off or on. It says whether anything changed.
+func (s *Store) SetOff(ctx context.Context, app, env string, off bool) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE envs SET off = ? WHERE app = ? AND env = ? AND off <> ?`, off, app, env, off)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // History lists an environment's deployments, newest first.

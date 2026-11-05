@@ -124,6 +124,7 @@ type envStatus struct {
 	lastErr     string
 	lastErrAt   time.Time
 	nextAttempt time.Time
+	offStopped  bool // dev is off and its containers were stopped; don't stop them again
 }
 
 // New creates a hub. It doesn't start anything yet.
@@ -439,6 +440,10 @@ func (h *Hub) reconcileEnv(ctx context.Context, a state.App, env string, r *core
 	h.mu.Unlock()
 
 	name := manifest.AddressName(a.ID, env)
+	if e.Off {
+		h.reconcileOff(ctx, a, env, r, name)
+		return
+	}
 	if e.Want == nil {
 		if r != nil {
 			_, _ = h.stopIfRunning(ctx, a.ID, env, r)
@@ -478,6 +483,27 @@ func (h *Hub) reconcileEnv(ctx context.Context, a state.App, env string, r *core
 		}
 	}
 	h.ensureAddress(ctx, name, h.reachPort(a.Slot, env, e.Want.Manifest, a.Repo), a.ID, a.Name, env)
+}
+
+// reconcileOff keeps a turned-off environment stopped: its containers (the app and its
+// services) are stopped, not removed, and its address goes. Nothing starts it.
+func (h *Hub) reconcileOff(ctx context.Context, a state.App, env string, r *core.Running, name string) {
+	h.mu.Lock()
+	s := h.st(a.ID, env)
+	stopped := s.offStopped
+	s.health, s.detail, s.since = core.Unknown, "Turned off", time.Time{}
+	h.mu.Unlock()
+	// A stopped app with a stopped service looks incomplete, so it is stopped once, not every round.
+	if r != nil && (r.State != core.StateExited || (r.Incomplete && !stopped)) {
+		if _, err := h.stopIfRunning(ctx, a.ID, env, nil); err != nil {
+			h.log.Error("reconcile: stop turned-off env", "app", a.ID, "env", env, "err", err)
+			return
+		}
+		h.mu.Lock()
+		h.st(a.ID, env).offStopped = true
+		h.mu.Unlock()
+	}
+	h.removeAddress(ctx, name)
 }
 
 func (h *Hub) deployOK(app, env string) {

@@ -68,6 +68,7 @@ type EnvView struct {
 	HealthDetail string       `json:"healthDetail"`
 	HealthSince  *time.Time   `json:"healthSince"`
 	CheckedAt    *time.Time   `json:"checkedAt"`
+	Off          bool         `json:"off"`       // turned off (dev only): nothing runs, new builds wait
 	Busy         string       `json:"busy"`      // e.g. "Promoting 9f3c2ab"; "" when idle
 	LastError    string       `json:"lastError"` // the last failed attempt to start it
 	DeployedBy   string       `json:"deployedBy"`
@@ -179,6 +180,9 @@ func (h *Hub) appView(ctx context.Context, a state.App, addrs map[string]core.Ad
 			ev.State = s.running.State
 		}
 		h.mu.Unlock()
+		if e.Off {
+			ev.Off, ev.State, ev.Health, ev.HealthDetail, ev.HealthSince, ev.CheckedAt, ev.LastError = true, "off", core.Unknown, "Turned off", nil, nil, ""
+		}
 		v.Envs = append(v.Envs, ev)
 	}
 	h.mu.Lock()

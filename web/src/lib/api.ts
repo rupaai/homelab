@@ -126,7 +126,7 @@ const realApi: Api = {
 	deploy: (id, commit) => request('POST', `/api/apps/${enc(id)}/deploy`, commit ? { commit } : {}),
 	promotePreview: async (id) => {
 		const p = await request<PromotePreview>('GET', `/api/apps/${enc(id)}/promote`);
-		return { ...p, commits: list(p.commits), blockers: list(p.blockers), missingSecrets: list(p.missingSecrets), nextVersion: p.nextVersion ?? '', summary: p.summary ?? '', notes: p.notes ?? '' };
+		return { ...p, commits: list(p.commits), blockers: list(p.blockers), warnings: list(p.warnings), devOff: !!p.devOff, missingSecrets: list(p.missingSecrets), nextVersion: p.nextVersion ?? '', summary: p.summary ?? '', notes: p.notes ?? '' };
 	},
 	promote: (id) => request('POST', `/api/apps/${enc(id)}/promote`),
 	rollbackPreview: async (id, env) => {
@@ -135,6 +135,7 @@ const realApi: Api = {
 	},
 	rollback: (id, env) => request('POST', `/api/apps/${enc(id)}/envs/${env}/rollback`),
 	restart: (id, env) => request('POST', `/api/apps/${enc(id)}/envs/${env}/restart`),
+	setOff: (id, env, off) => request('POST', `/api/apps/${enc(id)}/envs/${env}/${off ? 'off' : 'on'}`),
 	logs: async (id, env, lines) => (await request<{ lines: string }>('GET', `/api/apps/${enc(id)}/envs/${env}/logs?lines=${lines}`)).lines ?? '',
 	pushKey: async () => (await request<{ publicKey: string }>('GET', '/api/push/key')).publicKey ?? '',
 	subscribePush: (sub) => request('POST', '/api/push/subscriptions', sub),

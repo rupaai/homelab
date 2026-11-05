@@ -153,6 +153,8 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("GET /api/apps/{id}/envs/{env}/rollback", s.previewRollback)
 	mux.HandleFunc("POST /api/apps/{id}/envs/{env}/rollback", s.rollback)
 	mux.HandleFunc("POST /api/apps/{id}/envs/{env}/restart", s.restartEnv)
+	mux.HandleFunc("POST /api/apps/{id}/envs/{env}/off", s.envOff(true))
+	mux.HandleFunc("POST /api/apps/{id}/envs/{env}/on", s.envOff(false))
 	mux.HandleFunc("GET /api/apps/{id}/envs/{env}/logs", s.logs)
 	mux.HandleFunc("GET /api/activity", s.activity)
 	mux.HandleFunc("PUT /api/apps/{id}/promotion", s.setPromotion)

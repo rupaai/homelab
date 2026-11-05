@@ -35,8 +35,8 @@ func (h *Hub) checkApp(ctx context.Context, a state.App) {
 	if err == nil {
 		for _, env := range []string{core.Dev, core.Prod} {
 			e, err := h.store.Env(ctx, a.ID, env)
-			if err != nil || e.Want == nil {
-				continue
+			if err != nil || e.Want == nil || e.Off {
+				continue // nothing wanted, or turned off: nothing to check
 			}
 			s := h.checkEnv(ctx, a, env, e.Want, envs[env])
 			if env == core.Prod {

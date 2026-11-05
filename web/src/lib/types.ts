@@ -47,6 +47,8 @@ export interface EnvView {
 	healthDetail: string;
 	healthSince: string | null;
 	checkedAt: string | null;
+	/** Turned off (dev only): nothing runs and new builds wait. */
+	off: boolean;
 	busy: string;
 	lastError: string;
 	deployedBy: string;
@@ -157,7 +159,11 @@ export interface PromotePreview {
 	dataCopy: boolean;
 	missingSecrets: string[];
 	devHealth: Health;
+	/** Dev is turned off, so this build wasn't tested there. */
+	devOff: boolean;
 	blockers: string[];
+	/** Shown, but they don't stop the promote. */
+	warnings: string[];
 	/** The version prod gets, like v0.4.0. Empty when versions aren't made for this app. */
 	nextVersion: string;
 	summary: string;
@@ -261,6 +267,8 @@ export interface Api {
 	rollback(appId: string, env: EnvName): Promise<void>;
 	/** Fresh containers from the release the env runs now. */
 	restart(appId: string, env: EnvName): Promise<void>;
+	/** Turn dev off (stopped, data kept, new builds wait) or on again. Admins; only dev. */
+	setOff(appId: string, env: EnvName, off: boolean): Promise<void>;
 	logs(appId: string, env: EnvName, lines: number): Promise<string>;
 	activity(q?: ActivityQuery): Promise<ActivityEvent[]>;
 	setPromotion(appId: string, mode: PromotionMode): Promise<AppView>;

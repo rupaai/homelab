@@ -97,3 +97,35 @@ func TestVersionsStayOnTheReleaseAndItsHistory(t *testing.T) {
 		t.Fatalf("unknown app: %v", err)
 	}
 }
+
+func TestEnvOffDefaultsToOnAndSurvivesReopen(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "homelab.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddApp(ctx, App{ID: "movies", Name: "Movie Night", Repo: "rupaai/x", Manifest: []byte("id: movies"), Promotion: "manual", AddedBy: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := s.Env(ctx, "movies", core.Dev); e.Off {
+		t.Fatal("a new env starts off")
+	}
+	if changed, err := s.SetOff(ctx, "movies", core.Dev, false); err != nil || changed {
+		t.Fatalf("on to on: %v %v", changed, err)
+	}
+	if changed, err := s.SetOff(ctx, "movies", core.Dev, true); err != nil || !changed {
+		t.Fatalf("off: %v %v", changed, err)
+	}
+	s.Close()
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	dev, _ := s.Env(ctx, "movies", core.Dev)
+	prod, _ := s.Env(ctx, "movies", core.Prod)
+	if !dev.Off || prod.Off {
+		t.Fatalf("dev off=%v prod off=%v", dev.Off, prod.Off)
+	}
+}

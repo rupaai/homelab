@@ -185,6 +185,20 @@ func (s *server) restartEnv(w http.ResponseWriter, r *http.Request) {
 	accepted(w)
 }
 
+// envOff turns an environment off or on. Only dev can be turned off (the hub says so).
+func (s *server) envOff(off bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !decode(w, r, &struct{}{}, false) {
+			return
+		}
+		if err := s.hub.SetEnvOff(actionCtx(r), r.PathValue("id"), r.PathValue("env"), off, viewer(r)); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		accepted(w)
+	}
+}
+
 // appDatabase describes the app's database and its copies.
 func (s *server) appDatabase(w http.ResponseWriter, r *http.Request) {
 	v, err := s.hub.Database(r.Context(), r.PathValue("id"))

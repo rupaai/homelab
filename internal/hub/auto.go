@@ -83,6 +83,10 @@ func (h *Hub) autoPromoteApp(ctx context.Context, a state.App) {
 		h.note(a.ID, autoState{State: "done", Detail: fmt.Sprintf("Prod already runs %s.", rel.Short())})
 		return
 	}
+	if dev.Off {
+		h.note(a.ID, autoState{State: "waiting", Detail: fmt.Sprintf("Dev is off. %s waits until you turn dev on.", rel.Short())})
+		return
+	}
 	holds, err := h.store.Holds(ctx, a.ID)
 	if err != nil {
 		return

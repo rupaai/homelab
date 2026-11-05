@@ -180,6 +180,9 @@ func (h *Hub) dbTarget(ctx context.Context, appID, env string) (state.App, *mani
 	if err != nil {
 		return a, nil, err
 	}
+	if e.Off {
+		return a, nil, errDevOff
+	}
 	if e.Want == nil {
 		return a, nil, userErr("Nothing is deployed to %s yet, so it has no database.", env)
 	}
