@@ -27,7 +27,7 @@ const (
 	defaultRepo = "rupaai/homelab"
 	defaultAPI  = "https://api.github.com"
 	// checkEvery is how long an answer about the newest release is trusted.
-	checkEvery = time.Hour
+	checkEvery = 10 * time.Minute
 	// maxProgram is the largest program Homelab downloads.
 	maxProgram = 300 << 20
 	checksums  = "checksums.txt"

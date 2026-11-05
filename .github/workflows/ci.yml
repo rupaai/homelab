@@ -21,6 +21,7 @@ jobs:
         with:
           go-version-file: go.mod
       - run: make check
+      - run: make check-clean-up
       - name: Docker end-to-end test
         run: make test-docker
       - name: Builds for the Mac and for Linux
