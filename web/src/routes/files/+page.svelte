@@ -169,11 +169,11 @@
 		background: var(--accent);
 	}
 	.bar span.full {
-		background: var(--bad, #c0392b);
+		background: var(--bad);
 	}
 	.problem {
 		margin: 0.3rem 0 0;
-		color: var(--bad, #c0392b);
+		color: var(--bad);
 	}
 	.folder {
 		display: flex;

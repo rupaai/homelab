@@ -229,8 +229,9 @@
 	.icon {
 		width: 3rem;
 		height: 3rem;
-		border-radius: 14px;
-		background: var(--accent-soft);
+		border-radius: 10px;
+		border: 1px solid var(--border);
+		background: var(--surface-2);
 		color: var(--accent);
 		display: grid;
 		place-items: center;

@@ -151,18 +151,23 @@
 <div class="shell">
 	<header>
 		<a class="brand" href="/">
-			<img src="/icon.svg" alt="" width="26" height="26" />
+			<span class="logo" aria-hidden="true">
+				<svg viewBox="0 0 24 24" width="20" height="20"><path d="M5 11.2 12 5l7 6.2V19H5z" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round" /><path d="M10 19v-4.5h4V19" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round" /></svg>
+			</span>
 			<span>Homelab</span>
 		</a>
 		{#if showNav}
 			<nav class="top" aria-label="Main">
 				{#each tabs as t}
-					<a href={t.href} aria-current={t.match(page.url.pathname) ? 'page' : undefined}>{t.label}</a>
+					<a href={t.href} aria-current={t.match(page.url.pathname) ? 'page' : undefined}>
+						<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={t.icon} /></svg>
+						<span>{t.label}</span>
+					</a>
 				{/each}
 			</nav>
 		{/if}
 		{#if authState === 'ready' && me}
-			<a class="avatar" href="/me" aria-label="Your account" aria-current={page.url.pathname.startsWith('/me') ? 'page' : undefined}>{initial}</a>
+			<a class="avatar" href="/me" aria-label="Your account" aria-current={page.url.pathname.startsWith('/me') ? 'page' : undefined}><span>{initial}</span></a>
 		{/if}
 	</header>
 
@@ -218,51 +223,86 @@
 	header {
 		display: flex;
 		align-items: center;
-		gap: 0.75rem;
-		padding: calc(0.6rem + env(safe-area-inset-top)) calc(var(--gutter) + env(safe-area-inset-right)) 0.6rem calc(var(--gutter) + env(safe-area-inset-left));
+		gap: 0.5rem;
+		min-height: 56px;
+		padding: env(safe-area-inset-top) calc(var(--gutter) + env(safe-area-inset-right)) 0 calc(var(--gutter) + env(safe-area-inset-left));
 		border-bottom: 1px solid var(--border);
-		background: var(--surface);
+		background: var(--bg);
 	}
 	.brand {
 		display: inline-flex;
 		align-items: center;
 		gap: 0.5rem;
-		font-weight: 700;
-		font-size: 1.1rem;
+		margin-right: auto;
+		font-weight: 600;
+		font-size: 1rem;
+		letter-spacing: -0.01em;
 		color: var(--text);
 		text-decoration: none;
+	}
+	.logo {
+		width: 28px;
+		height: 28px;
+		border-radius: 8px;
+		border: 1px solid var(--border-strong);
+		background: var(--surface);
+		display: grid;
+		place-items: center;
+		color: var(--accent);
 	}
 	.top {
 		display: none;
 		gap: 0.25rem;
-		margin-left: auto;
-	}
-	.avatar {
-		margin-left: auto;
-		width: 2.25rem;
-		height: 2.25rem;
-		border-radius: 50%;
-		display: grid;
-		place-items: center;
-		background: var(--accent-soft);
-		color: var(--accent);
-		font-weight: 700;
-		text-decoration: none;
-		border: 2px solid transparent;
-	}
-	.avatar[aria-current='page'] {
-		border-color: var(--accent);
 	}
 	.top a {
-		padding: 0.4rem 0.8rem;
-		border-radius: 8px;
+		position: relative;
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		min-height: 44px;
+		padding: 0 0.75rem;
 		color: var(--muted);
 		text-decoration: none;
-		font-weight: 600;
+		font-size: 0.875rem;
+		font-weight: 500;
+	}
+	.top a:hover {
+		color: var(--text);
 	}
 	.top a[aria-current='page'] {
 		color: var(--accent);
-		background: var(--accent-soft);
+	}
+	.top a[aria-current='page']::after {
+		content: '';
+		position: absolute;
+		left: 0.75rem;
+		right: 0.75rem;
+		bottom: -6px;
+		height: 2px;
+		background: var(--accent);
+	}
+	.avatar {
+		width: 44px;
+		height: 44px;
+		display: grid;
+		place-items: center;
+		text-decoration: none;
+		color: var(--text);
+	}
+	.avatar span {
+		width: 32px;
+		height: 32px;
+		border-radius: 50%;
+		display: grid;
+		place-items: center;
+		background: var(--surface-2);
+		border: 1px solid var(--border-strong);
+		font-size: 0.8125rem;
+		font-weight: 600;
+	}
+	.avatar[aria-current='page'] span {
+		border-color: var(--accent);
+		color: var(--accent);
 	}
 	main {
 		overflow-y: auto;
@@ -277,42 +317,52 @@
 		display: grid;
 		grid-template-columns: repeat(auto-fit, minmax(3.25rem, 1fr));
 		border-top: 1px solid var(--border);
-		background: var(--surface);
+		background: var(--bg);
 		padding-bottom: env(safe-area-inset-bottom);
 	}
-	.auth-card { max-width: 29rem; margin: 2.5rem auto; padding: 1.4rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
-	.auth-card h1 { margin: 0 0 .5rem; }
-	.auth-card form { display: grid; gap: .55rem; margin-top: 1rem; }
-	.auth-card input { width: 100%; }
-	.auth-card .btn { width: fit-content; }
-	.auth-card details { margin-top: 1.5rem; }
-	.auth-card summary { cursor: pointer; font-weight: 600; }
-	.recovery-code { border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-wrap: anywhere; }
-	.actions { display: flex; flex-wrap: wrap; gap: .5rem; margin: .8rem 0; }
 	.tabbar a {
 		display: flex;
 		flex-direction: column;
 		align-items: center;
-		gap: 0.1rem;
-		padding: 0.5rem 0 0.4rem;
-		min-height: 52px;
+		justify-content: center;
+		gap: 2px;
+		min-height: 56px;
 		color: var(--muted);
-		font-size: 0.75rem;
-		font-weight: 600;
+		font-size: 0.6875rem;
+		font-weight: 500;
 		text-decoration: none;
 	}
 	.tabbar a[aria-current='page'] {
 		color: var(--accent);
 	}
+	.auth-card { max-width: 29rem; margin: 2.5rem var(--gutter); padding: 1.5rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+	.auth-card h1 { margin: 0 0 .5rem; }
+	.auth-card p { color: var(--muted); }
+	.auth-card p strong, .auth-card p code { color: var(--text); }
+	.auth-card form { display: grid; gap: .5rem; margin-top: 1rem; }
+	.auth-card input { width: 100%; }
+	.auth-card .btn { width: fit-content; }
+	.auth-card .notice { color: var(--text); }
+	.auth-card details { margin-top: 1.5rem; }
+	.auth-card summary { cursor: pointer; font-weight: 500; min-height: 44px; display: flex; align-items: center; }
+	.recovery-code { border: 1px solid var(--border-strong); border-radius: 8px; padding: 1rem; background: var(--surface-2); font-family: var(--mono); overflow-wrap: anywhere; }
+	.actions { display: flex; flex-wrap: wrap; gap: .5rem; margin: .8rem 0; }
 	@media (min-width: 720px) {
+		header {
+			padding-left: calc(24px + env(safe-area-inset-left));
+			padding-right: calc(24px + env(safe-area-inset-right));
+			min-height: 60px;
+		}
 		.tabbar {
 			display: none;
 		}
 		.top {
 			display: flex;
+			margin-right: 0.5rem;
 		}
-		.top + .avatar {
-			margin-left: 0.5rem;
+		.auth-card {
+			margin-left: auto;
+			margin-right: auto;
 		}
 		.shell {
 			grid-template-rows: auto minmax(0, 1fr);

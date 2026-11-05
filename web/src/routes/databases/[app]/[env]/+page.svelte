@@ -517,7 +517,7 @@
 		padding: 0.6rem 0.7rem;
 		font: inherit;
 		font-family: var(--mono);
-		border-radius: 10px;
+		border-radius: 8px;
 		border: 1px solid var(--border-strong);
 		background: var(--bg);
 		color: var(--text);
