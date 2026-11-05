@@ -33,6 +33,11 @@ type Config struct {
 	// Folders are shared folders on the device that apps may ask for by name, e.g.
 	// media: /mnt/storage. Apps see nothing else outside their own data.
 	Folders map[string]string `yaml:"folders"`
+	// Devices are hardware on the device that a trusted app may use, by name, e.g.
+	// zigbee: /dev/serial/by-id/usb-.... Each is given to the app at the same path.
+	Devices map[string]string `yaml:"devices"`
+	// HardwareApps are the app ids allowed to use network: host, devices and bluetooth.
+	HardwareApps []string `yaml:"hardware_apps"`
 	// Storage is where Homelab keeps files (platform services), e.g.
 	// [{name: main, path: /mnt/storage}]. Default: one disk, main, at <home>/storage.
 	Storage []core.Disk `yaml:"storage"`
@@ -176,6 +181,19 @@ func parseConfig(b []byte) (Config, error) {
 	for name, dir := range c.Folders {
 		if !filepath.IsAbs(dir) {
 			return c, fmt.Errorf("config.yaml: folder %s must be an absolute path, not %q", name, dir)
+		}
+	}
+	for name, dev := range c.Devices {
+		if !diskName.MatchString(name) {
+			return c, fmt.Errorf("config.yaml: device names use lowercase letters, numbers, - and _, not %q", name)
+		}
+		if !filepath.IsAbs(dev) || !strings.HasPrefix(dev, "/dev/") || filepath.Clean(dev) != dev {
+			return c, fmt.Errorf("config.yaml: device %s must be a path under /dev, not %q", name, dev)
+		}
+	}
+	for _, id := range c.HardwareApps {
+		if strings.TrimSpace(id) == "" {
+			return c, errors.New("config.yaml: hardware_apps must list app ids")
 		}
 	}
 	seen := map[string]bool{}

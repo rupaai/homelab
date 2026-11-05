@@ -39,6 +39,8 @@ type Config struct {
 	AppAPIURL      string            // where apps reach the Homelab API (the app door), e.g. http://host.docker.internal:7085
 	OpenApps       bool              // addresses: ip; anyone who reaches an app's port may use it, without sign-in
 	Folders        map[string]string // the device's shared folders apps may ask for (config.yaml folders:), e.g. media: /mnt/storage
+	Devices        map[string]string // hardware apps may use (config.yaml devices:), by name
+	HardwareApps   []string          // app ids allowed host network, devices and Bluetooth (config.yaml hardware_apps:)
 	Storage        []core.Disk       // where homelab-services keeps files (config.yaml storage:)
 	Now            func() time.Time
 	Logger         *slog.Logger
@@ -272,6 +274,18 @@ func (h *Hub) hostPort(slot int, env string) int {
 	return h.cfg.HostPortBase + slot*10 + n
 }
 
+// reachPort is the port on 127.0.0.1 where an environment's app answers: its own port when
+// it runs on the host network (prod only), otherwise the port Homelab publishes for it.
+// raw is the manifest of the release; one that can't be read gives the published port.
+func (h *Hub) reachPort(slot int, env string, raw []byte, repo string) int {
+	if env == core.Prod {
+		if m, err := h.parse(raw, repo); err == nil && m.Network == manifest.NetworkHost {
+			return m.Port
+		}
+	}
+	return h.hostPort(slot, env)
+}
+
 // dbPort is where an environment's postgres is published on 127.0.0.1.
 func (h *Hub) dbPort(slot int, env string) int { return h.hostPort(slot, env) + 5 }
 
@@ -463,7 +477,7 @@ func (h *Hub) reconcileEnv(ctx context.Context, a state.App, env string, r *core
 			}
 		}
 	}
-	h.ensureAddress(ctx, name, h.hostPort(a.Slot, env), a.ID, a.Name, env)
+	h.ensureAddress(ctx, name, h.reachPort(a.Slot, env, e.Want.Manifest, a.Repo), a.ID, a.Name, env)
 }
 
 func (h *Hub) deployOK(app, env string) {
@@ -562,6 +576,11 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 		Memory: m.Memory, Mounts: mounts, Vars: vars, Auth: auth, OpenPorts: h.cfg.OpenApps,
 		Secrets: secrets, SecretsAsFiles: m.SecretsAs == manifest.SecretsAsFiles,
 	}
+	if env == core.Prod && m.UsesHardware() {
+		if err := h.hardware(ctx, a, m, &spec); err != nil {
+			return core.EnvSpec{}, err
+		}
+	}
 	if m.Database == core.DatabasePostgres {
 		// Postgres changes the owner of its folder itself, so Homelab only makes it.
 		dir := filepath.Join(h.dataDir(a.ID, env), core.DatabaseFolder)
@@ -586,6 +605,46 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 		spec.Services = append(spec.Services, svc)
 	}
 	return spec, nil
+}
+
+// hardware lets a trusted prod app use the device's network, devices and Bluetooth. Only
+// apps listed in hardware_apps (config.yaml) may, and only with devices the device owner
+// named there. Dev never gets here: it runs as a normal sandbox.
+func (h *Hub) hardware(ctx context.Context, a state.App, m *manifest.Manifest, spec *core.EnvSpec) error {
+	if !slices.Contains(h.cfg.HardwareApps, a.ID) {
+		return fmt.Errorf("it asks for real hardware (network: host, devices or bluetooth), which only apps the device owner trusts may use; add %q to hardware_apps in config.yaml and restart Homelab", a.ID)
+	}
+	for _, name := range m.Devices {
+		path, ok := h.cfg.Devices[name]
+		if !ok {
+			return fmt.Errorf("it needs the device %q; add it to config.yaml under devices:, e.g. \"devices: {%s: /dev/serial/by-id/...}\", and restart Homelab", name, name)
+		}
+		if _, err := os.Stat(path); err != nil {
+			return fmt.Errorf("the device %q (%s) isn't on this device; is it plugged in?", name, path)
+		}
+		spec.Devices = append(spec.Devices, path)
+	}
+	spec.Bluetooth = m.Bluetooth
+	if m.Network == manifest.NetworkHost {
+		apps, err := h.store.Apps(ctx)
+		if err != nil {
+			return err
+		}
+		for _, o := range apps {
+			if o.ID == a.ID {
+				continue
+			}
+			e, err := h.store.Env(ctx, o.ID, core.Prod)
+			if err != nil || e.Want == nil {
+				continue
+			}
+			if om, err := h.parse(e.Want.Manifest, o.Repo); err == nil && om.Network == manifest.NetworkHost && om.Port == m.Port {
+				return fmt.Errorf("port %d is already used on the device by %s, which runs on the host network", m.Port, o.Name)
+			}
+		}
+		spec.HostNetwork = true
+	}
+	return nil
 }
 
 // mounts makes an environment's data folders and finds the shared folders a container asks for.

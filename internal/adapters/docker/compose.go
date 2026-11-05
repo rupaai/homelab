@@ -60,6 +60,8 @@ type composeService struct {
 	Restart     string                    `json:"restart"`
 	EnvFile     []string                  `json:"env_file,omitempty"`
 	Environment map[string]string         `json:"environment,omitempty"`
+	NetworkMode string                    `json:"network_mode,omitempty"`
+	CapAdd      []string                  `json:"cap_add,omitempty"`
 	Ports       []string                  `json:"ports"`
 	Volumes     []composeMount            `json:"volumes,omitempty"`
 	Devices     []string                  `json:"devices,omitempty"`
@@ -149,7 +151,7 @@ func composeYAML(spec core.EnvSpec, envDir string) ([]byte, error) {
 	if spec.Release.Image == "" {
 		return nil, fmt.Errorf("%s/%s has no image to run", spec.App, spec.Env)
 	}
-	if spec.Port <= 0 || spec.HostPort <= 0 {
+	if spec.Port <= 0 || (spec.HostPort <= 0 && !spec.HostNetwork) {
 		return nil, fmt.Errorf("%s/%s needs a port and a host port", spec.App, spec.Env)
 	}
 	svc := composeService{
@@ -182,6 +184,23 @@ func composeYAML(spec core.EnvSpec, envDir string) ([]byte, error) {
 	}
 	for _, p := range spec.Ports {
 		svc.Ports = append(svc.Ports, publish(p, spec.OpenPorts))
+	}
+	if spec.HostNetwork {
+		if len(spec.Ports) > 0 || len(spec.Services) > 0 || spec.Postgres != nil {
+			return nil, fmt.Errorf("%s/%s: the host network can't be used with ports, services or a database", spec.App, spec.Env)
+		}
+		// The app listens on the device's own port, so nothing is published.
+		svc.NetworkMode, svc.Ports = "host", []string{}
+	}
+	for _, d := range spec.Devices {
+		if !filepath.IsAbs(d) {
+			return nil, fmt.Errorf("device %q must be an absolute path", d)
+		}
+		svc.Devices = append(svc.Devices, dollars(d)+":"+dollars(d))
+	}
+	if spec.Bluetooth {
+		svc.Volumes = append(svc.Volumes, composeMount{Type: "bind", Source: "/run/dbus", Target: "/run/dbus", ReadOnly: true})
+		svc.CapAdd = []string{"NET_ADMIN", "NET_RAW"}
 	}
 	file := composeFile{Services: map[string]composeService{serviceName: svc}}
 	for _, s := range spec.Services {

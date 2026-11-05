@@ -160,8 +160,10 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
 - Run on a Mac: `bin/homelabd run`, companion at `http://localhost:7080`.
 
 ## 6. Rules
-- **Never touch containers Homelab didn't make.** mars also runs Gabriele's Home Assistant,
-  matterbridge, cloudflared, matter-server and tplink-proxy.
+- **Never touch containers Homelab didn't make.** mars also runs Home Assistant,
+  matterbridge, cloudflared and matter-server (in /srv/homeassistant, Labiba's) and
+  tplink-proxy (Gabriele's). After Home Assistant moves into Homelab it runs as
+  `homelab-home-assistant-*`, which Homelab made.
 - **App secrets are Labiba's.** Nobody sees a value unless Labiba allows it, including AI
   helpers. Never print, log or commit a secret, and never ask for one in chat.
 - Keep it simple: the smallest thing that works. No extra layers or setup steps unless asked.

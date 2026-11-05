@@ -351,3 +351,48 @@ func TestDatabasePathSetting(t *testing.T) {
 		t.Error("DATABASE_PATH with the default sqlite folder was accepted")
 	}
 }
+
+const hardware = `
+network: host
+devices: [zigbee]
+bluetooth: true
+`
+
+func TestHardware(t *testing.T) {
+	m, err := Parse([]byte(movies+hardware), Defaults{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Network != NetworkHost || len(m.Devices) != 1 || m.Devices[0] != "zigbee" || !m.Bluetooth || !m.UsesHardware() {
+		t.Errorf("parsed %+v", m)
+	}
+	plain, _ := Parse([]byte(movies), Defaults{})
+	if plain.UsesHardware() {
+		t.Error("an app that asks for nothing shouldn't use hardware")
+	}
+	bad := map[string]string{
+		"network other":   "network: bridge\n",
+		"host + service":  hardware + "services:\n  - {name: x, image: \"x/y:1\"}\n",
+		"host + ports":    hardware + "ports: [\"9000:9000\"]\n",
+		"host + postgres": hardware + "database: postgres\n",
+		"homelab port":    strings.Replace(movies, "port: 8000", "port: 7100", 1) + hardware,
+		"device twice":    "devices: [zigbee, zigbee]\n",
+		"device name":     "devices: [\"/dev/ttyUSB0\"]\n",
+	}
+	for name, extra := range bad {
+		doc := movies + extra
+		if name == "homelab port" {
+			doc = extra
+		}
+		if _, err := Parse([]byte(doc), Defaults{}); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+	// Devices and Bluetooth are fine without the host network, and sqlite is fine with it.
+	if _, err := Parse([]byte(movies+"devices: [zigbee]\nbluetooth: true\nports: [\"9000:9000\"]\n"), Defaults{}); err != nil {
+		t.Errorf("devices with ports: %v", err)
+	}
+	if _, err := Parse([]byte(movies+"network: host\ndatabase: sqlite\n"), Defaults{}); err != nil {
+		t.Errorf("host with sqlite: %v", err)
+	}
+}
