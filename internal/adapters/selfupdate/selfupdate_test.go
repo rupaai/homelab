@@ -368,16 +368,21 @@ func TestStatusAsksGitHubAgainWhenFresh(t *testing.T) {
 	first := latest()
 	u.Status(context.Background(), false)
 	if latest() != first {
-		t.Fatal("a second status within the hour asked GitHub again")
+		t.Fatal("a second status within 10 minutes asked GitHub again")
 	}
 	u.Status(context.Background(), true)
 	if latest() == first {
 		t.Fatal("a fresh status (Refresh) didn't ask GitHub")
 	}
-	now = now.Add(61 * time.Minute)
+	now = now.Add(9 * time.Minute)
 	before := latest()
 	u.Status(context.Background(), false)
+	if latest() != before {
+		t.Fatal("an answer under 10 minutes old wasn't trusted")
+	}
+	now = now.Add(2 * time.Minute)
+	u.Status(context.Background(), false)
 	if latest() == before {
-		t.Fatal("an answer over an hour old was trusted")
+		t.Fatal("an answer over 10 minutes old was trusted")
 	}
 }

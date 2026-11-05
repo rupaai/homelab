@@ -59,7 +59,7 @@ To check a change, run the test command in the row, or `make test` for everythin
 - `handover/`: feature notes and their rules (`handover/README.md`). Topic: none (process).
 - `internal/`: the Go code. Topics are listed per subfolder below.
 - `plugins/`: the TypeScript, Python and Rust libraries. Topic: [Plugins](topics/plugins.md).
-- `scripts/`: `build-release.sh` (releases, self-update), `handover.py` and `test_handover.py` (handover notes). Topics: [Releases](topics/releases.md), [Self-update](topics/self-update.md).
+- `scripts/`: `build-release.sh` (releases, self-update), `handover.py` and `test_handover.py` (handover notes), `clean_test_versions.py` and `test_clean_test_versions.py` (delete old test versions). Topics: [Releases](topics/releases.md), [Self-update](topics/self-update.md).
 - `services/`: the Rust workspace, with the crate `services/homelab-services`. Topic: [Services program](topics/services-program.md).
 - `web/`: the companion (SvelteKit). Topic: [Companion](topics/companion.md).
 

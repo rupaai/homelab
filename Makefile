@@ -2,7 +2,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: all build web services test test-docker check check-services check-web check-handover clean
+.PHONY: all build web services test test-docker check check-services check-web check-handover check-clean-up clean
 
 all: build
 
@@ -36,7 +36,11 @@ check-web:
 check-handover:
 	python3 scripts/test_handover.py
 
-test: check check-services check-web check-handover
+# The test version clean-up script (scripts/clean_test_versions.py) and its tests.
+check-clean-up:
+	python3 scripts/test_clean_test_versions.py
+
+test: check check-services check-web check-handover check-clean-up
 
 # The Docker adapter's end-to-end test needs a running Docker.
 test-docker:

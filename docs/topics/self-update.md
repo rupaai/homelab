@@ -9,12 +9,12 @@ How Homelab on the device installs a newer version of itself, tries test version
 - A new version has two minutes to prove it is running. If it does not stay up after three starts, Homelab goes back to the version before it, on its own.
 - `homelab-services` is installed next to `homelabd` at the same version, and the two are updated together.
 - An admin can restart Homelab from Resources ("Restart Homelab"). It stops and systemd starts it again on the same version. The button shows only where systemd runs Homelab, so not on a Mac.
-- Homelab checks GitHub for a newer version when the Resources screen asks, at most once an hour. Refresh asks at once.
+- Homelab checks GitHub for a newer version when the Resources screen asks, at most once every 10 minutes. Refresh asks at once.
 
 ## How it works
 
 1. **Install.** `homelabd setup` (run as root) copies the program into `<home>/bin` as `homelabd-<version>`, makes `<home>/bin/homelabd` a symlink to it, and writes the systemd unit `homelab.service` ([setup.go](../../cmd/homelabd/setup.go)). The unit runs `update-guard` before each start and then `bin/homelabd run`. Homelab's home is `/var/lib/homelab` on the device.
-2. **Ask for a version.** The Resources screen calls `GET /api/device`. `Status` in [selfupdate.go](../../internal/adapters/selfupdate/selfupdate.go) asks GitHub for the latest release, unless it already has an answer from the last hour. `?check=1` (Refresh) asks now. The answer says whether a newer version exists and what changed (`ParseNotes` in [notes.go](../../internal/adapters/selfupdate/notes.go)).
+2. **Ask for a version.** The Resources screen calls `GET /api/device`. `Status` in [selfupdate.go](../../internal/adapters/selfupdate/selfupdate.go) asks GitHub for the latest release, unless it already has an answer from the last 10 minutes. `?check=1` (Refresh) asks now. The answer says whether a newer version exists and what changed (`ParseNotes` in [notes.go](../../internal/adapters/selfupdate/notes.go)).
 3. **Update.** `POST /api/device/update` runs `UpdateHomelab` ([device.go](../../internal/hub/device.go)). It refuses while any app action is running, or while a test version is on.
 4. **Download and check.** `install` downloads `homelabd-<os>-<arch>` and `homelab-services-<os>-<arch>` from the release, checks the SHA-256 against `checksums.txt`, and writes each to `<home>/bin/<name>-<version>`. Then `checkProgram` runs `version` on the new program and checks that the version matches.
 5. **Switch.** `Switch` ([layout.go](../../internal/adapters/selfupdate/layout.go)) points `previous` at the running version, writes `update-pending.json`, and points `homelabd` at the new version.
@@ -55,7 +55,8 @@ How Homelab on the device installs a newer version of itself, tries test version
 | [internal/core/contracts.go](../../internal/core/contracts.go) | The `Updater` interface that the hub uses |
 | [scripts/build-release.sh](../../scripts/build-release.sh) | Builds the programs for the release: `homelabd` for linux/amd64, linux/arm64 and darwin/arm64; `homelab-services` for linux amd64 and arm64; `checksums.txt` |
 | [.github/workflows/release.yml](../../.github/workflows/release.yml) | Makes a release for `main` and uploads the programs |
-| [.github/workflows/test-build.yml](../../.github/workflows/test-build.yml) | Makes a test version for each open PR |
+| [.github/workflows/test-build.yml](../../.github/workflows/test-build.yml) | Makes a test version for each open PR. Deletes it when the PR closes, and a daily sweep (with `scripts/clean_test_versions.py`) deletes any left over |
+| [scripts/clean_test_versions.py](../../scripts/clean_test_versions.py) | Deletes test versions whose PR is not open. Tests: `scripts/test_clean_test_versions.py` (`make check-clean-up`) |
 | [web/src/routes/resources/+page.svelte](../../web/src/routes/resources/+page.svelte) | The Resources screen: "Update to ...", "Restart Homelab", Refresh, Try, "Keep this version" and "Go back to ..." |
 | [web/src/lib/api.ts](../../web/src/lib/api.ts) | The update and test calls the screen makes |
 

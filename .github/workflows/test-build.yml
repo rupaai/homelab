@@ -5,15 +5,20 @@ name: Test build
 # `homelab-services release`) that can be tried on the device from the companion (Resources → Homelab → Test versions).
 # A new push replaces it; closing the pull request deletes it. Pull requests from forks get
 # none, because they can't publish releases.
+# A daily sweep (and a manual run) also deletes the test versions of every pull request that
+# is not open, so a clean-up that failed once is retried (scripts/clean_test_versions.py).
 on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: test-build-${{ github.event.pull_request.number }}
+  group: test-build-${{ github.event.pull_request.number || 'sweep' }}
   cancel-in-progress: true
 
 env:
@@ -22,7 +27,7 @@ env:
 
 jobs:
   build:
-    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -67,11 +72,14 @@ jobs:
             --notes "Test version of #$PR (${SHA::7}). Try it on the device from the companion: Resources → Homelab → Test versions."
 
   clean-up:
-    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || (github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     steps:
-      - name: Delete the test version
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Delete the test versions of pull requests that are not open
         run: |
-          gh release list -R "$GITHUB_REPOSITORY" --limit 200 --json tagName -q '.[].tagName' | { grep -E "^(pr-$PR-|v[0-9]+\.[0-9]+\.[0-9]+-pr\.$PR\.)" || true; } | while read -r tag; do
-            gh release delete "$tag" -R "$GITHUB_REPOSITORY" --cleanup-tag --yes
-          done
+          args=()
+          if [ -n "$PR" ]; then args+=(--closed "$PR"); fi
+          python3 scripts/clean_test_versions.py "${args[@]}"
