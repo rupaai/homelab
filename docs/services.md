@@ -55,6 +55,8 @@ services:
 - `ports` are opened only for prod, because a port number can be used once per device.
   With `addresses: ip` they are open to the network; otherwise on 127.0.0.1 only. Host
   ports 7000-7999 are kept for Homelab.
+- An app can also use real hardware (host network, a USB device, Bluetooth), in prod only,
+  when the device owner allows it. See [Hardware](topics/hardware.md).
 - Service images come from public registries and are downloaded once per tag.
 - Only the app has a health check, a web address and a version; services follow the app's
   deploys. If a service stops or never starts, Homelab starts the environment again and

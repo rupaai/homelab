@@ -234,7 +234,7 @@ func (h *Hub) applyAndWaitWith(ctx context.Context, a state.App, env string, rel
 		return false
 	}
 	h.deployOK(a.ID, env)
-	h.ensureAddress(ctx, manifest.AddressName(a.ID, env), h.hostPort(a.Slot, env), a.ID, a.Name, env)
+	h.ensureAddress(ctx, manifest.AddressName(a.ID, env), h.reachPort(a.Slot, env, rel.Manifest, a.Repo), a.ID, a.Name, env)
 	ok, detail := h.waitHealthy(ctx, a, env, &rel)
 	if ok {
 		h.logEvent(ctx, state.Event{Actor: actor, App: a.ID, Env: env, Action: kind + ".done", Detail: rel.Label() + " is running and healthy"})

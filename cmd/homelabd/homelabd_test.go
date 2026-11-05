@@ -318,3 +318,24 @@ func TestParseConfigLogs(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigHardware(t *testing.T) {
+	c, err := parseConfig([]byte("devices: {zigbee: /dev/serial/by-id/usb-x-if00}\nhardware_apps: [home-assistant]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Devices["zigbee"] != "/dev/serial/by-id/usb-x-if00" || len(c.HardwareApps) != 1 || c.HardwareApps[0] != "home-assistant" {
+		t.Errorf("config = %+v", c)
+	}
+	for _, in := range []string{
+		"devices: {zigbee: ttyUSB0}\n",
+		"devices: {zigbee: /etc/passwd}\n",
+		"devices: {zigbee: /dev/../etc/passwd}\n",
+		"devices: {Zigbee: /dev/ttyUSB0}\n",
+		"hardware_apps: [\"\"]\n",
+	} {
+		if _, err := parseConfig([]byte(in)); err == nil {
+			t.Errorf("%q should be refused", in)
+		}
+	}
+}

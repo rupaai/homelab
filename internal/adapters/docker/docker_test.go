@@ -436,3 +436,50 @@ func TestUpArgsForceRecreateOnlyOnRestart(t *testing.T) {
 		t.Errorf("restart: %q", got)
 	}
 }
+
+func TestComposeHardware(t *testing.T) {
+	s := testSpec()
+	s.Env, s.HostPort = "prod", 0
+	s.Port = 8123
+	s.HostNetwork = true
+	s.Devices = []string{"/dev/serial/by-id/usb-zigbee-if00"}
+	s.Bluetooth = true
+	b, err := composeYAML(s, "/srv/homelab/movies/prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	for _, want := range []string{
+		`"network_mode": "host"`,
+		`"/dev/serial/by-id/usb-zigbee-if00:/dev/serial/by-id/usb-zigbee-if00"`,
+		`"source": "/run/dbus"`,
+		`"target": "/run/dbus"`,
+		`"NET_ADMIN"`, `"NET_RAW"`,
+		`"restart": "unless-stopped"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("compose file is missing %s:\n%s", want, got)
+		}
+	}
+	for _, bad := range []string{"127.0.0.1:", "privileged", `"networks"`, `"/dev:/dev"`} {
+		if strings.Contains(got, bad) {
+			t.Errorf("compose file has %s:\n%s", bad, got)
+		}
+	}
+	// The default is still a plain sandbox.
+	plain, _ := composeYAML(testSpec(), "/srv/homelab/movies/prod")
+	for _, bad := range []string{"network_mode", "cap_add", "/run/dbus", `"devices"`} {
+		if strings.Contains(string(plain), bad) {
+			t.Errorf("a normal app has %s", bad)
+		}
+	}
+	// Host network can't carry published ports, services or a database.
+	s.Ports = []string{"9000:9000"}
+	if _, err := composeYAML(s, "/srv/homelab/movies/prod"); err == nil {
+		t.Error("host network with ports should be refused")
+	}
+	s.Ports, s.Devices = nil, []string{"dev/relative"}
+	if _, err := composeYAML(s, "/srv/homelab/movies/prod"); err == nil {
+		t.Error("a relative device path should be refused")
+	}
+}
