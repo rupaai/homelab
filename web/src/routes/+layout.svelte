@@ -10,6 +10,7 @@
 	import { ApiError, messageOf } from '#lib/errors.ts';
 	import PasskeyRegistration from '#lib/components/PasskeyRegistration.svelte';
 	import type { MeView, SetupResult } from '#lib/types.ts';
+	import { navTabs } from '#lib/nav.ts';
 	import '../app.css';
 
 	let { children } = $props();
@@ -34,22 +35,10 @@
 	let ownerNeedsPasskey = $state(false);
 	let invitePasskeyUrl = $state('');
 	let inviteToken = '';
-	const admin = $derived(!!me?.roles.some((r) => r === 'owner' || r === 'admin'));
-	const builder = $derived(admin || !!me?.roles.includes('builder'));
-	const tabs = $derived.by(() => {
-		const items: { href:string; label:string; match:(p:string)=>boolean; icon:string }[] = [
-			{ href: '/home', label: 'Apps', match: (p: string) => p === '/home', icon: 'M3 5h7v6H3zM14 5h7v6h-7zM3 15h7v6H3zM14 15h7v6h-7z' }
-		];
-		if (builder) items.push({ href: '/', label: 'Projects', match: (p: string) => p === '/' || p.startsWith('/apps/'), icon: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' });
-		if (admin) items.push({ href: '/activity', label: 'Activity', match: (p: string) => p.startsWith('/activity'), icon: 'M4 12h4l3-8 4 16 3-8h2' });
-		if (admin) items.push({ href: '/files', label: 'Files', match: (p: string) => p.startsWith('/files'), icon: 'M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6' });
-		if (admin) items.push({ href: '/databases', label: 'Data', match: (p: string) => p.startsWith('/databases'), icon: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6' });
-		if (admin) items.push({ href: '/logs', label: 'Logs', match: (p: string) => p.startsWith('/logs'), icon: 'M4 6h16M4 12h16M4 18h10' });
-		if (admin) items.push({ href: '/people', label: 'People', match: (p: string) => p.startsWith('/people'), icon: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M20 8v6M23 11h-6' });
-		if (admin) items.push({ href: '/settings', label: 'Settings', match: (p: string) => p.startsWith('/settings'), icon: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l-.1-.1a1.7 1.7 0 0 1 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z' });
-		items.push({ href: '/me', label: 'Me', match: (p: string) => p.startsWith('/me'), icon: 'M20 21a8 8 0 0 0-16 0M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8' });
-		return items;
-	});
+	const tabs = $derived(navTabs(me?.roles ?? []));
+	// One tab is not a menu: family and builders see no tab bar.
+	const showNav = $derived(authState === 'ready' && tabs.length > 1);
+	const initial = $derived((me?.name?.trim().charAt(0) || '?').toUpperCase());
 
 	onMount(() => {
 		// A session that ends while the app is open (a Home Screen app can stay open for days).
@@ -85,7 +74,6 @@
 			passwordMode = !!status.password;
 			try {
 				me = await api.me(); authState = 'ready';
-				if (!me.roles.some((r) => ['owner', 'admin', 'builder'].includes(r)) && page.url.pathname === '/') await goto('/home', { replaceState: true });
 			} catch (e) { authState = e instanceof ApiError && e.status === 403 ? (passwordMode ? 'password' : 'signedOut') : 'error'; }
 		} catch { authState = 'error'; }
 	}
@@ -166,11 +154,16 @@
 			<img src="/icon.svg" alt="" width="26" height="26" />
 			<span>Homelab</span>
 		</a>
-		<nav class="top" aria-label="Main">
-			{#each tabs as t}
-				<a href={t.href} aria-current={t.match(page.url.pathname) ? 'page' : undefined}>{t.label}</a>
-			{/each}
-		</nav>
+		{#if showNav}
+			<nav class="top" aria-label="Main">
+				{#each tabs as t}
+					<a href={t.href} aria-current={t.match(page.url.pathname) ? 'page' : undefined}>{t.label}</a>
+				{/each}
+			</nav>
+		{/if}
+		{#if authState === 'ready' && me}
+			<a class="avatar" href="/me" aria-label="Your account" aria-current={page.url.pathname.startsWith('/me') ? 'page' : undefined}>{initial}</a>
+		{/if}
 	</header>
 
 	<main>
@@ -202,14 +195,16 @@
 		{/if}
 	</main>
 
-	<nav class="tabbar" aria-label="Main">
-		{#each tabs as t}
-			<a href={t.href} aria-current={t.match(page.url.pathname) ? 'page' : undefined}>
-				<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={t.icon} /></svg>
-				<span>{t.label}</span>
-			</a>
-		{/each}
-	</nav>
+	{#if showNav}
+		<nav class="tabbar" aria-label="Main">
+			{#each tabs as t}
+				<a href={t.href} aria-current={t.match(page.url.pathname) ? 'page' : undefined}>
+					<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={t.icon} /></svg>
+					<span>{t.label}</span>
+				</a>
+			{/each}
+		</nav>
+	{/if}
 </div>
 
 <style>
@@ -217,13 +212,13 @@
 		height: 100dvh;
 		display: grid;
 		grid-template-rows: auto minmax(0, 1fr) auto;
-		max-width: 44rem;
+		max-width: 64rem;
 		margin: 0 auto;
 	}
 	header {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
+		gap: 0.75rem;
 		padding: calc(0.6rem + env(safe-area-inset-top)) calc(var(--gutter) + env(safe-area-inset-right)) 0.6rem calc(var(--gutter) + env(safe-area-inset-left));
 		border-bottom: 1px solid var(--border);
 		background: var(--surface);
@@ -240,6 +235,23 @@
 	.top {
 		display: none;
 		gap: 0.25rem;
+		margin-left: auto;
+	}
+	.avatar {
+		margin-left: auto;
+		width: 2.25rem;
+		height: 2.25rem;
+		border-radius: 50%;
+		display: grid;
+		place-items: center;
+		background: var(--accent-soft);
+		color: var(--accent);
+		font-weight: 700;
+		text-decoration: none;
+		border: 2px solid transparent;
+	}
+	.avatar[aria-current='page'] {
+		border-color: var(--accent);
 	}
 	.top a {
 		padding: 0.4rem 0.8rem;
@@ -298,6 +310,9 @@
 		}
 		.top {
 			display: flex;
+		}
+		.top + .avatar {
+			margin-left: 0.5rem;
 		}
 		.shell {
 			grid-template-rows: auto minmax(0, 1fr);

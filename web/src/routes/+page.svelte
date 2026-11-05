@@ -3,7 +3,8 @@
 	import { onMount } from 'svelte';
 	import { api } from '#lib/api.ts';
 	import { messageOf } from '#lib/errors.ts';
-	import { appInitial, envLabel, releaseName } from '#lib/format.ts';
+	import { appAddress, appInitial, envLabel, releaseName } from '#lib/format.ts';
+	import { appsStore } from '#lib/apps.svelte.ts';
 	import type { AppView, MeView } from '#lib/types.ts';
 	import { startPolling } from '#lib/poll.ts';
 	import Sheet from '#lib/components/Sheet.svelte';
@@ -15,14 +16,21 @@
 	let projectsError = $state('');
 	let me = $state<MeView | null>(null);
 	const canAddApps = $derived(!!me?.roles.some((role) => role === 'owner' || role === 'admin'));
+	const builder = $derived(canAddApps || !!me?.roles.includes('builder'));
+	// Builders see project cards. Everyone else sees the apps shared with them.
+	let meLoaded = $state(false);
 
 	async function refreshProjects() {
-		try { [projects, me] = await Promise.all([api.projects(), api.me()]); projectsError = ''; }
-		catch (error) { projectsError = messageOf(error); }
-		finally { projectsLoaded = true; }
+		try {
+			me = await api.me();
+			meLoaded = true;
+			if (builder) { projects = await api.projects(); projectsError = ''; projectsLoaded = true; }
+			else { await appsStore.refresh(); }
+		}
+		catch (error) { projectsError = messageOf(error); projectsLoaded = true; }
 	}
 
-	onMount(() => startPolling(refreshProjects, () => 5000));
+	onMount(() => startPolling(refreshProjects, () => (builder ? 5000 : appsStore.pollMs)));
 
 	let adding = $state(false);
 	let repo = $state('');
@@ -47,16 +55,36 @@
 	}
 </script>
 
-<svelte:head><title>Projects · Homelab</title></svelte:head>
+<svelte:head><title>Apps · Homelab</title></svelte:head>
 
 <div class="page">
 	<div class="page-head">
-		<h1>Projects</h1>
+		<h1>Apps</h1>
 		{#if canAddApps}<button class="btn primary small" type="button" onclick={() => ((adding = true), (addError = ''))}>Add app</button>{/if}
 	</div>
 
-	{#if !projectsLoaded}
+	{#if !meLoaded && !projectsError}
 		<p class="muted loading"><Spinner /> Loading your apps…</p>
+	{:else if !builder && meLoaded}
+		{#if !appsStore.loaded}
+			<p class="muted loading"><Spinner /> Loading your apps…</p>
+		{:else if appsStore.list.length === 0}
+			<div class="card"><p><strong>No apps are shared with you yet.</strong></p><p class="muted">Ask a Homelab admin to give you access.</p></div>
+		{/if}
+		<div class="grid">
+			{#each appsStore.list as app (app.id)}
+				{@const prod = app.envs.find((e) => e.env === 'prod')}
+				<article class="card family-card">
+					<div class="icon" aria-hidden="true">{app.icon || appInitial(app.name)}</div>
+					<div class="titles"><h2>{app.name}</h2><p class="muted small repo">Production</p></div>
+					{#if prod?.address && prod.addressReady}
+						<a class="btn primary small" href={appAddress(prod.address)} target="_blank" rel="noopener">Open<span class="sr-only"> {app.name} (opens in a new tab)</span></a>
+					{:else}
+						<span class="muted small">Not running</span>
+					{/if}
+				</article>
+			{/each}
+		</div>
 	{:else if projectsError && projects.length === 0}
 		<p class="notice bad" role="alert">{projectsError}</p>
 	{:else if projects.length === 0}
@@ -66,8 +94,10 @@
 		</div>
 	{/if}
 
-	{#each projects as app (app.id)}
+	<div class="grid">
+	{#if builder}{#each projects as app (app.id)}
 		{@const b = app.latestBuild}
+		{@const prod = app.envs.find((e) => e.env === 'prod')}
 		<article class="card app">
 			<div class="head">
 				<span class="icon" aria-hidden="true">{app.icon || appInitial(app.name)}</span>
@@ -99,8 +129,13 @@
 			{:else if b?.status === 'passed' && !b.deployed}
 				<p class="hint-row ready"><strong>New build ready</strong> <span class="muted">({b.short}), not on dev yet</span></p>
 			{/if}
+
+			{#if prod?.address && prod.addressReady}
+				<div class="open-row"><a class="btn primary small" href={appAddress(prod.address)} target="_blank" rel="noopener">Open<span class="sr-only"> {app.name} (opens in a new tab)</span></a></div>
+			{/if}
 		</article>
-	{/each}
+	{/each}{/if}
+	</div>
 </div>
 
 {#if adding}
@@ -123,6 +158,32 @@
 {/if}
 
 <style>
+	.grid {
+		display: grid;
+		gap: 1rem;
+		grid-template-columns: minmax(0, 1fr);
+	}
+	@media (min-width: 720px) {
+		.grid {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+	}
+	.family-card {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+	}
+	.family-card h2 {
+		margin: 0;
+	}
+	.open-row {
+		position: relative;
+		z-index: 1;
+		margin-top: auto;
+		padding-top: 0.7rem;
+		display: flex;
+		justify-content: flex-end;
+	}
 	.loading {
 		display: flex;
 		gap: 0.5rem;
@@ -133,6 +194,8 @@
 	}
 	.app {
 		position: relative;
+		display: flex;
+		flex-direction: column;
 	}
 	.head {
 		display: flex;

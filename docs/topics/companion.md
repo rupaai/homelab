@@ -7,7 +7,7 @@ This page covers the companion, the website where you manage Homelab. It covers 
 - The companion is a SvelteKit app in `web/`. It is built to static files and copied into the `homelabd` binary.
 - You open it at `http://localhost:7080` on the device, or at the device's address on your home network.
 - It talks to `homelabd` only through the JSON API under `/api/`. The server checks every call.
-- Each screen is a folder under `web/src/routes/`, for example Apps, Files, Databases, Logs and Resources.
+- Each screen is a folder under `web/src/routes/`, for example Apps, Activity, Storage and Settings.
 - For a screen without Homelab running, start the dev server with `?mock` in the address. The screen shows fake data.
 
 ## How it works
@@ -36,7 +36,10 @@ Who may do what: the server decides. The owner, admins, builders and users see d
 | File | What it does |
 |---|---|
 | `web/src/routes/` | One folder per screen. See the list below. |
-| `web/src/routes/+layout.svelte` | The shell: first-time setup, sign-in, the top bar and tab bar, and the session check. |
+| `web/src/routes/+layout.svelte` | The shell: first-time setup, sign-in, the top bar, the phone tab bar, the round account button (`/me`), and the session check. |
+| `web/src/lib/nav.ts` | `navTabs(roles)`: the main tabs per role and which paths light each one. Admins get Apps, Activity, Storage, Settings. Everyone else gets only Apps, and then no tab bar shows. |
+| `web/src/lib/nav.test.ts` | Tests the tabs per role and the path rules, including the old paths. |
+| `web/src/lib/components/ViewSwitch.svelte` | A small switch made of links. Used for Events / Logs and Files / Databases. |
 | `web/src/routes/+layout.ts` | Turns off server rendering and prerendering (`ssr = false`, `prerender = false`). |
 | `web/src/lib/api.ts` | The one API client. Chooses the real calls or the mock (`useMock`). Adds the auth and CSRF headers. |
 | `web/src/lib/api.test.ts` | Tests the real client against fake responses. |
@@ -62,8 +65,14 @@ Who may do what: the server decides. The owner, admins, builders and users see d
 
 Screens (folders under `web/src/routes/`):
 
-- `home`, `apps` (with `apps/[id]`, its logs, and its secrets), `databases` (per app and environment), `files` (per folder), `logs`, `activity`, `people`, `resources`, `settings` (with `settings/keys`), `me`, and `invite/[token]`.
-- `web/src/routes/+page.svelte` is the page at `/`. It loads your projects and your account (`api.projects()` and `api.me()`).
+- `/` is Apps for everyone. Builders and admins see project cards with an Open link and "Add app". Everyone else sees their apps with Open buttons. `home` is the old address and redirects to `/`.
+- `apps` (with `apps/[id]`, its logs, and its secrets).
+- Activity tab: `activity` (Events) and `logs` (Logs), joined by the view switch.
+- Storage tab: `files` (per folder) and `databases` (per app and environment), joined by the view switch.
+- Settings tab: `settings` is a list. It links to `resources` (This device), `people`, `settings/homelab` (Homelab passwords and keys, email setup), `settings/keys` (API keys) and `me` (Your account). Each of those pages has a "← Settings" link.
+- `invite/[token]`.
+- Old addresses keep working. The round button at the top right opens `/me` for every signed-in person.
+- `web/src/routes/+page.svelte` loads your account (`api.me()`), then your projects (`api.projects()`) or your apps (`appsStore`).
 
 **Routes**
 
@@ -89,7 +98,7 @@ The companion calls these API routes. The full list is in `internal/api/api.go`.
 
 **To change it**
 
-- To add a screen, add a folder with `+page.svelte` under `web/src/routes/`, then add a link in the menu in `+layout.svelte`. Test with `make check-web`.
+- To add a screen, add a folder with `+page.svelte` under `web/src/routes/`, then add its path to a tab in `web/src/lib/nav.ts` (or a row in `settings/+page.svelte`) and a test in `nav.test.ts`. Test with `make check-web`.
 - To add a call to the API, add the method to the `Api` type in `web/src/lib/types.ts`, the real version in `web/src/lib/api.ts`, and a fake in `web/src/lib/mock.ts`. Add a test in `web/src/lib/api.test.ts`.
 - To add a new route on the server, add it in `internal/api/api.go` (or `device.go`, `apps.go`, and so on, with the handler). Add a Go test in `internal/api/`.
 - To change the headers or the Content-Security-Policy, edit `internal/api/static.go`, then test with `go test ./internal/api/...`.

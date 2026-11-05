@@ -1,4 +1,5 @@
 <script lang="ts">
+	import ViewSwitch from '#lib/components/ViewSwitch.svelte';
 	import { onMount } from 'svelte';
 	import { api } from '#lib/api.ts';
 	import { messageOf } from '#lib/errors.ts';
@@ -58,6 +59,7 @@
 <svelte:head><title>Files · Homelab</title></svelte:head>
 
 <div class="page">
+	<ViewSwitch label="Storage views" current="/files" views={[{ href: '/files', label: 'Files' }, { href: '/databases', label: 'Databases' }]} />
 	<div class="page-head"><h1>Files</h1><button class="btn primary small" type="button" onclick={open}>New folder</button></div>
 
 	{#if error}<p class="notice bad" role="alert">{error}</p>{/if}

@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import { api } from '#lib/api.ts';
 	import { appsStore } from '#lib/apps.svelte.ts';
+	import ViewSwitch from '#lib/components/ViewSwitch.svelte';
 	import { messageOf } from '#lib/errors.ts';
 	import { absoluteTime } from '#lib/format.ts';
 	import { FILTER_LEVELS, RANGES, addCounts, chipFor, extraText, levelInfo, lineTime, mergeNewer, newestId, noCounts, sinceFor } from '#lib/logs.ts';
@@ -107,6 +108,7 @@
 <svelte:head><title>Logs · Homelab</title></svelte:head>
 
 <div class="page">
+	<ViewSwitch label="Activity views" current="/logs" views={[{ href: '/activity', label: 'Events' }, { href: '/logs', label: 'Logs' }]} />
 	<div class="page-head">
 		<h1>Logs</h1>
 		<label class="tail"><input type="checkbox" bind:checked={tail} /> Live</label>

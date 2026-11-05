@@ -71,17 +71,22 @@
 		{:else if canDeploy}
 			<button class="btn primary" type="button" onclick={ondeploy} disabled={!!env.busy}>Deploy latest build</button>
 		{/if}
-		{#if env.canRollback}
-			<button class="btn" type="button" onclick={onrollback} disabled={!!env.busy}>Roll back</button>
-		{/if}
-		{#if canRestart}
-			<button class="btn" type="button" onclick={onrestart} disabled={!!env.busy}>Restart</button>
-		{/if}
 		<a class="btn" href={searchHref(app.id, env.env)}>Logs</a>
-		<a class="btn" href={logsHref}>Raw output</a>
+		<details class="more">
+			<summary class="btn">More</summary>
+			<div class="menu">
+				{#if env.canRollback}
+					<button class="btn" type="button" onclick={onrollback} disabled={!!env.busy}>Roll back</button>
+				{/if}
+				{#if canRestart}
+					<button class="btn" type="button" onclick={onrestart} disabled={!!env.busy}>Restart</button>
+				{/if}
+				<a class="btn" href={logsHref}>Raw output</a>
+			</div>
+		</details>
 	</div>
 
-	<details>
+	<details class="tech">
 		<summary>Technical details</summary>
 		<dl>
 			<dt>Container</dt>
@@ -141,14 +146,33 @@
 		gap: 0.5rem;
 		margin-top: 1rem;
 	}
-	details {
+	.tech {
 		margin-top: 0.8rem;
 		font-size: 0.875rem;
 	}
-	summary {
+	.tech summary {
 		cursor: pointer;
 		color: var(--muted);
 		padding: 0.25rem 0;
+	}
+	.more summary {
+		list-style: none;
+	}
+	.more summary::-webkit-details-marker {
+		display: none;
+	}
+	.more summary::after {
+		content: '▾';
+		font-size: 0.8em;
+	}
+	.more[open] {
+		flex-basis: 100%;
+	}
+	.menu {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		margin-top: 0.5rem;
 	}
 	dl {
 		display: grid;

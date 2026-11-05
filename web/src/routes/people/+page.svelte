@@ -93,6 +93,7 @@
 <svelte:head><title>People · Homelab</title></svelte:head>
 
 <div class="page">
+	<a class="back" href="/settings">← Settings</a>
 	<div class="page-head"><div><h1>People</h1><p class="muted">Choose who can use Homelab and its apps.</p></div><button class="btn primary small" type="button" onclick={() => openEditor()}>Invite</button></div>
 	{#if error}<p class="notice bad" role="alert">{error}</p>{/if}
 	{#if steps.length}<section class="card result" aria-live="polite"><h2>Removal checklist</h2>{#each steps as step}<p><strong>{step.done ? 'Done' : 'Needs attention'}:</strong> {step.name}{#if step.detail}<br /><span class="muted">{step.detail}</span>{/if}</p>{/each}<button class="btn small" type="button" onclick={() => (steps = [])}>Close</button></section>{/if}
