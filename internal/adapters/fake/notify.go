@@ -95,6 +95,9 @@ type Updater struct {
 	State    core.UpdateStatus
 	Applied  int
 	TestList []core.TestVersion
+	// Restartable is what CanRestart says; Restarted counts the Restart calls.
+	Restartable bool
+	Restarted   int
 }
 
 func (u *Updater) Status(context.Context, bool) (core.UpdateStatus, error) {
@@ -111,6 +114,23 @@ func (u *Updater) Apply(context.Context) (string, error) {
 	}
 	u.Applied++
 	return u.State.Latest, nil
+}
+
+// CanRestart is set by the test through Restartable.
+func (u *Updater) CanRestart() bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.Restartable
+}
+
+func (u *Updater) Restart(context.Context) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if !u.Restartable {
+		return errors.New("not run by systemd")
+	}
+	u.Restarted++
+	return nil
 }
 
 func (u *Updater) Tests(context.Context) ([]core.TestVersion, error) {

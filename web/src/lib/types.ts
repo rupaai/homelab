@@ -246,6 +246,8 @@ export interface Api {
 	/** check: ask GitHub for the newest Homelab now (the Refresh button). */
 	device(check?: boolean): Promise<DeviceView>;
 	updateHomelab(): Promise<string>;
+	/** Restart Homelab on the same version. Only when device().canRestart. */
+	restartHomelab(): Promise<void>;
 	testVersions(): Promise<TestVersion[]>;
 	tryTestVersion(version: string): Promise<TestVersion>;
 	endTest(keep: boolean): Promise<string>;
@@ -257,6 +259,8 @@ export interface Api {
 	promote(appId: string): Promise<void>;
 	rollbackPreview(appId: string, env: EnvName): Promise<RollbackPreview>;
 	rollback(appId: string, env: EnvName): Promise<void>;
+	/** Fresh containers from the release the env runs now. */
+	restart(appId: string, env: EnvName): Promise<void>;
 	logs(appId: string, env: EnvName, lines: number): Promise<string>;
 	activity(q?: ActivityQuery): Promise<ActivityEvent[]>;
 	setPromotion(appId: string, mode: PromotionMode): Promise<AppView>;
@@ -371,7 +375,8 @@ export interface UpdateStatus { managed: boolean; current: string; latest?: stri
 /** A build of an open Homelab pull request. */
 export interface TestVersion { version: string; pr: number; title: string; }
 export interface TestRun extends TestVersion { from: string; at: string; }
-export interface DeviceView { system?: SystemInfo; update?: UpdateStatus; problems?: string[]; }
+/** canRestart: something (systemd) starts Homelab again after it stops. */
+export interface DeviceView { system?: SystemInfo; update?: UpdateStatus; problems?: string[]; canRestart?: boolean; }
 
 export type LogLevel = 'unknown' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 export type LogCounts = Record<LogLevel, number>;

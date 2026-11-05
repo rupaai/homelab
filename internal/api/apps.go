@@ -174,6 +174,17 @@ func (s *server) rollback(w http.ResponseWriter, r *http.Request) {
 	accepted(w)
 }
 
+func (s *server) restartEnv(w http.ResponseWriter, r *http.Request) {
+	if !decode(w, r, &struct{}{}, false) {
+		return
+	}
+	if err := s.hub.RestartEnv(actionCtx(r), r.PathValue("id"), r.PathValue("env"), viewer(r)); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	accepted(w)
+}
+
 // appDatabase describes the app's database and its copies.
 func (s *server) appDatabase(w http.ResponseWriter, r *http.Request) {
 	v, err := s.hub.Database(r.Context(), r.PathValue("id"))

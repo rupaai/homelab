@@ -14,13 +14,14 @@
 	import PromotionSheet from '#lib/components/PromotionSheet.svelte';
 	import PromoteSheet from '#lib/components/PromoteSheet.svelte';
 	import RollbackSheet from '#lib/components/RollbackSheet.svelte';
+	import RestartSheet from '#lib/components/RestartSheet.svelte';
 	import RemoveAppSheet from '#lib/components/RemoveAppSheet.svelte';
 	import Spinner from '#lib/components/Spinner.svelte';
 
 	const id = $derived(page.params.id ?? '');
 	const app = $derived(appsStore.get(id));
 
-	let sheet = $state<null | { kind: 'promote' | 'deploy' } | { kind: 'rollback'; env: EnvName } | { kind: 'mode'; mode: PromotionMode } | { kind: 'remove' }>(null);
+	let sheet = $state<null | { kind: 'promote' | 'deploy' } | { kind: 'rollback'; env: EnvName } | { kind: 'restart'; env: EnvName } | { kind: 'mode'; mode: PromotionMode } | { kind: 'remove' }>(null);
 	const modes: PromotionMode[] = ['manual', 'auto-dev', 'auto'];
 	let admin = $state(false);
 	let events = $state<ActivityEvent[]>([]);
@@ -100,6 +101,7 @@
 				{env}
 				onpromote={() => (sheet = { kind: 'promote' })}
 				onrollback={() => (sheet = { kind: 'rollback', env: env.env })}
+				onrestart={() => (sheet = { kind: 'restart', env: env.env })}
 				ondeploy={() => (sheet = { kind: 'deploy' })}
 				{admin}
 			/>
@@ -196,6 +198,8 @@
 			<PromoteSheet appId={app.id} onclose={() => (sheet = null)} ondone={started} />
 		{:else if sheet?.kind === 'rollback'}
 			<RollbackSheet appId={app.id} env={sheet.env} onclose={() => (sheet = null)} ondone={started} />
+		{:else if sheet?.kind === 'restart'}
+			<RestartSheet appId={app.id} env={sheet.env} onclose={() => (sheet = null)} ondone={started} />
 		{:else if sheet?.kind === 'deploy'}
 			<DeploySheet {app} onclose={() => (sheet = null)} ondone={started} />
 		{/if}

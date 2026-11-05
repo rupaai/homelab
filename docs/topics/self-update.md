@@ -8,6 +8,7 @@ How Homelab on the device installs a newer version of itself, tries test version
 - Each open pull request also has a test version. You can try one on the device, then keep it or go back to the old version.
 - A new version has two minutes to prove it is running. If it does not stay up after three starts, Homelab goes back to the version before it, on its own.
 - `homelab-services` is installed next to `homelabd` at the same version, and the two are updated together.
+- An admin can restart Homelab from Resources ("Restart Homelab"). It stops and systemd starts it again on the same version. The button shows only where systemd runs Homelab, so not on a Mac.
 - Homelab checks GitHub for a newer version when the Resources screen asks, at most once an hour. Refresh asks at once.
 
 ## How it works
@@ -23,6 +24,7 @@ How Homelab on the device installs a newer version of itself, tries test version
 9. **Test versions.** `Try` (`POST /api/device/test`) checks the version is a test version on GitHub, saves Homelab's own databases (`homelab.db` and `secrets/secrets.db`) into `<home>/bin/test-saved`, installs the test build and restarts on it ([selfupdate.go](../../internal/adapters/selfupdate/selfupdate.go), [test.go](../../internal/adapters/selfupdate/test.go)). The test is recorded in `test.json`.
 10. **Keep or go back.** `POST /api/device/test/keep` removes the saved copy, so the test data stays. `POST /api/device/test/back` points `homelabd` at the version from before the test. The old data comes back when that version starts (`FinishTest`, called from `run.go` at start).
 11. **Apps are not touched.** Apps and Pocket ID keep their own data. A test does not copy or change it (`dataFiles` in `test.go`).
+12. **Restart.** `POST /api/device/restart` runs `RestartHomelab` ([device.go](../../internal/hub/device.go)). It refuses while an app action runs (`refuseIfBusy`), and when systemd does not run Homelab. It logs `homelab.restart`. `Restart` ([selfupdate.go](../../internal/adapters/selfupdate/selfupdate.go)) stops Homelab one second later, so the request can still get its answer. The shutdown waits for running actions, as in step 6. The unit has `Restart=always`, so systemd starts Homelab again on the same version.
 
 ## Deep dive
 
@@ -30,8 +32,9 @@ How Homelab on the device installs a newer version of itself, tries test version
 
 | File | What it does |
 |---|---|
-| [internal/adapters/selfupdate/selfupdate.go](../../internal/adapters/selfupdate/selfupdate.go) | The `Updater`: `Status`, `check`, `Apply`, `Tests`, `Try`, `GoBack`, `Keep`, `install`, `FetchServices`, `download`, `restart` |
+| [internal/adapters/selfupdate/selfupdate.go](../../internal/adapters/selfupdate/selfupdate.go) | The `Updater`: `Status`, `check`, `Apply`, `Tests`, `Try`, `GoBack`, `Keep`, `install`, `FetchServices`, `download`, `restart`, `Restart`, `CanRestart`, `UnderSystemd` |
 | [internal/adapters/selfupdate/selfupdate_test.go](../../internal/adapters/selfupdate/selfupdate_test.go) | Tests for the updater, the switch and the guard |
+| [internal/adapters/selfupdate/restart_test.go](../../internal/adapters/selfupdate/restart_test.go) | Tests for the restart and the systemd check |
 | [internal/adapters/selfupdate/layout.go](../../internal/adapters/selfupdate/layout.go) | The `bin` folder: `Install`, `InstallServices`, `Switch`, `Guard`, `Confirm`, `Pending`, `LastResult`, `Activate`, `prune`, `Managed` |
 | [internal/adapters/selfupdate/test.go](../../internal/adapters/selfupdate/test.go) | Test versions: `StartTest`, `GoBack`, `Keep`, `FinishTest`, `SaveData` |
 | [internal/adapters/selfupdate/test_test.go](../../internal/adapters/selfupdate/test_test.go) | Tests for test versions |
@@ -45,19 +48,22 @@ How Homelab on the device installs a newer version of itself, tries test version
 | [cmd/homelabd/run.go](../../cmd/homelabd/run.go) | Wiring: `FinishTest` at start, `confirmUpdate`, the restart function, the shutdown wait |
 | [cmd/homelabd/homelabd_test.go](../../cmd/homelabd/homelabd_test.go) | Tests in the command package |
 | [internal/adapters/services/services.go](../../internal/adapters/services/services.go) | `Program`: finds `homelab-services` next to `homelabd`, with the same version ending |
-| [internal/hub/device.go](../../internal/hub/device.go) | `Device`, `UpdateHomelab`, `RecordUpdate`, `TestVersions`, `TryTestVersion`, `EndTest`, and the busy check |
-| [internal/api/device.go](../../internal/api/device.go) | The device and update routes |
+| [internal/hub/device.go](../../internal/hub/device.go) | `Device`, `UpdateHomelab`, `RestartHomelab`, `RecordUpdate`, `TestVersions`, `TryTestVersion`, `EndTest`, and the busy check |
+| [internal/hub/restart_test.go](../../internal/hub/restart_test.go) | Tests for `RestartHomelab` and the `canRestart` flag |
+| [internal/api/device.go](../../internal/api/device.go) | The device, update and restart routes |
+| [internal/api/restart_test.go](../../internal/api/restart_test.go) | Tests for the restart route (admins only, and the systemd refusal) |
 | [internal/core/contracts.go](../../internal/core/contracts.go) | The `Updater` interface that the hub uses |
 | [scripts/build-release.sh](../../scripts/build-release.sh) | Builds the programs for the release: `homelabd` for linux/amd64, linux/arm64 and darwin/arm64; `homelab-services` for linux amd64 and arm64; `checksums.txt` |
 | [.github/workflows/release.yml](../../.github/workflows/release.yml) | Makes a release for `main` and uploads the programs |
 | [.github/workflows/test-build.yml](../../.github/workflows/test-build.yml) | Makes a test version for each open PR |
-| [web/src/routes/resources/+page.svelte](../../web/src/routes/resources/+page.svelte) | The Resources screen: "Update to ...", Refresh, Try, "Keep this version" and "Go back to ..." |
+| [web/src/routes/resources/+page.svelte](../../web/src/routes/resources/+page.svelte) | The Resources screen: "Update to ...", "Restart Homelab", Refresh, Try, "Keep this version" and "Go back to ..." |
 | [web/src/lib/api.ts](../../web/src/lib/api.ts) | The update and test calls the screen makes |
 
 **Routes**
 
 - `GET /api/device`: the device view, with the update status. `?check=1` asks GitHub now.
 - `POST /api/device/update`: update to the newest release.
+- `POST /api/device/restart`: restart Homelab on the same version (admins only).
 - `GET /api/device/tests`: the test versions that have a program for this computer.
 - `POST /api/device/test`: try a test version, body `{"version": "..."}`.
 - `POST /api/device/test/keep` and `POST /api/device/test/back`: end the test.
@@ -97,6 +103,8 @@ How Homelab on the device installs a newer version of itself, tries test version
 - **Shutdown.** A restart waits for running actions up to `actionWait` (`run.go`).
 - **Private repos.** The GitHub token (`GITHUB_TOKEN`, a platform setting) is used for the download, if the repo is private (`Token` in `run.go`).
 - **Not on a Mac or without systemd.** `Managed` is false, and the Resources screen says so.
+- **Restart needs systemd.** Without it nothing would start Homelab again, so the restart is refused. `UnderSystemd` checks the `INVOCATION_ID` that systemd sets. The button is hidden when the device view's `canRestart` is false.
+- **Restart busy.** A restart is refused while an app action runs (`refuseIfBusy`, `device.go`).
 
 **To change it**
 
@@ -105,13 +113,14 @@ How Homelab on the device installs a newer version of itself, tries test version
 - To change how often GitHub is asked, edit `checkEvery` in [selfupdate.go](../../internal/adapters/selfupdate/selfupdate.go).
 - To change which data a test saves, edit `dataFiles` in [test.go](../../internal/adapters/selfupdate/test.go). Check the list still covers Homelab's own databases.
 - To change the unit file, edit `homelabUnit` in [setup.go](../../cmd/homelabd/setup.go). Then run the setup tests.
+- To change how the restart is done, edit `Restart` in [selfupdate.go](../../internal/adapters/selfupdate/selfupdate.go) (the one-second delay) or `RestartHomelab` in [device.go](../../internal/hub/device.go). Keep `Restart=always` in the unit, or the restart would leave Homelab stopped.
 - To change the release files, edit [build-release.sh](../../scripts/build-release.sh). Check with a PR's test build.
 
 **Test it**
 
 ```sh
 make check                                # Go: gofmt, go vet, go test ./...
-go test ./internal/adapters/selfupdate/... ./cmd/...
+go test ./internal/adapters/selfupdate/... ./internal/hub/... ./internal/api/... ./cmd/...
 make check-services                       # Rust side, which ships with the update
 ```
 

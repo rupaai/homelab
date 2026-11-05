@@ -32,7 +32,7 @@ There are three levels. Read as far as you need.
 
 **Apps and environments.** An app is a GitHub repo with a Dockerfile and a `homelab.yaml`. Each app has two environments: dev and prod. Each has its own containers, private network, data and secrets. Promoting copies the exact build from dev to prod. Prod data is copied first. If the new version does not stay healthy, Homelab rolls back on its own. Auto-promote waits until dev has been healthy for a set time, and can run an app's smoke test first.
 
-**Deploys from GitHub.** The app's CI pushes an image tagged with the commit. Homelab watches the repo, checks the build, and deploys with Docker Compose. It also keeps a full mirror of each app's code.
+**Deploys from GitHub.** The app's CI pushes an image tagged with the commit. Homelab watches the repo, checks the build, and deploys with Docker Compose. It also keeps a full mirror of each app's code. An admin can restart an environment, which makes fresh containers from the same build.
 
 **Companion web app.** A SvelteKit site in `web/`. It is built to static files and embedded in the `homelabd` binary. It talks to the daemon over the JSON API. It shows apps, people, files, databases, activity, resources and settings.
 
@@ -46,7 +46,7 @@ There are three levels. Read as far as you need.
 
 **Plugins.** TypeScript, Python and Rust libraries in `plugins/`. They only make web calls to the Homelab API. They use `HOMELAB_API_URL` and `HOMELAB_TOKEN`, which Homelab sets in every app.
 
-**Self-update.** Every merge to `main` makes a numbered GitHub release. On the device, Homelab downloads a newer one, swaps to it, and goes back to the old one if the new one does not stay up. Every PR also gets a test version that can be tried from the companion.
+**Self-update.** Every merge to `main` makes a numbered GitHub release. On the device, Homelab downloads a newer one, swaps to it, and goes back to the old one if the new one does not stay up. Every PR also gets a test version that can be tried from the companion. An admin can also restart Homelab from the Resources screen.
 
 **Alerts and resources.** Homelab sends web push notifications (app down, app back, rolled back, disk nearly full). The Resources screen shows the device (CPU, memory, disks, updates) and each app environment.
 

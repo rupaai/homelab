@@ -269,6 +269,11 @@ type Updater interface {
 	GoBack(ctx context.Context) (string, error)
 	// Keep ends a test by keeping the test version and its data, and forgets the saved copy.
 	Keep(ctx context.Context) error
+	// CanRestart says whether something (systemd) will start Homelab again after it stops.
+	CanRestart() bool
+	// Restart stops Homelab shortly, so the service manager starts it again. It refuses
+	// when CanRestart is false.
+	Restart(ctx context.Context) error
 }
 
 // Services is homelab-services, the program that serves files, databases and data

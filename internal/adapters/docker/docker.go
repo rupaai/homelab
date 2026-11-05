@@ -191,8 +191,18 @@ func (d *Deployer) Deploy(ctx context.Context, spec core.EnvSpec) error {
 		return err
 	}
 	d.log.Info("starting", "app", spec.App, "env", spec.Env, "commit", spec.Release.Short())
-	_, err = d.compose(ctx, dir, spec.App, spec.Env, "up", "-d", "--remove-orphans")
+	_, err = d.compose(ctx, dir, spec.App, spec.Env, upArgs(spec)...)
 	return err
+}
+
+// upArgs are the arguments of `docker compose up` for a spec.
+func upArgs(spec core.EnvSpec) []string {
+	args := []string{"up", "-d", "--remove-orphans"}
+	if spec.Recreate {
+		// Without this, compose leaves containers alone when their config is unchanged.
+		args = append(args, "--force-recreate")
+	}
+	return args
 }
 
 // writeFile replaces path with data (mode 0600) in one step, so a crash never leaves half a file.
