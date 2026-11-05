@@ -455,6 +455,7 @@ func TestComposeHardware(t *testing.T) {
 		`"source": "/run/dbus"`,
 		`"target": "/run/dbus"`,
 		`"NET_ADMIN"`, `"NET_RAW"`,
+		`"security_opt": [`, `"apparmor:unconfined"`,
 		`"restart": "unless-stopped"`,
 	} {
 		if !strings.Contains(got, want) {
@@ -468,7 +469,7 @@ func TestComposeHardware(t *testing.T) {
 	}
 	// The default is still a plain sandbox.
 	plain, _ := composeYAML(testSpec(), "/srv/homelab/movies/prod")
-	for _, bad := range []string{"network_mode", "cap_add", "/run/dbus", `"devices"`} {
+	for _, bad := range []string{"network_mode", "cap_add", "security_opt", "apparmor", "/run/dbus", `"devices"`} {
 		if strings.Contains(string(plain), bad) {
 			t.Errorf("a normal app has %s", bad)
 		}
