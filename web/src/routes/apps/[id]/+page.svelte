@@ -4,6 +4,7 @@
 	import { onMount } from 'svelte';
 	import { clock } from '#lib/clock.svelte.ts';
 	import { api } from '#lib/api.ts';
+	import { messageOf } from '#lib/errors.ts';
 	import { appsStore } from '#lib/apps.svelte.ts';
 	import { startPolling } from '#lib/poll.ts';
 	import { autoStateLabel, countdown, promotionHelp, promotionLabel, relativeTime } from '#lib/format.ts';
@@ -15,13 +16,14 @@
 	import PromoteSheet from '#lib/components/PromoteSheet.svelte';
 	import RollbackSheet from '#lib/components/RollbackSheet.svelte';
 	import RestartSheet from '#lib/components/RestartSheet.svelte';
+	import TurnOffSheet from '#lib/components/TurnOffSheet.svelte';
 	import RemoveAppSheet from '#lib/components/RemoveAppSheet.svelte';
 	import Spinner from '#lib/components/Spinner.svelte';
 
 	const id = $derived(page.params.id ?? '');
 	const app = $derived(appsStore.get(id));
 
-	let sheet = $state<null | { kind: 'promote' | 'deploy' } | { kind: 'rollback'; env: EnvName } | { kind: 'restart'; env: EnvName } | { kind: 'mode'; mode: PromotionMode } | { kind: 'remove' }>(null);
+	let sheet = $state<null | { kind: 'promote' | 'deploy' | 'turnoff' } | { kind: 'rollback'; env: EnvName } | { kind: 'restart'; env: EnvName } | { kind: 'mode'; mode: PromotionMode } | { kind: 'remove' }>(null);
 	const modes: PromotionMode[] = ['manual', 'auto-dev', 'auto'];
 	let admin = $state(false);
 	let events = $state<ActivityEvent[]>([]);
@@ -52,6 +54,17 @@
 		sheet = null;
 		appsStore.refresh();
 		loadEvents();
+	}
+
+	let turnOnError = $state('');
+	async function turnOn() {
+		turnOnError = '';
+		try {
+			await api.setOff(id, 'dev', false);
+			started();
+		} catch (e) {
+			turnOnError = messageOf(e);
+		}
 	}
 
 	async function removed() {
@@ -95,6 +108,7 @@
 			<p class="notice"><strong>No versions for now</strong>{app.versionProblem} Deploys still work; they just have no version.</p>
 		{/if}
 
+		{#if turnOnError}<p class="notice bad" role="alert">{turnOnError}</p>{/if}
 		{#each app.envs as env (env.env)}
 			<EnvCard
 				{app}
@@ -102,6 +116,8 @@
 				onpromote={() => (sheet = { kind: 'promote' })}
 				onrollback={() => (sheet = { kind: 'rollback', env: env.env })}
 				onrestart={() => (sheet = { kind: 'restart', env: env.env })}
+				onturnoff={() => (sheet = { kind: 'turnoff' })}
+				onturnon={turnOn}
 				ondeploy={() => (sheet = { kind: 'deploy' })}
 				{admin}
 			/>
@@ -200,6 +216,8 @@
 			<RollbackSheet appId={app.id} env={sheet.env} onclose={() => (sheet = null)} ondone={started} />
 		{:else if sheet?.kind === 'restart'}
 			<RestartSheet appId={app.id} env={sheet.env} onclose={() => (sheet = null)} ondone={started} />
+		{:else if sheet?.kind === 'turnoff'}
+			<TurnOffSheet appId={app.id} onclose={() => (sheet = null)} ondone={started} />
 		{:else if sheet?.kind === 'deploy'}
 			<DeploySheet {app} onclose={() => (sheet = null)} ondone={started} />
 		{/if}

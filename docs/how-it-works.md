@@ -32,7 +32,7 @@ There are three levels. Read as far as you need.
 
 **Apps and environments.** An app is a GitHub repo with a Dockerfile and a `homelab.yaml`. Each app has two environments: dev and prod. Each has its own containers, private network, data and secrets. Promoting copies the exact build from dev to prod. Prod data is copied first. If the new version does not stay healthy, Homelab rolls back on its own. Auto-promote waits until dev has been healthy for a set time, and can run an app's smoke test first.
 
-**Deploys from GitHub.** The app's CI pushes an image tagged with the commit. Homelab watches the repo, checks the build, and deploys with Docker Compose. It also keeps a full mirror of each app's code. An admin can restart an environment, which makes fresh containers from the same build.
+**Deploys from GitHub.** The app's CI pushes an image tagged with the commit. Homelab watches the repo, checks the build, and deploys with Docker Compose. It also keeps a full mirror of each app's code. An admin can restart an environment, which makes fresh containers from the same build. An admin can also turn dev off for an app to save memory. Dev then stops, keeps its data, and new builds wait until it is turned on.
 
 **Companion web app.** A SvelteKit site in `web/`. It is built to static files and embedded in the `homelabd` binary. It talks to the daemon over the JSON API. It shows apps, people, files, databases, activity, resources and settings.
 

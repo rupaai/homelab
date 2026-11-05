@@ -76,6 +76,13 @@
 				<p class="notice info"><strong>Prod's data will be copied first</strong>That's your safety copy. Prod stops for a moment while it happens.</p>
 			{/if}
 
+			{#if preview.warnings.length}
+				<div class="notice">
+					<strong>Heads up</strong>
+					<ul>{#each preview.warnings as w}<li>{w}</li>{/each}</ul>
+				</div>
+			{/if}
+
 			{#if preview.blockers.length}
 				<div class="notice bad">
 					<strong>Can't promote yet</strong>

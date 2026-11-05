@@ -13,24 +13,39 @@
 		onpromote,
 		onrollback,
 		onrestart,
+		onturnoff,
+		onturnon,
 		ondeploy,
 		admin = false
-	}: { app: AppView; env: EnvView; onpromote: () => void; onrollback: () => void; onrestart: () => void; ondeploy: () => void; admin?: boolean } = $props();
+	}: {
+		app: AppView;
+		env: EnvView;
+		onpromote: () => void;
+		onrollback: () => void;
+		onrestart: () => void;
+		onturnoff: () => void;
+		onturnon: () => void;
+		ondeploy: () => void;
+		admin?: boolean;
+	} = $props();
 
 	const build = $derived(app.latestBuild);
-	const canDeploy = $derived(env.env === 'dev' && build?.status === 'passed' && !build.deployed);
-	const canRestart = $derived(admin && !!env.version && env.state !== '');
+	const canDeploy = $derived(env.env === 'dev' && !env.off && build?.status === 'passed' && !build.deployed);
+	const canRestart = $derived(admin && !env.off && !!env.version && env.state !== '');
+	const canTurnOff = $derived(admin && env.env === 'dev' && !env.off);
 	const logsHref = $derived(`/apps/${encodeURIComponent(app.id)}/logs/${env.env}`);
 </script>
 
 <section class="card" aria-labelledby="env-{env.env}">
 	<div class="top">
 		<h2 id="env-{env.env}">{envLabel(env.env)}</h2>
-		<StatusDot health={env.health} />
+		<StatusDot health={env.health} label={env.off ? 'Off' : undefined} />
 	</div>
 
 	<p class="address">
-		{#if env.addressReady && env.address}
+		{#if env.off}
+			<span class="muted">No address while dev is off</span>
+		{:else if env.addressReady && env.address}
 			<a href={appAddress(env.address)} target="_blank" rel="noopener">{appAddress(env.address).replace(/^https?:\/\//, '')}<span class="sr-only"> (opens in a new tab)</span></a>
 		{:else}
 			<span class="muted">Address not ready yet</span>
@@ -41,7 +56,9 @@
 		<p class="busy" role="status"><Spinner /> {env.busy}…</p>
 	{/if}
 
-	{#if env.version}
+	{#if env.off}
+		<p class="status-line">Dev is off. It is stopped and its data is kept. New builds wait until you turn it on.</p>
+	{:else if env.version}
 		<p class="status-line">{healthSentence(app.name, env.health)}{env.healthDetail ? `. ${env.healthDetail}` : ''}</p>
 	{/if}
 
@@ -68,6 +85,8 @@
 	<div class="actions">
 		{#if env.env === 'prod'}
 			<button class="btn primary" type="button" onclick={onpromote} disabled={!!env.busy}>Promote from dev</button>
+		{:else if env.off}
+			{#if admin}<button class="btn primary" type="button" onclick={onturnon} disabled={!!env.busy}>Turn on</button>{/if}
 		{:else if canDeploy}
 			<button class="btn primary" type="button" onclick={ondeploy} disabled={!!env.busy}>Deploy latest build</button>
 		{/if}
@@ -75,11 +94,14 @@
 		<details class="more">
 			<summary class="btn">More</summary>
 			<div class="menu">
-				{#if env.canRollback}
+				{#if env.canRollback && !env.off}
 					<button class="btn" type="button" onclick={onrollback} disabled={!!env.busy}>Roll back</button>
 				{/if}
 				{#if canRestart}
 					<button class="btn" type="button" onclick={onrestart} disabled={!!env.busy}>Restart</button>
+				{/if}
+				{#if canTurnOff}
+					<button class="btn" type="button" onclick={onturnoff} disabled={!!env.busy}>Turn off</button>
 				{/if}
 				<a class="btn" href={logsHref}>Raw output</a>
 			</div>

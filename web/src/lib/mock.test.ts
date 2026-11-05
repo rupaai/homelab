@@ -45,3 +45,22 @@ describe('mock logs', () => {
 		expect(tail.lines.map((l) => l.id)).toEqual([first.lines[0].id]);
 	});
 });
+
+describe('mock dev off switch', () => {
+	it('turns dev off and on, and warns in the promote preview instead of blocking', async () => {
+		await mockApi.setOff('movie-night', 'dev', true);
+		let dev = (await mockApi.apps()).find((a) => a.id === 'movie-night')!.envs.find((e) => e.env === 'dev')!;
+		expect(dev.off).toBe(true);
+		expect(dev.state).toBe('off');
+		const p = await mockApi.promotePreview('movie-night');
+		expect(p.devOff).toBe(true);
+		expect(p.warnings).toEqual(["Dev is off, so this build wasn't tested in dev."]);
+		expect(p.blockers.some((b) => b.includes('Dev isn'))).toBe(false);
+		await mockApi.setOff('movie-night', 'dev', false);
+		dev = (await mockApi.apps()).find((a) => a.id === 'movie-night')!.envs.find((e) => e.env === 'dev')!;
+		expect(dev.off).toBe(false);
+	});
+	it('refuses to turn prod off', async () => {
+		await expect(mockApi.setOff('movie-night', 'prod', true)).rejects.toThrow('Only dev');
+	});
+});

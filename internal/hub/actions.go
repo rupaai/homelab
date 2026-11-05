@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/rupaai/homelab/internal/core"
 	"github.com/rupaai/homelab/internal/manifest"
@@ -209,6 +210,13 @@ func (h *Hub) setWantAndApply(ctx context.Context, a state.App, env string, rel 
 		lock.Unlock()
 		return err
 	}
+	if e, err := h.store.Env(ctx, a.ID, env); err == nil && e.Off {
+		// Turned off: the release is remembered, and starts when the environment is turned on.
+		h.logEvent(ctx, state.Event{Actor: actor, App: a.ID, Env: env, Action: kind + ".waiting",
+			Detail: fmt.Sprintf("%s %s (%s) is saved for %s, which is off. It starts when you turn %s on", verb, rel.Label(), firstLine(rel.Message), env, env)})
+		lock.Unlock()
+		return nil
+	}
 	h.logEvent(ctx, state.Event{Actor: actor, App: a.ID, Env: env, Action: kind + ".started",
 		Detail: fmt.Sprintf("%s %s (%s) to %s", verb, rel.Label(), firstLine(rel.Message), env)})
 	h.setBusy(a.ID, env, "Deploying "+rel.Label())
@@ -306,7 +314,9 @@ type PromotePreview struct {
 	DataCopy       bool          `json:"dataCopy"` // prod's data is copied before the switch
 	MissingSecrets []string      `json:"missingSecrets"`
 	DevHealth      string        `json:"devHealth"`
+	DevOff         bool          `json:"devOff"`   // dev is turned off, so the build wasn't tested there
 	Blockers       []string      `json:"blockers"` // promote is refused while any are listed
+	Warnings       []string      `json:"warnings"` // shown, but they don't stop a promote
 	// NextVersion is the version prod gets (v0.4.0), with the Summary ("2 new, 1 fix") and
 	// Notes of what changed. Empty when versions aren't made for this app.
 	NextVersion string `json:"nextVersion"`
@@ -316,7 +326,7 @@ type PromotePreview struct {
 
 // PreviewPromote returns what promoting dev to prod would do.
 func (h *Hub) PreviewPromote(ctx context.Context, appID string) (PromotePreview, error) {
-	var p PromotePreview
+	p := PromotePreview{Blockers: []string{}, Warnings: []string{}}
 	a, err := h.store.App(ctx, appID)
 	if err != nil {
 		return p, userErr("There's no app %q.", appID)
@@ -351,7 +361,10 @@ func (h *Hub) PreviewPromote(ctx context.Context, appID string) (PromotePreview,
 	} else {
 		p.CompareURL = h.ad.Source.WebURL(a.Repo, "", dev.Want.Commit)
 	}
-	if p.DevHealth != core.Healthy {
+	if dev.Off {
+		p.DevOff, p.DevHealth = true, core.Unknown
+		p.Warnings = append(p.Warnings, "Dev is off, so this build wasn't tested in dev.")
+	} else if p.DevHealth != core.Healthy {
 		p.Blockers = append(p.Blockers, "Dev isn't healthy, so this build hasn't proven it works yet.")
 	}
 	if prodBusy != "" {
@@ -545,6 +558,9 @@ func (h *Hub) PreviewRollback(ctx context.Context, appID, env string) (RollbackP
 	if env != core.Dev && env != core.Prod {
 		return p, userErr("There's no environment %q.", env)
 	}
+	if err := h.requireOn(ctx, appID, env); err != nil {
+		return p, err
+	}
 	cur, prev, err := h.previous(ctx, appID, env)
 	if err != nil {
 		return p, err
@@ -651,6 +667,10 @@ func (h *Hub) RestartEnv(ctx context.Context, appID, env string, by core.Viewer)
 		lock.Unlock()
 		return err
 	}
+	if e.Off {
+		lock.Unlock()
+		return errDevOff
+	}
 	running, err := h.ad.Deployer.ObserveApp(ctx, a.ID)
 	if err != nil {
 		lock.Unlock()
@@ -677,6 +697,65 @@ func (h *Hub) RestartEnv(ctx context.Context, appID, env string, by core.Viewer)
 		defer h.setBusy(a.ID, env, "")
 		h.applyAndWaitWith(context.WithoutCancel(ctx), a, env, rel, "restart", actor, true)
 	}()
+	return nil
+}
+
+// errDevOff is the plain refusal for anything that needs dev's containers.
+var errDevOff = userErr("Dev is off. Turn it on first.")
+
+// requireOn refuses when the environment is turned off.
+func (h *Hub) requireOn(ctx context.Context, appID, env string) error {
+	if e, err := h.store.Env(ctx, appID, env); err == nil && e.Off {
+		return errDevOff
+	}
+	return nil
+}
+
+// SetEnvOff turns dev off or on (admins only, checked by the caller). Off stops dev's
+// containers (the app and its services) and keeps everything else: its data, secrets,
+// database and wanted release. New builds are still recorded for dev but wait. On starts
+// dev again with its newest wanted release. Prod is never touched.
+func (h *Hub) SetEnvOff(ctx context.Context, appID, env string, off bool, by core.Viewer) error {
+	if _, err := h.store.App(ctx, appID); err != nil {
+		return userErr("There's no app %q.", appID)
+	}
+	if env != core.Dev {
+		if env == core.Prod {
+			return userErr("Only dev can be turned off. Prod always runs.")
+		}
+		return userErr("There's no environment %q.", env)
+	}
+	lock := h.appLock(appID)
+	if !lock.TryLock() {
+		return ErrBusy
+	}
+	defer lock.Unlock()
+	h.mu.Lock()
+	busy := h.st(appID, core.Dev).busy
+	h.mu.Unlock()
+	if busy != "" {
+		return ErrBusy
+	}
+	changed, err := h.store.SetOff(ctx, appID, core.Dev, off)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return nil
+	}
+	h.mu.Lock()
+	s := h.st(appID, core.Dev)
+	s.health, s.detail, s.since, s.nextAttempt, s.lastErr, s.offStopped = core.Unknown, "", time.Time{}, time.Time{}, "", false
+	if off {
+		s.detail = "Turned off"
+	}
+	h.mu.Unlock()
+	action, detail := "env.turned_on", "Turned dev on. It starts on its newest build"
+	if off {
+		action, detail = "env.turned_off", "Turned dev off. It is stopped, and its data is kept. New builds wait"
+	}
+	h.logEvent(ctx, state.Event{Actor: by.Label(), App: appID, Env: core.Dev, Action: action, Detail: detail})
+	h.Kick()
 	return nil
 }
 

@@ -348,3 +348,29 @@ describe('restart API', () => {
 		expect(fetch).toHaveBeenCalledWith('/api/device/restart', post);
 	});
 });
+
+describe('turn dev off API', () => {
+	afterEach(() => vi.unstubAllGlobals());
+	const accepted = () => new Response('{"ok":true}', { status: 202, headers: { 'Content-Type': 'application/json' } });
+	const post = expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ 'X-Homelab-Request': '1' }) });
+
+	it('posts off and on for dev', async () => {
+		const fetch = vi.fn().mockImplementation(() => Promise.resolve(accepted()));
+		vi.stubGlobal('fetch', fetch);
+		await api.setOff('movie night', 'dev', true);
+		expect(fetch).toHaveBeenCalledWith('/api/apps/movie%20night/envs/dev/off', post);
+		await api.setOff('movie night', 'dev', false);
+		expect(fetch).toHaveBeenCalledWith('/api/apps/movie%20night/envs/dev/on', post);
+	});
+
+	it('reads the warnings of a promote preview, and none when the server sends none', async () => {
+		const body = (extra: object) => new Response(JSON.stringify({ from: null, to: null, blockers: null, missingSecrets: null, commits: null, ...extra }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(body({ devOff: true, warnings: ["Dev is off, so this build wasn't tested in dev."] })).mockResolvedValueOnce(body({})));
+		const off = await api.promotePreview('movies');
+		expect(off.devOff).toBe(true);
+		expect(off.warnings).toEqual(["Dev is off, so this build wasn't tested in dev."]);
+		const on = await api.promotePreview('movies');
+		expect(on.devOff).toBe(false);
+		expect(on.warnings).toEqual([]);
+	});
+});
