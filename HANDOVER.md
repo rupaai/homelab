@@ -74,7 +74,8 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
 ## 3. State of each part
 <!-- feature:deploy-loop -->
 - **Deploy loop** (milestone 1): add an app by `owner/name`, builds from GitHub Actions, dev
-  and prod, promote, rollback, health checks, logs. Each round asks Docker once per app, not once per app per app. Done.
+  and prod, promote, rollback, health checks, logs, and a Restart button on each environment
+  (admins). Each round asks Docker once per app, not once per app per app. Done.
 <!-- /feature:deploy-loop -->
 <!-- feature:apps-no-setup -->
 - **Apps with no setup** (milestone 2): promotion modes `manual`, `auto-dev`, `auto` with
@@ -97,10 +98,11 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
 <!-- feature:on-the-device -->
 - **On the device** (milestone 6): `homelabd setup` installs it; it updates itself from the
   companion (Settings → Resources: Update, or try a test version then Keep) and goes back on
-  its own if a new version doesn't stay up. Done. Versions: `build-N` or `vX.Y.Z` (any `v` is
-  newer than any `build`); test versions `pr-N-<commit>` or `vX.Y.Z-pr.N[.<commit>]`
-  (`internal/adapters/selfupdate/version.go`). Releases are still named `build-N`. It checks
-  GitHub for a new version every hour; Refresh on that screen checks right away.
+  its own if a new version doesn't stay up. Admins can also restart it from Resources. Done.
+  Versions: `build-N` or `vX.Y.Z` (any `v` is newer than any `build`); test versions
+  `pr-N-<commit>` or `vX.Y.Z-pr.N[.<commit>]` (`internal/adapters/selfupdate/version.go`).
+  Releases are still named `build-N`. It checks GitHub for a new version every hour; Refresh
+  on that screen checks right away.
 <!-- /feature:on-the-device -->
 <!-- feature:api-keys -->
 - **API keys and users API**: every app environment gets `HOMELAB_TOKEN` and
