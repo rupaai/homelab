@@ -175,6 +175,58 @@ func TestPromoteWhileDevIsOffWarnsButIsAllowed(t *testing.T) {
 	}
 }
 
+func TestGetLatestBuildWhileDevIsOffLetsPromoteSendItToProd(t *testing.T) {
+	ctx := context.Background()
+	r := bothEnvs(t)
+	// Prod catches up with dev, then the app goes manual and dev goes off.
+	if err := r.hub.Promote(ctx, "movies", owner); err != nil {
+		t.Fatal(err)
+	}
+	r.settle()
+	if _, err := r.hub.SetPromotion(ctx, "movies", core.PromotionManual, owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.hub.SetEnvOff(ctx, "movies", core.Dev, true, owner); err != nil {
+		t.Fatal(err)
+	}
+	r.hub.Reconcile(ctx)
+	r.push("ddddddd4")
+	r.hub.CheckBuilds(ctx)
+	r.settle()
+	r.hub.Reconcile(ctx)
+	// Manual: the new build did not reach dev, so promote has nothing new to send.
+	if p, _ := r.hub.PreviewPromote(ctx, "movies"); len(p.Blockers) != 1 || !strings.Contains(p.Blockers[0], "already runs") {
+		t.Fatalf("preview before deploy: %+v", p)
+	}
+	// "Get latest build" records it for dev and starts nothing.
+	r.dep.Calls = nil
+	if err := r.hub.DeployDev(ctx, "movies", "", owner); err != nil {
+		t.Fatal(err)
+	}
+	r.settle()
+	r.hub.Reconcile(ctx)
+	if e, _ := r.store.Env(ctx, "movies", core.Dev); e.Want == nil || e.Want.Commit != "ddddddd4" || !e.Off {
+		t.Fatalf("dev env: %+v", e)
+	}
+	if slices.ContainsFunc(r.dep.Calls, func(c string) bool { return strings.HasPrefix(c, "deploy ") && strings.Contains(c, "/dev") }) || r.running(core.Dev) != "" {
+		t.Fatalf("dev deployed while off: %v", r.dep.Calls)
+	}
+	p, err := r.hub.PreviewPromote(ctx, "movies")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Blockers) != 0 || !p.DevOff || len(p.Warnings) != 1 || p.Warnings[0] != "Dev is off, so this build wasn't tested in dev." {
+		t.Fatalf("preview: %+v", p)
+	}
+	if err := r.hub.Promote(ctx, "movies", owner); err != nil {
+		t.Fatal(err)
+	}
+	r.settle()
+	if r.running(core.Prod) != "ddddddd4" || r.running(core.Dev) != "" {
+		t.Fatalf("prod %q dev %q", r.running(core.Prod), r.running(core.Dev))
+	}
+}
+
 func TestPromoteWhileDevIsOffStillNeedsADevBuild(t *testing.T) {
 	ctx := context.Background()
 	r := newRig(t)

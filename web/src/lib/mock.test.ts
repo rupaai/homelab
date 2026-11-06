@@ -60,6 +60,17 @@ describe('mock dev off switch', () => {
 		dev = (await mockApi.apps()).find((a) => a.id === 'movie-night')!.envs.find((e) => e.env === 'dev')!;
 		expect(dev.off).toBe(false);
 	});
+	it('saves a deployed build for dev while it is off and leaves dev off', async () => {
+		await mockApi.setOff('recipe-box', 'dev', true);
+		await mockApi.deploy('recipe-box');
+		const app = (await mockApi.apps()).find((a) => a.id === 'recipe-box')!;
+		const dev = app.envs.find((e) => e.env === 'dev')!;
+		expect(dev.off).toBe(true);
+		expect(dev.busy).toBe('');
+		expect(dev.version?.commit.startsWith('c0ffee1')).toBe(true);
+		expect(app.latestBuild?.deployed).toBe(true);
+		await mockApi.setOff('recipe-box', 'dev', false);
+	});
 	it('refuses to turn prod off', async () => {
 		await expect(mockApi.setOff('movie-night', 'prod', true)).rejects.toThrow('Only dev');
 	});

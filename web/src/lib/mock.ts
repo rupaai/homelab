@@ -387,7 +387,17 @@ export const mockApi: Api = {
 		if (!b || b.status !== 'passed') throw new ApiError("There's no passing build to deploy yet.", 400);
 		const dev = envOf(a, 'dev').version?.version;
 		const next = dev ? dev.replace(/\.(\d+)$/, (_, n) => `.${Number(n) + 1}`) : undefined;
-		work(a, 'dev', `Deploying ${next ?? b.short}`, 'deploy', rel(b.short, 'Latest build', 'Rupa', 1, next, '1 fix', '## Fixes\n\n- Latest build (#32)\n'), 'Deploy');
+		const to = rel(b.short, 'Latest build', 'Rupa', 1, next, '1 fix', '## Fixes\n\n- Latest build (#32)\n');
+		const devEnv = envOf(a, 'dev');
+		if (devEnv.off) {
+			// Dev is off: save the release for dev and start nothing.
+			devEnv.version = to;
+			devEnv.canRollback = false;
+			if (a.latestBuild) a.latestBuild.deployed = true;
+			log('rupaai', a.id, 'dev', 'deploy.waiting', `${to.version || to.short} is saved for dev. Dev is off, so it will start when dev is turned on`);
+		} else {
+			work(a, 'dev', `Deploying ${next ?? b.short}`, 'deploy', to, 'Deploy');
+		}
 		await delay(null);
 	},
 	async promotePreview(id) {
