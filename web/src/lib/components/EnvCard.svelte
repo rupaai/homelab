@@ -30,7 +30,7 @@
 	} = $props();
 
 	const build = $derived(app.latestBuild);
-	const canDeploy = $derived(env.env === 'dev' && !env.off && build?.status === 'passed' && !build.deployed);
+	const canDeploy = $derived(env.env === 'dev' && build?.status === 'passed' && !build.deployed);
 	const canRestart = $derived(admin && !env.off && !!env.version && env.state !== '');
 	const canTurnOff = $derived(admin && env.env === 'dev' && !env.off);
 	const logsHref = $derived(`/apps/${encodeURIComponent(app.id)}/logs/${env.env}`);
@@ -57,7 +57,7 @@
 	{/if}
 
 	{#if env.off}
-		<p class="status-line">Dev is off. It is stopped and its data is kept. New builds wait until you turn it on.</p>
+		<p class="status-line">Dev is off. It is stopped and its data is kept. New builds wait here. Promote still sends them to prod.</p>
 	{:else if env.version}
 		<p class="status-line">{healthSentence(app.name, env.health)}{env.healthDetail ? `. ${env.healthDetail}` : ''}</p>
 	{/if}
@@ -86,7 +86,8 @@
 		{#if env.env === 'prod'}
 			<button class="btn primary" type="button" onclick={onpromote} disabled={!!env.busy}>Promote from dev</button>
 		{:else if env.off}
-			{#if admin}<button class="btn primary" type="button" onclick={onturnon} disabled={!!env.busy}>Turn on</button>{/if}
+			{#if canDeploy}<button class="btn primary" type="button" onclick={ondeploy} disabled={!!env.busy}>Get latest build</button>{/if}
+			{#if admin}<button class={canDeploy ? 'btn' : 'btn primary'} type="button" onclick={onturnon} disabled={!!env.busy}>Turn on</button>{/if}
 		{:else if canDeploy}
 			<button class="btn primary" type="button" onclick={ondeploy} disabled={!!env.busy}>Deploy latest build</button>
 		{/if}

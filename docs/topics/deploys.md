@@ -9,7 +9,7 @@ How a build of an app gets to dev and prod, and how it goes back. Back to [the m
 - A promote copies prod's data first. If the new version does not start or does not stay healthy, Homelab puts the old version back with its data.
 - Rollback starts the version before the current one. You do it by hand, or Homelab does it itself for 10 minutes after a promote.
 - An admin can restart an environment. Homelab makes fresh containers from the build that environment runs now, so new secrets and settings are picked up. The build does not change.
-- An admin can turn dev off for an app, to save memory. Dev stops and stays stopped, its data is kept, and new builds wait until it is turned on. Prod is never touched.
+- An admin can turn dev off for an app, to save memory. Dev stops and stays stopped, its data is kept, and new builds wait until it is turned on. Prod is never touched. For an app with manual promotion, tap "Get latest build" on the dev card to save the new build for dev, then Promote. Nothing starts on dev.
 - You see it on the app page in the companion ([apps/[id]/+page.svelte](../../web/src/routes/apps/%5Bid%5D/+page.svelte)), in the promote sheet ([PromoteSheet.svelte](../../web/src/lib/components/PromoteSheet.svelte)) and in the activity log.
 
 ## How it works
@@ -38,6 +38,7 @@ How a build of an app gets to dev and prod, and how it goes back. Back to [the m
     - **Reconcile:** while dev is off, `reconcileEnv` calls `reconcileOff` ([hub.go](../../internal/hub/hub.go)). It stops the whole compose project (the app and services like Jellyfin) with `Stop`, keeps containers, data, secrets and the database, removes dev's address, and never starts it.
     - **New builds:** they are still saved as dev's wanted version (`deploy.waiting` in the log), but nothing starts. Turning dev on starts the newest one.
     - **Health and alerts:** dev is not checked while off, so it is never down and sends no alert (alerts are for prod only). The app view gives `off: true`, state `off` and the detail "Turned off".
+    - **Manual apps:** the dev card shows "Get latest build" while dev is off. It calls `DeployDev`, which saves the release for dev and logs `deploy.waiting`. Then Promote can send it to prod.
     - **Promote:** dev being off does not block a promote. The preview has `devOff: true` and a warning, "Dev is off, so this build wasn't tested in dev." It still blocks when nothing was ever deployed to dev. Auto-promote waits ("Dev is off") and starts counting again once dev is on.
     - **Refused with "Dev is off. Turn it on first.":** restart, rollback, and database copies, restores and imports for dev. Logs and secrets still work.
 
