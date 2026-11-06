@@ -3,6 +3,7 @@
 		{ href: '/resources', title: 'This device', note: 'Health, updates and restarting Homelab.' },
 		{ href: '/people', title: 'People', note: 'Who can use Homelab and its apps.' },
 		{ href: '/settings/homelab', title: 'Homelab passwords and keys', note: 'Email setup and keys Homelab itself needs.' },
+		{ href: '/settings/network', title: 'Network', note: 'Which ports are open on this device, and to whom.' },
 		{ href: '/settings/keys', title: 'API keys', note: 'Let a server outside Homelab use it.' },
 		{ href: '/me', title: 'Your account', note: 'Passkey, notifications and sign out.' }
 	];

@@ -2,7 +2,7 @@ import { ApiError, NETWORK_MESSAGE, errorMessage, wantsConfirm } from './errors'
 import { SIGN_IN_MESSAGE, sessionLost } from './session';
 import { fixLogPage, logsParams } from './logs';
 import { clearToken, getToken, setToken } from './token';
-import type { Api, AppDatabase, AppView, DbChange, DbInfo, DbResult, DbRows, DbTable, FileFolder, FilePage, FileQuery, StorageDisk, StoredFile, UploadResult, FileMeta, BootstrapView, CreatedKey, KeysView, DeviceView, EnvSecrets, Invitation, KeyView, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult, TestVersion, AppSecretsView, SecretVersion, LogPage } from './types';
+import type { Api, AppDatabase, AppView, DbChange, DbInfo, DbResult, DbRows, DbTable, FileFolder, FilePage, FileQuery, StorageDisk, PortRow, StoredFile, UploadResult, FileMeta, BootstrapView, CreatedKey, KeysView, DeviceView, EnvSecrets, Invitation, KeyView, MeView, ResourcesView, PasskeyLink, PersonInput, PersonView, PromotePreview, RemovalStep, RollbackPreview, SettingView, SetupResult, TestVersion, AppSecretsView, SecretVersion, LogPage } from './types';
 
 /** Mock mode: `?mock` in the URL or VITE_MOCK=1 gives fake data, no server needed. Dev builds only, so the mock data is dropped from the real companion. */
 export const useMock: boolean =
@@ -191,6 +191,7 @@ const realApi: Api = {
 		return { ...r, info: { ...r.info, scopes: list(r.info.scopes) } };
 	},
 	revokeKey: (id) => request('DELETE', `/api/keys/${enc(id)}`),
+	network: async () => list((await request<{ ports: PortRow[] | null }>('GET', '/api/network')).ports),
 	storage: async () => list(await request<StorageDisk[]>('GET', '/api/storage')),
 	fileFolders: async () => list((await request<{ folders: FileFolder[] | null }>('GET', '/api/files/folders')).folders),
 	createFileFolder: (name, disk) => request<FileFolder>('POST', '/api/files/folders', disk ? { name, disk } : { name }),

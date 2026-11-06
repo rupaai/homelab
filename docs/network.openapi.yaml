@@ -1,0 +1,84 @@
+openapi: 3.1.0
+info:
+  title: Homelab Network API
+  version: "1.0"
+  summary: List the ports Homelab and its apps open on the device.
+  description: |
+    One call: `GET /api/network`. It shows every port that Homelab and its app environments
+    open on the device, and who can reach each one. It only reads. It changes nothing.
+
+    **Who can call it.** Admins signed in to the companion. Anyone else gets 403. App keys and
+    admin keys do not work on this route.
+
+    **What is listed.** Homelab reads the manifests it stores, not Docker, so it names only
+    what Homelab made. An environment that is turned off, or has nothing deployed, opens
+    nothing and is not listed. An app on the host network (`network: host`) has one row,
+    because every port it listens on is open to the home network.
+
+    **Errors.** A failed call answers with a status and `{"error": "A sentence."}`.
+servers:
+  - url: "http://localhost:7080"
+    description: The companion's address, or the device's address on the home network.
+tags:
+  - name: Network
+paths:
+  /api/network:
+    get:
+      tags: [Network]
+      operationId: listNetworkPorts
+      summary: List the open ports
+      description: Admins only. Homelab's own ports come last.
+      responses:
+        "200":
+          description: The ports.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Network" }
+              example:
+                ports:
+                  - { app: northern-lights, appName: Northern Lights, env: prod, service: app, hostPort: "7011", containerPort: "8000", protocol: tcp, reach: this device only }
+                  - { app: northern-lights, appName: Northern Lights, env: prod, service: prowlarr, hostPort: "9696", containerPort: "9696", protocol: tcp, reach: home network, hint: The app reaches prowlarr inside its own network. This port may not need to be open. }
+                  - { app: homelab, appName: Homelab, env: "", service: companion, hostPort: "7080", containerPort: "", protocol: tcp, reach: home network }
+        "403":
+          description: Not signed in, or not an admin.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+components:
+  schemas:
+    Network:
+      type: object
+      required: [ports]
+      properties:
+        ports:
+          type: array
+          items: { $ref: "#/components/schemas/Port" }
+    Port:
+      type: object
+      required: [app, appName, env, service, hostPort, containerPort, protocol, reach]
+      properties:
+        app: { type: string, description: "The app id. `homelab` for Homelab's own ports." }
+        appName: { type: string, description: The name to show. }
+        env:
+          type: string
+          description: "`dev` or `prod`. Empty for Homelab's own ports."
+        service:
+          type: string
+          description: |
+            `app`, the name of an extra service, `db` (Postgres), `address` (the web address
+            Homelab serves for the environment), or for Homelab itself `companion`,
+            `app door` or `services`.
+        hostPort: { type: string, description: "The port on the device, or a range like `6881-6891`." }
+        containerPort: { type: string, description: The port inside the container. Empty when there is none. }
+        protocol: { type: string, enum: [tcp, udp] }
+        reach:
+          type: string
+          enum: [home network, this device only]
+          description: "`home network` means any device at home can reach it. `this device only` means `127.0.0.1`."
+        note: { type: string, description: More about the row. Left out when empty. }
+        hint: { type: string, description: A port that may not need to be open. A hint only. Left out when empty. }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }

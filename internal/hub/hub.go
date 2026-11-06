@@ -42,6 +42,7 @@ type Config struct {
 	Devices        map[string]string // hardware apps may use (config.yaml devices:), by name
 	HardwareApps   []string          // app ids allowed host network, devices and Bluetooth (config.yaml hardware_apps:)
 	Storage        []core.Disk       // where homelab-services keeps files (config.yaml storage:)
+	OwnPorts       []core.PortRow    // the ports Homelab itself opens (companion, app door, services), for Settings → Network
 	Now            func() time.Time
 	Logger         *slog.Logger
 }
@@ -615,22 +616,26 @@ func (h *Hub) spec(ctx context.Context, a state.App, env string, rel core.Releas
 		}
 		spec.Postgres = &core.Postgres{Port: h.dbPort(a.Slot, env), DataDir: dir}
 	}
-	// Ports are fixed numbers on the device, so only one environment can have them: prod.
-	if env == core.Prod {
-		spec.Ports = m.Ports
-	}
+	spec.Ports = prodPorts(env, m.Ports)
 	for _, s := range m.Services {
 		mounts, err := h.mounts(a.ID, env, s.Data, s.Folders)
 		if err != nil {
 			return core.EnvSpec{}, fmt.Errorf("%s: %w", s.Name, err)
 		}
 		svc := core.Service{Name: s.Name, Image: s.Image, Memory: s.Memory, Mounts: mounts, Vars: s.Env, GPU: s.GPU}
-		if env == core.Prod {
-			svc.Ports = s.Ports
-		}
+		svc.Ports = prodPorts(env, s.Ports)
 		spec.Services = append(spec.Services, svc)
 	}
 	return spec, nil
+}
+
+// prodPorts keeps the extra ports an environment opens. They are fixed numbers on the
+// device, so only one environment can have them: prod.
+func prodPorts(env string, ports []string) []string {
+	if env == core.Prod {
+		return ports
+	}
+	return nil
 }
 
 // hardware lets a trusted prod app use the device's network, devices and Bluetooth. Only

@@ -339,3 +339,36 @@ func TestConfigHardware(t *testing.T) {
 		}
 	}
 }
+
+func TestOwnPorts(t *testing.T) {
+	cases := []struct {
+		name, yaml string
+		companion  string
+	}{
+		{"local", "", core.ReachDevice},
+		{"ip", "addresses: ip\n", core.ReachHome},
+	}
+	for _, c := range cases {
+		cfg, err := parseConfig([]byte(c.yaml))
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows := ownPorts(cfg)
+		if len(rows) != 3 {
+			t.Fatalf("%s: %+v", c.name, rows)
+		}
+		got := map[string]core.PortRow{}
+		for _, r := range rows {
+			got[r.Service] = r
+		}
+		if r := got["companion"]; r.HostPort != "7080" || r.Reach != c.companion {
+			t.Errorf("%s: companion %+v", c.name, r)
+		}
+		if r := got["app door"]; r.HostPort != "7085" || r.Reach != core.ReachDevice {
+			t.Errorf("%s: app door %+v", c.name, r)
+		}
+		if r := got["services"]; r.HostPort != "7086" || r.Reach != core.ReachDevice {
+			t.Errorf("%s: services %+v", c.name, r)
+		}
+	}
+}

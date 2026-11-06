@@ -1,6 +1,6 @@
 // Fake data for developing the UI without the Go server (see api.ts for how it's switched on).
 import { ApiError } from './errors';
-import type { ActivityEvent, Api, DbChange, DbCopy, DbInfo, DbTable, AppView, SavedSecretView, FileFolder, StorageDisk, StoredFile, UploadResult, EnvName, EnvView, PersonInput, KeyView, PersonView, ReleaseView, SecretView, SettingView, SecretVersion, LogLevel, LogLine, LogCounts } from './types';
+import type { ActivityEvent, Api, DbChange, DbCopy, DbInfo, DbTable, AppView, SavedSecretView, FileFolder, StorageDisk, PortRow, StoredFile, UploadResult, EnvName, EnvView, PersonInput, KeyView, PersonView, ReleaseView, SecretView, SettingView, SecretVersion, LogLevel, LogLine, LogCounts } from './types';
 
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 const delay = <T>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
@@ -289,6 +289,26 @@ const logSeed: [number, LogLevel, string, string, string, string, string, Record
 ];
 const logRows: LogLine[] = logSeed.map(([min, level, app, env, service, stream, msg, extra], i) => ({ id: i + 1, time: ago(min), level, msg, app, env, service, stream, extra }));
 const levelNumber: Record<LogLevel, number> = { unknown: 0, debug: 1, info: 2, warn: 3, error: 4, fatal: 5 };
+
+const portRow = (app: string, appName: string, env: string, service: string, hostPort: string, containerPort: string, protocol: 'tcp' | 'udp', open: boolean, more: Partial<PortRow> = {}): PortRow =>
+	({ app, appName, env, service, hostPort, containerPort, protocol, reach: open ? 'home network' : 'this device only', ...more });
+const portRows: PortRow[] = [
+	portRow('movie-night', 'Movie Night', 'prod', 'app', '7011', '8000', 'tcp', false),
+	portRow('movie-night', 'Movie Night', 'prod', 'app', '8000', '8000', 'tcp', true),
+	portRow('movie-night', 'Movie Night', 'prod', 'jellyfin', '8096', '8096', 'tcp', true),
+	portRow('movie-night', 'Movie Night', 'prod', 'prowlarr', '9696', '9696', 'tcp', true, { hint: 'The app reaches prowlarr inside its own network. This port may not need to be open.' }),
+	portRow('movie-night', 'Movie Night', 'prod', 'jellyfin', '6881-6891', '6881-6891', 'tcp', true),
+	portRow('movie-night', 'Movie Night', 'prod', 'jellyfin', '6881-6891', '6881-6891', 'udp', true),
+	portRow('movie-night', 'Movie Night', 'prod', 'db', '7016', '5432', 'tcp', false),
+	portRow('movie-night', 'Movie Night', 'prod', 'address', '7101', '', 'tcp', true, { note: 'Anyone on the home network can open this address without signing in.' }),
+	portRow('movie-night', 'Movie Night', 'dev', 'app', '7010', '8000', 'tcp', false),
+	portRow('movie-night', 'Movie Night', 'dev', 'db', '7015', '5432', 'tcp', false),
+	portRow('movie-night', 'Movie Night', 'dev', 'address', '7102', '', 'tcp', true, { note: 'Anyone on the home network can open this address without signing in.' }),
+	portRow('home-assistant', 'Home Assistant', 'prod', 'app', '8123', '8123', 'tcp', true, { note: "Uses the device's network, so every port the app listens on is open to the home network." }),
+	portRow('homelab', 'Homelab', '', 'companion', '7080', '', 'tcp', true),
+	portRow('homelab', 'Homelab', '', 'app door', '7085', '', 'tcp', false, { note: 'Only apps on this device can call it.' }),
+	portRow('homelab', 'Homelab', '', 'services', '7086', '', 'tcp', false)
+];
 
 export const mockApi: Api = {
 	bootstrap: () => delay({ needsSetup: false, signInReady: true }),
@@ -587,6 +607,7 @@ export const mockApi: Api = {
 		return delay({ lines: page.map((l) => ({ ...l, extra: { ...l.extra } })), counts, next: rows.length > limit ? String(page[page.length - 1].id) : null });
 	},
 	storage: () => delay(disks.map((d) => ({ ...d }))),
+	network: () => delay(portRows.map((r) => ({ ...r }))),
 	fileFolders: () => delay(folderStore.map((f) => ({ ...f }))),
 	async createFileFolder(name, disk) {
 		if (folderStore.some((f) => f.name === name)) throw new ApiError('There is already a folder with that name.', 409);

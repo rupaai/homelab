@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -294,4 +295,26 @@ func checkLoopback(listen string) error {
 		return nil
 	}
 	return fmt.Errorf("listen %q is not a loopback address. It must listen on 127.0.0.1 (or ::1); to reach Homelab from other devices set addresses: ip", listen)
+}
+
+// ownPorts are the ports Homelab itself opens, for Settings → Network. The companion is open
+// to the home network when it listens on an address other computers can reach. The app door
+// and homelab-services never are.
+func ownPorts(cfg Config) []core.PortRow {
+	row := func(service, port, reach, note string) core.PortRow {
+		return core.PortRow{App: "homelab", AppName: "Homelab", Service: service, HostPort: port, ContainerPort: "", Protocol: "tcp", Reach: reach, Note: note}
+	}
+	companion := core.ReachHome
+	_, port, err := net.SplitHostPort(cfg.Listen)
+	if err != nil {
+		port = ""
+	}
+	if checkLoopback(cfg.Listen) == nil {
+		companion = core.ReachDevice
+	}
+	return []core.PortRow{
+		row("companion", port, companion, ""),
+		row("app door", strconv.Itoa(cfg.AppAPIPort), core.ReachDevice, "Only apps on this device can call it."),
+		row("services", strconv.Itoa(cfg.ServicesPort), core.ReachDevice, ""),
+	}
 }

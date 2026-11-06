@@ -85,6 +85,17 @@ func (s *server) resources(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, v)
 }
 
+// network lists the ports Homelab and its apps open on the device (admins only: the guard
+// treats every route without its own rule as an admin route).
+func (s *server) network(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.hub.Network(r.Context())
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ports": rows})
+}
+
 func (s *server) device(w http.ResponseWriter, r *http.Request) {
 	// ?check=1 is the companion's Refresh: ask GitHub for the newest Homelab now.
 	v, err := s.hub.Device(r.Context(), r.URL.Query().Get("check") == "1")

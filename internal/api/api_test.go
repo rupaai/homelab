@@ -959,3 +959,33 @@ func TestOldSessionCookieIsRefusedAndSignOutEndsTheToken(t *testing.T) {
 		t.Fatalf("token still works after sign-out: %d", rec.Code)
 	}
 }
+
+func TestNetworkIsForAdmins(t *testing.T) {
+	r := newRig(t)
+	for _, p := range []core.Person{
+		{ID: "m", Name: "M", Status: "signed_in", Roles: []string{"member"}},
+		{ID: "b", Name: "B", Status: "signed_in", Roles: []string{"builder"}},
+		{ID: "a", Name: "A", Status: "signed_in", Roles: []string{"admin"}},
+	} {
+		if err := r.store.SavePerson(context.Background(), p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := r.handler()
+	for _, id := range []string{"m", "b"} {
+		if rec := do(h, "GET", "/api/network", "", &core.Viewer{Local: true, PersonID: id}); rec.Code != 403 {
+			t.Errorf("%s: /api/network = %d, want 403", id, rec.Code)
+		}
+	}
+	for name, v := range map[string]*core.Viewer{"nobody": nil, "anonymous": {}} {
+		if rec := do(h, "GET", "/api/network", "", v); rec.Code != 403 {
+			t.Errorf("%s: /api/network = %d, want 403", name, rec.Code)
+		}
+	}
+	for _, v := range []*core.Viewer{&local, {Local: true, PersonID: "a"}} {
+		rec := do(h, "GET", "/api/network", "", v)
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"ports":[`) {
+			t.Errorf("admin /api/network = %d %s", rec.Code, rec.Body)
+		}
+	}
+}

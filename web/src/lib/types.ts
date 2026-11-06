@@ -292,6 +292,8 @@ export interface Api {
 	createKey(input: NewKeyInput): Promise<CreatedKey>;
 	revokeKey(id: string): Promise<void>;
 	storage(): Promise<StorageDisk[]>;
+	/** Every port Homelab and its apps open on the device. Admins only. */
+	network(): Promise<PortRow[]>;
 	fileFolders(): Promise<FileFolder[]>;
 	createFileFolder(name: string, disk?: string): Promise<FileFolder>;
 	/** Only an empty folder can be deleted; the server answers 409 otherwise. */
@@ -330,6 +332,25 @@ export interface DbEnv { env: string; port?: number; user?: string; database?: s
 export interface AppDatabase { engine: string; envs: DbEnv[]; }
 
 /** A disk Homelab can keep files on. Sizes are bytes. */
+/** One port Homelab or an app environment opens on the device (internal/core/network.go). */
+export interface PortRow {
+	app: string;
+	appName: string;
+	/** Empty for Homelab's own ports. */
+	env: string;
+	/** "app", an extra service's name, "db", "address", or a Homelab part like "companion". */
+	service: string;
+	/** A port, or a range like 6881-6891. */
+	hostPort: string;
+	/** Empty when there is no container port. */
+	containerPort: string;
+	protocol: 'tcp' | 'udp';
+	reach: 'home network' | 'this device only';
+	note?: string;
+	/** Says the port may not need to be open. A hint only. */
+	hint?: string;
+}
+
 export interface StorageDisk { name: string; path: string; kind: 'data' | 'storage' | 'folder'; used: number; total: number; problem?: string; shared?: boolean; }
 /** app and env are empty for folders the admins made. created_at is left as the server sends it. */
 export interface FileFolder { name: string; disk: string; app: string; env: string; files: number; bytes: number; created_at: string | number; }
