@@ -188,6 +188,7 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("POST /api/device/update", s.updateHomelab)
 	mux.HandleFunc("POST /api/device/restart", s.restartHomelab)
 	mux.HandleFunc("GET /api/storage", s.storage)
+	mux.HandleFunc("GET /api/network", s.network)
 	mux.HandleFunc("GET /api/keys", s.listKeys)
 	mux.HandleFunc("POST /api/keys", s.createKey)
 	mux.HandleFunc("DELETE /api/keys/{id}", s.revokeKey)
