@@ -75,12 +75,19 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
 <!-- feature:deploy-loop -->
 - **Deploy loop** (milestone 1): add an app by `owner/name`, builds from GitHub Actions, dev
   and prod, promote, rollback, health checks, logs, and a Restart button on each environment
-  (admins). Each round asks Docker once per app, not once per app per app. Done.
+  (admins). Admins can turn dev off per app to save memory: it stops, keeps its data, and new
+  builds wait until it is turned on. For manual apps, "Get latest build" on the dev card saves
+  a build for dev while it is off, so Promote still works. Each round asks Docker once per app,
+  not once per app per app. Done.
 <!-- /feature:deploy-loop -->
 <!-- feature:apps-no-setup -->
 - **Apps with no setup** (milestone 2): promotion modes `manual`, `auto-dev`, `auto` with
   automatic rollback, a mirror of each app's code, signed identity headers, extra containers
-  (`services:` in `homelab.yaml`, see [docs/services.md](docs/services.md)). Done.
+  (`services:` in `homelab.yaml`, see [docs/services.md](docs/services.md)). One trusted app
+  can use real hardware in prod: `network: host`, `devices` and `bluetooth` in `homelab.yaml`,
+  allowed by `devices` and `hardware_apps` in `config.yaml` (dev ignores them, see
+  [docs/topics/hardware.md](docs/topics/hardware.md)). `bluetooth` also turns AppArmor off for
+  that app so D-Bus works on Ubuntu. Done.
 <!-- /feature:apps-no-setup -->
 <!-- feature:people-signin -->
 - **People and sign-in** (milestone 3): owner, admins and members, per-app access, invites
@@ -101,8 +108,9 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
   its own if a new version doesn't stay up. Admins can also restart it from Resources. Done.
   Versions: `build-N` or `vX.Y.Z` (any `v` is newer than any `build`); test versions
   `pr-N-<commit>` or `vX.Y.Z-pr.N[.<commit>]` (`internal/adapters/selfupdate/version.go`).
-  Releases are still named `build-N`. It checks GitHub for a new version every hour; Refresh
-  on that screen checks right away.
+  Releases are still named `build-N`. It checks GitHub for a new version every 10 minutes;
+  Refresh on that screen checks right away. `test-build.yml` deletes a PR's test version when
+  the PR closes, and sweeps all closed PRs' test versions daily.
 <!-- /feature:on-the-device -->
 <!-- feature:api-keys -->
 - **API keys and users API**: every app environment gets `HOMELAB_TOKEN` and
@@ -142,6 +150,12 @@ with a tap. Apps don't set up their own login, secrets, files or databases: they
 <!-- feature:own-releases -->
 - **Homelab's own releases**: `release.yml` runs `homelab-services release` for `vX.Y.Z` (first `v0.20.0`) after CI passes on main (no checks of its own); both it and `test-build.yml` build through `.github/actions/build-dist`; test versions are `vX.Y.Z-pr.N.<commit>`; the companion shows the update's new/fix counts and notes (older ones were `build-N`).
 <!-- /feature:own-releases -->
+<!-- feature:companion -->
+- **Companion nav**: 4 tabs for admins (Apps, Activity, Storage, Settings), only Apps for everyone else (no tab bar). A round avatar opens `/me`. Apps is one list at `/` (`/home` redirects), with a summary line (apps healthy, having problems, down) and cards with Dev and Prod rows. Activity has Events and Logs, Storage has Files and Databases. Settings is a list: This device, People, Homelab passwords and keys (`/settings/homelab`), API keys, Your account. Tabs are in `web/src/lib/nav.ts`. The look is one dark theme ("plain dark"), tokens in `web/src/app.css`; design facts are in `PRODUCT.md` and `.impeccable/`. Done.
+<!-- /feature:companion -->
+<!-- feature:network -->
+- **Network** (Settings → Network, admins): lists every port Homelab and its apps open on the device (app, env, service, port, tcp/udp) and who can reach it: the home network or this device only. Read only, from `GET /api/network`. A hint shows when an extra service's port is open but the app already reaches the service inside its own network. Done.
+<!-- /feature:network -->
 <!-- new-features -->
 
 ## 4. Ports and files on the device
